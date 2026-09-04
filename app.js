@@ -1209,12 +1209,6 @@ function makeDateCell(apt, field){
     stamp.textContent = apt[field].by;
     td.appendChild(stamp);
   }
-  if(field === 'inflyttning' && isMovedIn(apt)){
-    const moved = document.createElement('span');
-    moved.className = 'moved-in-stamp';
-    moved.textContent = '✓ Inflyttad';
-    td.appendChild(moved);
-  }
   return td;
 }
 
