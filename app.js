@@ -294,6 +294,23 @@ async function persistProjects(){
   }
 }
 
+document.getElementById('addProjectBtn').onclick = async () => {
+  const input = document.getElementById('newProjectInput');
+  const name = input.value.trim();
+  if(!name) return;
+  if(projects.some(p => p.name.toLowerCase() === name.toLowerCase())){
+    showToast('Det finns redan ett projekt med det namnet');
+    return;
+  }
+  projects.push({ id: slugId(name), name });
+  input.value = '';
+  renderHomeGrid();
+  await persistProjects();
+};
+document.getElementById('newProjectInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addProjectBtn').click();
+});
+
 // ---------- Navigation: hem / projekt / kalender ----------
 function formatMSEK(value){
   if(!value && value !== 0) return '—';
