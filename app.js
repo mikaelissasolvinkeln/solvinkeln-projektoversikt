@@ -655,6 +655,7 @@ function renderTable(){
 
   apartments.forEach(apt => {
     const tr = document.createElement('tr');
+    if(isMovedIn(apt)) tr.className = 'moved-in';
 
     tr.appendChild(makeLghCell(apt));
     tr.appendChild(makeEditableTextCell(apt, 'address', 'Adress…'));
@@ -1183,6 +1184,9 @@ document.getElementById('tillvalSaveBtn').onclick = async () => {
 };
 
 
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function isMovedIn(apt){ return !!(apt.inflyttning && apt.inflyttning.date && apt.inflyttning.date <= todayStr()); }
+
 function makeDateCell(apt, field){
   const td = document.createElement('td');
   td.className = 'center';
@@ -1204,6 +1208,12 @@ function makeDateCell(apt, field){
     stamp.className = 'stamp-mark';
     stamp.textContent = apt[field].by;
     td.appendChild(stamp);
+  }
+  if(field === 'inflyttning' && isMovedIn(apt)){
+    const moved = document.createElement('span');
+    moved.className = 'moved-in-stamp';
+    moved.textContent = '✓ Inflyttad';
+    td.appendChild(moved);
   }
   return td;
 }
@@ -1581,12 +1591,12 @@ function findIntrDuplicate(form, editingId){
   return interests.find(en => {
     if(en.id === editingId) return false;
     if(en.projekt !== form.projekt) return false;
+    if(!name || (en.namn||'').trim().toLowerCase() !== name) return false;
     const enEmail = normEmail(en.epost);
     const enPhone = normPhone(en.telefon);
-    if(email && enEmail && email === enEmail) return true;
-    if(phone && enPhone && phone === enPhone) return true;
-    if(name && (en.namn||'').trim().toLowerCase() === name) return true;
-    return false;
+    const emailMatches = email && enEmail && email === enEmail;
+    const phoneMatches = phone && enPhone && phone === enPhone;
+    return emailMatches || phoneMatches;
   });
 }
 
@@ -1859,7 +1869,7 @@ function setIntrStatus(entry, status){
 async function applyIntrStatus(entry, status, extra){
   Object.assign(entry, extra);
   entry.status = status;
-  if(status === 'Tackat ja' || status === 'Tackat nej') entry.hanterad = true;
+  entry.hanterad = status !== 'Ny';
   renderAllIntrViews();
   await persistInterests();
 }
