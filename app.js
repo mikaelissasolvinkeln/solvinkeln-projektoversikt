@@ -1667,11 +1667,15 @@ function renderAllIntrViews(){
   if(screen === 'project' && projectSubView === 'intressenter') renderIntressenterTab();
 }
 
-function computeIntrFiltered(lockedProject, search, projektFilter, statusFilter, showHandled){
+const STRUKEN_STATUSES = ['Tackat ja', 'Tackat nej', 'Ingen kontakt'];
+function isStruken(entry){ return STRUKEN_STATUSES.includes(entry.status); }
+
+function computeIntrFiltered(lockedProject, search, projektFilter, statusFilter, showHandled, showStruken){
   return interests
     .filter(e => lockedProject ? e.projekt === lockedProject : (projektFilter ? e.projekt === projektFilter : true))
     .filter(e => statusFilter ? e.status === statusFilter : true)
     .filter(e => showHandled ? true : !e.hanterad)
+    .filter(e => showStruken ? true : !isStruken(e))
     .filter(e => {
       if(!search.trim()) return true;
       const q = search.toLowerCase();
@@ -1801,10 +1805,10 @@ function renderIntrRow(entry){
   return row;
 }
 
-function renderIntrListInto(containerId, lockedProject, search, statusFilter, showHandled){
+function renderIntrListInto(containerId, lockedProject, search, statusFilter, showHandled, showStruken){
   const container = document.getElementById(containerId);
   container.innerHTML = '';
-  const filtered = computeIntrFiltered(lockedProject, search, '', statusFilter, showHandled);
+  const filtered = computeIntrFiltered(lockedProject, search, '', statusFilter, showHandled, showStruken);
   if(filtered.length === 0){
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -1840,9 +1844,10 @@ function renderIntressenScreen(){
   const projektFilter = document.getElementById('intrProjektFilter').value;
   const statusFilter = document.getElementById('intrStatusFilter').value;
   const showHandled = document.getElementById('intrShowHandled').checked;
+  const showStruken = document.getElementById('intrShowStruken').checked;
   document.getElementById('intrList').innerHTML = '';
   const container = document.getElementById('intrList');
-  const filtered = computeIntrFiltered(null, search, projektFilter, statusFilter, showHandled);
+  const filtered = computeIntrFiltered(null, search, projektFilter, statusFilter, showHandled, showStruken);
   if(filtered.length === 0){
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -1862,7 +1867,8 @@ function renderIntressenterTab(){
   const search = document.getElementById('intrSearchP').value;
   const statusFilter = document.getElementById('intrStatusFilterP').value;
   const showHandled = document.getElementById('intrShowHandledP').checked;
-  renderIntrListInto('intrListP', lockedProject, search, statusFilter, showHandled);
+  const showStruken = document.getElementById('intrShowStrukenP').checked;
+  renderIntrListInto('intrListP', lockedProject, search, statusFilter, showHandled, showStruken);
 }
 
 function openIntressenScreen(){
@@ -2107,11 +2113,11 @@ document.getElementById('intrNewBtnP').onclick = () => {
   openIntrForm(null, proj ? proj.name : '');
 };
 
-['intrSearch','intrProjektFilter','intrStatusFilter','intrShowHandled'].forEach(id => {
+['intrSearch','intrProjektFilter','intrStatusFilter','intrShowHandled','intrShowStruken'].forEach(id => {
   document.getElementById(id).addEventListener('input', renderIntressenScreen);
   document.getElementById(id).addEventListener('change', renderIntressenScreen);
 });
-['intrSearchP','intrStatusFilterP','intrShowHandledP'].forEach(id => {
+['intrSearchP','intrStatusFilterP','intrShowHandledP','intrShowStrukenP'].forEach(id => {
   document.getElementById(id).addEventListener('input', renderIntressenterTab);
   document.getElementById(id).addEventListener('change', renderIntressenterTab);
 });
