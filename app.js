@@ -1,5 +1,32 @@
 const PROJECTS_KEY = 'projects-list';
-const NAME_KEY = 'my-name';
+const PAMINNELSER_KEY = 'paminnelser';
+
+// De fem individuella kontona. Namnet visas automatiskt utifrån vem som loggat
+// in (eget konto) - ingen fritextruta längre. id:na är kontonas riktiga
+// Supabase Auth user-id, hämtade när kontona skapades - krävs för att kunna
+// tilldela ett Liggaren-ärende till en specifik kollega (se schema-liggaren.sql).
+const LIGGAREN_PEOPLE = [
+  { name: 'Mikael',  email: 'mikael.issa@jwk.se',            id: '5e35722c-d763-4c54-ab20-ee68acf74bb5' },
+  { name: 'Saman',   email: 'saman.haake@solvinkeln.se',      id: '2e4f60ed-f521-4171-9df5-70889790a20c' },
+  { name: 'Ashur',   email: 'ashur.ibrahim@solvinkeln.se',    id: '21c682f4-e70d-499a-a8f2-703bdac23a02' },
+  { name: 'Sargon',  email: 'sargon.akcan@jwk.se',            id: 'a08976c1-7006-43a2-9c99-83bd68a32d94' },
+  { name: 'Rebecka', email: 'rebecka.bergvall@solvinkeln.se', id: '417f258d-8e43-4555-b7a4-289986b535f7' }
+];
+const PERSONAL_NAMES_BY_EMAIL = LIGGAREN_PEOPLE.reduce((acc, p) => { acc[p.email.toLowerCase()] = p.name; return acc; }, {});
+
+// ---------- Liggaren (ärenderegister, kan tilldelas en kollega) ----------
+const LIGGAREN_STATUS = { OPPET: 'oppet', PAGAENDE: 'pagaende', KLART: 'klart' };
+const LIGGAREN_STATUS_LABEL = { oppet: 'Att göra', pagaende: 'Pågående', klart: 'Klart' };
+const LIGGAREN_STATUS_ORDER = [LIGGAREN_STATUS.OPPET, LIGGAREN_STATUS.PAGAENDE, LIGGAREN_STATUS.KLART];
+const LIGGAREN_PRIORITIES = [1, 2, 3, 4, 5];
+const LIGGAREN_PRIORITY_COLOR = p => (p <= 2 ? 'var(--danger)' : p === 3 ? 'var(--blue)' : 'var(--ink-soft)');
+const LIGGAREN_DEFAULT_EMAILS = ['Mikael.issa@solvinkeln.se', 'Saman.haake@solvinkeln.se', 'Rebecka.bergvall@solvinkeln.se'];
+const LIGGAREN_PROJECTS = [
+  'Solvinkeln Fastigheter AB', 'Saman', 'Rebecka', 'Ashur', 'Aygun',
+  'Brf Gladö Sjöutsikten', 'Brf Gladö Sjöglimten', 'Brf Gladö Höjden', 'Brf Gladö Utsikten', 'Brf Gladö Viken',
+  'Brf Aktrisen', 'Brf Kulissen', 'Brf Regissören', 'Brf Vistabergshöjden', 'Brf Glömstahöjden',
+  'Projekt Nacka Kummelnäs', 'Brf Enköping'
+];
 const CHECK_FIELDS = ['sald','slutbetald','grovstadat','finstadat','sopkarl','fiber','brevlada'];
 const CHECK_LABELS = {
   sald: 'Såld', slutbetald: 'Slutbetald',
@@ -58,7 +85,15 @@ const PROJECT_LOAN_BY_NAME = {
 
 let projects = [];
 let activeProjectId = null;
-let screen = 'home'; // 'home' | 'project' | 'calendar'
+let screen = 'home'; // 'personal' | 'home' | 'project' | 'calendar'
+let arenden = [];
+let paminnelser = [];
+let liggarenStatusFilter = 'alla';
+let liggarenProjectFilterVal = 'alla';
+let liggarenSortBy = 'priority';
+let liggarenEditingMailId = null;
+let liggarenConfirmClear = false;
+let myPersonId = null;
 let projectSubView = 'checklista'; // 'checklista' | 'ekonomi'
 let apartments = [];
 let myName = '';
@@ -101,7 +136,7 @@ function showToast(msg){
 function showDebugError(context, err, retryFn){
   const box = document.getElementById('debugError');
   const text = '[' + new Date().toLocaleTimeString('sv-SE') + '] ' + context + ': ' +
-    (err && (err.message || err.toString ? err.toString() : JSON.stringify(err)));
+    (err ? (err.message || (err.toString ? err.toString() : JSON.stringify(err))) : '');
   box.innerHTML = '';
   const msg = document.createElement('div');
   msg.textContent = text;
@@ -168,7 +203,8 @@ function newApartment(fields){
     sopkarl: emptyCheck(),
     fiber: emptyCheck(),
     brevlada: emptyCheck(),
-    tillval: emptyNote()
+    tillval: emptyNote(),
+    upplatenKoncern: emptyCheck()
   };
 }
 
@@ -214,36 +250,17 @@ function normalizeApartment(apt){
   if(typeof apt.tillval.invoicedCustomer !== 'boolean') apt.tillval.invoicedCustomer = false;
   if(typeof apt.tillval.invoicedLoan !== 'boolean') apt.tillval.invoicedLoan = false;
   if(typeof apt.tillval.amount !== 'string') apt.tillval.amount = '';
+  if(!apt.upplatenKoncern || typeof apt.upplatenKoncern !== 'object') apt.upplatenKoncern = emptyCheck();
   return apt;
 }
 
 // ---------- Name ----------
-async function loadName(){
-  try{
-    const res = await window.storage.get(NAME_KEY, false);
-    if(res && res.value) myName = res.value;
-  }catch(e){
-    // no name saved yet is expected on first visit — not shown as an error
-  }
-  renderNameUI();
-}
-async function saveName(name){
-  myName = name;
-  try{ await window.storage.set(NAME_KEY, name, false); }
-  catch(e){ showDebugError('Kunde inte spara namn (saveName)', e); }
-  renderNameUI();
-}
+// Namnet kommer numera alltid från vem som är inloggad (eget konto), inte en
+// fritextruta - se PERSONAL_NAMES_BY_EMAIL och init().
 function renderNameUI(){
-  const gate = document.getElementById('nameGate');
   const current = document.getElementById('currentUser');
-  if(myName){
-    gate.style.display = 'none';
-    current.style.display = 'flex';
-    document.getElementById('currentUserName').textContent = myName;
-  } else {
-    gate.style.display = 'flex';
-    current.style.display = 'none';
-  }
+  current.style.display = myName ? 'flex' : 'none';
+  document.getElementById('currentUserName').textContent = myName;
 }
 
 // ---------- Projects ----------
@@ -386,16 +403,515 @@ async function renderHomeGrid(){
 
 function showScreen(next){
   screen = next;
+  document.getElementById('personalScreen').style.display = screen === 'personal' ? 'block' : 'none';
   document.getElementById('homeScreen').style.display = screen === 'home' ? 'block' : 'none';
   document.getElementById('projectScreen').style.display = screen === 'project' ? 'block' : 'none';
   document.getElementById('calendarScreen').style.display = screen === 'calendar' ? 'block' : 'none';
   document.getElementById('intressenScreen').style.display = screen === 'intressen' ? 'block' : 'none';
+  const deskBtn = document.getElementById('goToPersonalBtn');
+  if(deskBtn) deskBtn.style.display = (screen !== 'personal') ? 'inline-block' : 'none';
 }
 
 function openHome(){
   showScreen('home');
   renderHomeGrid();
 }
+
+// ---------- Personlig startsida (del 1) ----------
+async function openPersonal(){
+  showScreen('personal');
+  document.getElementById('personalGreeting').textContent = myName ? ('Hej, ' + myName + '!') : 'Hej!';
+  await Promise.all([loadArenden(), loadPaminnelser()]);
+  renderArenden();
+  renderPaminnelser();
+}
+
+function mapLiggarenRow(row){
+  return {
+    id: row.id,
+    caseNumber: row.case_number,
+    title: row.title,
+    project: row.project,
+    deadline: row.deadline,
+    priority: row.priority,
+    status: row.status,
+    createdBy: row.created_by,
+    createdByName: row.created_by_name,
+    assignedTo: row.assigned_to,
+    assignedToName: row.assigned_to_name,
+    notifyEmail: row.notify_email,
+    notifyAddress: row.notify_address || '',
+    mailSent: row.mail_sent,
+    createdAt: row.created_at
+  };
+}
+
+async function loadArenden(){
+  try{
+    const rows = await DB.listLiggarenTasks();
+    arenden = rows.map(mapLiggarenRow);
+  }catch(e){
+    arenden = [];
+    showDebugError('Kunde inte läsa ärenden', e);
+  }
+}
+
+function liggarenNextCaseNumber(){
+  const year = new Date().getFullYear();
+  const nums = arenden
+    .map(t => t.caseNumber)
+    .filter(cn => cn && cn.includes('-' + year + '-'))
+    .map(cn => parseInt(cn.split('-')[2], 10))
+    .filter(n => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 0;
+  return 'SF-' + year + '-' + String(max + 1).padStart(3, '0');
+}
+
+function liggarenBusinessDaysUntil(deadlineStr){
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const deadline = new Date(deadlineStr + 'T00:00:00');
+  if(deadline < today) return -1;
+  let count = 0;
+  const d = new Date(today);
+  while(d < deadline){
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if(day !== 0 && day !== 6) count++;
+  }
+  return count;
+}
+function liggarenIsPastDue(t){
+  const todayStr = new Date().toISOString().slice(0,10);
+  return t.deadline && t.status !== LIGGAREN_STATUS.KLART && t.deadline < todayStr;
+}
+function liggarenIsCritical(t){
+  return t.deadline && t.status !== LIGGAREN_STATUS.KLART && liggarenBusinessDaysUntil(t.deadline) <= 3;
+}
+
+function liggarenPopulateSelects(){
+  const projectInput = document.getElementById('liggarenProjectInput');
+  projectInput.innerHTML = '<option value="">Välj projekt/bolag…</option>' +
+    LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+
+  const projectFilter = document.getElementById('liggarenProjectFilter');
+  projectFilter.innerHTML = '<option value="alla">Alla projekt</option>' +
+    LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+
+  const notifySelect = document.getElementById('liggarenNotifyAddressSelect');
+  notifySelect.innerHTML = '<option value="">Välj mottagare…</option>' +
+    LIGGAREN_DEFAULT_EMAILS.map(a => '<option value="' + a + '">' + a + '</option>').join('') +
+    '<option value="other">Annan e-postadress…</option>';
+}
+
+// Körs efter inloggning (myPersonId känt) - "Mig själv" alltid överst.
+function liggarenPopulateAssigneeSelect(){
+  const select = document.getElementById('liggarenAssigneeInput');
+  if(!select || !myPersonId) return;
+  const others = LIGGAREN_PEOPLE.filter(p => p.id !== myPersonId);
+  select.innerHTML = '<option value="' + myPersonId + '">Mig själv</option>' +
+    others.map(p => '<option value="' + p.id + '">' + p.name + '</option>').join('');
+}
+
+function liggarenResetForm(){
+  document.getElementById('liggarenTitleInput').value = '';
+  document.getElementById('liggarenProjectInput').value = '';
+  document.getElementById('liggarenDeadlineInput').value = '';
+  document.getElementById('liggarenPriorityInput').value = '3';
+  liggarenPopulateAssigneeSelect();
+  document.getElementById('liggarenNotifyCheck').checked = false;
+  document.getElementById('liggarenNotifyFields').style.display = 'none';
+  document.getElementById('liggarenNotifyAddressSelect').value = '';
+  document.getElementById('liggarenNotifyCustomInput').value = '';
+  document.getElementById('liggarenNotifyCustomInput').style.display = 'none';
+}
+
+async function liggarenSaveTask(){
+  const title = document.getElementById('liggarenTitleInput').value.trim();
+  if(!title) return;
+  const project = document.getElementById('liggarenProjectInput').value;
+  const deadline = document.getElementById('liggarenDeadlineInput').value || null;
+  const priority = parseInt(document.getElementById('liggarenPriorityInput').value, 10) || 3;
+  const notifyEmail = document.getElementById('liggarenNotifyCheck').checked;
+  const addrSelect = document.getElementById('liggarenNotifyAddressSelect').value;
+  const notifyAddress = (addrSelect === 'other' ? document.getElementById('liggarenNotifyCustomInput').value.trim() : addrSelect);
+  const assigneeId = document.getElementById('liggarenAssigneeInput').value || myPersonId;
+  const assignee = LIGGAREN_PEOPLE.find(p => p.id === assigneeId) || { id: myPersonId, name: myName };
+
+  const row = {
+    case_number: liggarenNextCaseNumber(),
+    title, project,
+    deadline,
+    priority,
+    status: LIGGAREN_STATUS.OPPET,
+    created_by: myPersonId,
+    created_by_name: myName,
+    assigned_to: assignee.id,
+    assigned_to_name: assignee.name,
+    notify_email: notifyEmail && !!notifyAddress,
+    notify_address: notifyAddress || '',
+    mail_sent: false
+  };
+  try{
+    await DB.insertLiggarenTask(row);
+    await loadArenden();
+    renderArenden();
+    liggarenResetForm();
+    document.getElementById('liggarenForm').style.display = 'none';
+  }catch(e){
+    showDebugError('Kunde inte spara ärendet', e);
+  }
+}
+
+async function liggarenSetStatus(id, status){
+  const task = arenden.find(t => t.id === id);
+  if(!task) return;
+  const shouldNotify = task.notifyEmail && task.notifyAddress && status === LIGGAREN_STATUS.KLART &&
+    task.status !== LIGGAREN_STATUS.KLART && !task.mailSent;
+  try{
+    await DB.updateLiggarenTask(id, { status, mail_sent: shouldNotify ? true : task.mailSent });
+    await loadArenden();
+    renderArenden();
+    if(shouldNotify){
+      const subject = encodeURIComponent('Ärende klart: ' + task.title);
+      const body = encodeURIComponent(
+        'Hej,\n\nÄrendet "' + task.title + '" (' + task.caseNumber + (task.project ? ', ' + task.project : '') + ') är nu slutfört.\n\nMvh'
+      );
+      window.open('mailto:' + task.notifyAddress + '?subject=' + subject + '&body=' + body, '_blank');
+    }
+  }catch(e){
+    showDebugError('Kunde inte uppdatera status', e);
+  }
+}
+
+async function liggarenSetPriority(id, p){
+  try{
+    await DB.updateLiggarenTask(id, { priority: p });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ändra prioritet', e);
+  }
+}
+
+async function liggarenRemoveTask(id){
+  try{
+    await DB.deleteLiggarenTask(id);
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ta bort ärendet', e);
+  }
+}
+
+async function liggarenClearAll(){
+  if(!liggarenConfirmClear){
+    liggarenConfirmClear = true;
+    renderArenden();
+    setTimeout(() => { liggarenConfirmClear = false; renderArenden(); }, 3000);
+    return;
+  }
+  liggarenConfirmClear = false;
+  const mine = arenden.filter(t => t.createdBy === myPersonId);
+  try{
+    for(const t of mine) await DB.deleteLiggarenTask(t.id);
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte rensa ärenden', e);
+  }
+}
+
+function renderArenden(){
+  const counts = {
+    alla: arenden.length,
+    oppet: arenden.filter(t => t.status === LIGGAREN_STATUS.OPPET).length,
+    pagaende: arenden.filter(t => t.status === LIGGAREN_STATUS.PAGAENDE).length,
+    klart: arenden.filter(t => t.status === LIGGAREN_STATUS.KLART).length
+  };
+  const filterBar = document.getElementById('liggarenStatusFilters');
+  const filterLabels = { alla: 'Alla', oppet: 'Att göra', pagaende: 'Pågående', klart: 'Klart' };
+  filterBar.innerHTML = '';
+  ['alla', 'oppet', 'pagaende', 'klart'].forEach(key => {
+    const btn = document.createElement('button');
+    btn.className = 'liggaren-status-btn' + (liggarenStatusFilter === key ? ' active' : '');
+    btn.textContent = filterLabels[key] + ' (' + counts[key] + ')';
+    btn.onclick = () => { liggarenStatusFilter = key; renderArenden(); };
+    filterBar.appendChild(btn);
+  });
+
+  const projectFilter = document.getElementById('liggarenProjectFilter');
+  if(projectFilter.value !== liggarenProjectFilterVal) projectFilter.value = liggarenProjectFilterVal;
+  const sortSelect = document.getElementById('liggarenSortSelect');
+  if(sortSelect.value !== liggarenSortBy) sortSelect.value = liggarenSortBy;
+  const clearBtn = document.getElementById('liggarenClearAllBtn');
+  clearBtn.textContent = liggarenConfirmClear ? 'Säker? Klicka igen' : 'Rensa alla';
+  clearBtn.style.display = arenden.some(t => t.createdBy === myPersonId) ? 'inline-block' : 'none';
+
+  const visible = arenden
+    .filter(t => liggarenStatusFilter === 'alla' ? true : t.status === liggarenStatusFilter)
+    .filter(t => liggarenProjectFilterVal === 'alla' ? true : t.project === liggarenProjectFilterVal)
+    .slice()
+    .sort((a, b) => {
+      if((a.status === LIGGAREN_STATUS.KLART) !== (b.status === LIGGAREN_STATUS.KLART)){
+        return a.status === LIGGAREN_STATUS.KLART ? 1 : -1;
+      }
+      const ap = a.priority || 3, bp = b.priority || 3;
+      if(liggarenSortBy === 'priority'){
+        if(ap !== bp) return ap - bp;
+        if(a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+        if(a.deadline) return -1;
+        if(b.deadline) return 1;
+        return b.createdAt.localeCompare(a.createdAt);
+      }
+      if(a.deadline && b.deadline){
+        if(a.deadline !== b.deadline) return a.deadline.localeCompare(b.deadline);
+        return ap - bp;
+      }
+      if(a.deadline) return -1;
+      if(b.deadline) return 1;
+      if(ap !== bp) return ap - bp;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+
+  const list = document.getElementById('liggarenList');
+  const empty = document.getElementById('liggarenEmptyState');
+  list.innerHTML = '';
+  empty.style.display = visible.length ? 'none' : 'block';
+
+  visible.forEach(t => {
+    const critical = liggarenIsCritical(t);
+    const overdue = liggarenIsPastDue(t);
+    const delegatedOut = t.createdBy === myPersonId && t.assignedTo !== myPersonId;
+    const delegatedIn = t.assignedTo === myPersonId && t.createdBy !== myPersonId;
+    const card = document.createElement('div');
+    card.className = 'liggaren-card' + (critical ? ' critical' : '') + (t.status === LIGGAREN_STATUS.KLART ? ' done' : '') +
+      (delegatedOut ? ' delegated-out' : '') + (delegatedIn ? ' delegated-in' : '');
+
+    if(t.status === LIGGAREN_STATUS.KLART){
+      const stamp = document.createElement('div');
+      stamp.className = 'liggaren-stamp';
+      stamp.textContent = 'Klart';
+      card.appendChild(stamp);
+    }
+
+    const caseRow = document.createElement('div');
+    caseRow.className = 'liggaren-case-no';
+    const dots = document.createElement('span');
+    dots.className = 'liggaren-prio-dots';
+    dots.style.setProperty('--dot-color', LIGGAREN_PRIORITY_COLOR(t.priority || 3));
+    LIGGAREN_PRIORITIES.forEach(p => {
+      const dot = document.createElement('span');
+      if(p <= 6 - (t.priority || 3)) dot.className = 'filled';
+      dots.appendChild(dot);
+    });
+    caseRow.innerHTML = '<span>Nr ' + t.caseNumber + '</span>';
+    caseRow.appendChild(dots);
+    const prioSelect = document.createElement('select');
+    prioSelect.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:1px 4px;';
+    LIGGAREN_PRIORITIES.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p; opt.textContent = 'P' + p;
+      if((t.priority || 3) === p) opt.selected = true;
+      prioSelect.appendChild(opt);
+    });
+    prioSelect.onchange = () => liggarenSetPriority(t.id, parseInt(prioSelect.value, 10));
+    caseRow.appendChild(prioSelect);
+    card.appendChild(caseRow);
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'liggaren-title';
+    titleEl.textContent = t.title;
+    card.appendChild(titleEl);
+
+    const meta = document.createElement('div');
+    meta.className = 'liggaren-meta';
+    if(delegatedIn){
+      const origin = document.createElement('span');
+      origin.className = 'liggaren-origin-pill from';
+      origin.textContent = 'Från: ' + t.createdByName;
+      meta.appendChild(origin);
+    }
+    if(delegatedOut){
+      const origin = document.createElement('span');
+      origin.className = 'liggaren-origin-pill to';
+      origin.textContent = '→ Tilldelat: ' + t.assignedToName;
+      meta.appendChild(origin);
+    }
+    if(t.project){
+      const pill = document.createElement('span');
+      pill.className = 'liggaren-pill';
+      pill.textContent = t.project;
+      meta.appendChild(pill);
+    }
+    if(t.deadline){
+      const dl = document.createElement('span');
+      dl.className = 'liggaren-deadline' + (overdue ? ' overdue' : critical ? ' critical' : '');
+      dl.textContent = (overdue ? 'Försenat: ' : 'Deadline: ') + t.deadline;
+      meta.appendChild(dl);
+    }
+    card.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'liggaren-actions';
+    LIGGAREN_STATUS_ORDER.forEach(s => {
+      const btn = document.createElement('button');
+      btn.textContent = LIGGAREN_STATUS_LABEL[s];
+      if(t.status === s) btn.className = 'active';
+      btn.onclick = () => liggarenSetStatus(t.id, s);
+      actions.appendChild(btn);
+    });
+
+    if(liggarenEditingMailId === t.id){
+      const select = document.createElement('select');
+      select.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:3px 6px;';
+      select.innerHTML = '<option value="">Välj mottagare…</option>' +
+        LIGGAREN_DEFAULT_EMAILS.map(a => '<option value="' + a + '">' + a + '</option>').join('') +
+        '<option value="other">Annan…</option>';
+      const isDefault = LIGGAREN_DEFAULT_EMAILS.includes(t.notifyAddress);
+      select.value = isDefault ? t.notifyAddress : (t.notifyAddress ? 'other' : '');
+      const customInput = document.createElement('input');
+      customInput.type = 'email';
+      customInput.placeholder = 'E-postadress';
+      customInput.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:3px 6px;';
+      customInput.style.display = (!isDefault && t.notifyAddress) ? 'inline-block' : 'none';
+      if(!isDefault) customInput.value = t.notifyAddress || '';
+      select.onchange = () => { customInput.style.display = select.value === 'other' ? 'inline-block' : 'none'; };
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Spara';
+      saveBtn.onclick = async () => {
+        const addr = select.value === 'other' ? customInput.value.trim() : select.value;
+        liggarenEditingMailId = null;
+        try{
+          await DB.updateLiggarenTask(t.id, { notify_email: !!addr, notify_address: addr, mail_sent: false });
+          await loadArenden();
+          renderArenden();
+        }catch(e){
+          showDebugError('Kunde inte spara mottagare', e);
+        }
+      };
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Avbryt';
+      cancelBtn.onclick = () => { liggarenEditingMailId = null; renderArenden(); };
+      actions.appendChild(select);
+      actions.appendChild(customInput);
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+    } else {
+      const mailBtn = document.createElement('button');
+      mailBtn.textContent = t.notifyAddress ? ('Mejl: ' + t.notifyAddress) : '+ Mejl vid klart';
+      mailBtn.onclick = () => { liggarenEditingMailId = t.id; renderArenden(); };
+      actions.appendChild(mailBtn);
+    }
+
+    if(t.createdBy === myPersonId){
+      const delBtn = document.createElement('button');
+      delBtn.className = 'danger';
+      delBtn.textContent = 'Ta bort';
+      delBtn.onclick = () => liggarenRemoveTask(t.id);
+      actions.appendChild(delBtn);
+    }
+
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+async function loadPaminnelser(){
+  try{
+    const res = await DB.getPersonalData(PAMINNELSER_KEY);
+    paminnelser = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    paminnelser = [];
+    showDebugError('Kunde inte läsa påminnelser', e);
+  }
+}
+async function persistPaminnelser(){
+  try{ await DB.setPersonalData(PAMINNELSER_KEY, JSON.stringify(paminnelser)); }
+  catch(e){ showDebugError('Kunde inte spara påminnelser', e); }
+}
+function renderPaminnelser(){
+  const list = document.getElementById('paminnelserList');
+  const empty = document.getElementById('paminnelserEmptyState');
+  list.innerHTML = '';
+  empty.style.display = paminnelser.length ? 'none' : 'block';
+  const today = new Date().toISOString().slice(0,10);
+  const sorted = [...paminnelser].sort((a,b) => (a.date || '').localeCompare(b.date || ''));
+  sorted.forEach(item => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);';
+    const overdue = item.date && item.date < today;
+
+    const dateEl = document.createElement('span');
+    dateEl.textContent = item.date || '';
+    dateEl.style.cssText = 'min-width:100px;font-weight:600;' + (overdue ? 'color:var(--danger);' : '');
+
+    const note = document.createElement('input');
+    note.type = 'text';
+    note.value = item.note;
+    note.style.cssText = 'flex:1;border:none;background:transparent;font-size:14px;';
+    note.onchange = () => { item.note = note.value; persistPaminnelser(); };
+
+    const del = document.createElement('button');
+    del.textContent = 'Ta bort';
+    del.onclick = () => {
+      paminnelser = paminnelser.filter(p => p.id !== item.id);
+      persistPaminnelser();
+      renderPaminnelser();
+    };
+
+    row.appendChild(dateEl);
+    row.appendChild(note);
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+liggarenPopulateSelects();
+
+document.getElementById('liggarenNewBtn').onclick = () => {
+  liggarenResetForm();
+  document.getElementById('liggarenForm').style.display = 'block';
+  document.getElementById('liggarenTitleInput').focus();
+};
+document.getElementById('liggarenCancelBtn').onclick = () => {
+  document.getElementById('liggarenForm').style.display = 'none';
+};
+document.getElementById('liggarenSaveBtn').onclick = liggarenSaveTask;
+document.getElementById('liggarenTitleInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') liggarenSaveTask();
+});
+document.getElementById('liggarenNotifyCheck').addEventListener('change', e => {
+  document.getElementById('liggarenNotifyFields').style.display = e.target.checked ? 'block' : 'none';
+});
+document.getElementById('liggarenNotifyAddressSelect').addEventListener('change', e => {
+  document.getElementById('liggarenNotifyCustomInput').style.display = e.target.value === 'other' ? 'block' : 'none';
+});
+document.getElementById('liggarenProjectFilter').addEventListener('change', e => {
+  liggarenProjectFilterVal = e.target.value;
+  renderArenden();
+});
+document.getElementById('liggarenSortSelect').addEventListener('change', e => {
+  liggarenSortBy = e.target.value;
+  renderArenden();
+});
+document.getElementById('liggarenClearAllBtn').onclick = liggarenClearAll;
+
+document.getElementById('addPaminnelseBtn').onclick = () => {
+  const dateInput = document.getElementById('newPaminnelseDate');
+  const noteInput = document.getElementById('newPaminnelseNote');
+  const date = dateInput.value;
+  const note = noteInput.value.trim();
+  if(!date && !note) return;
+  paminnelser.push({ id: 'p' + Date.now() + Math.random().toString(36).slice(2,7), date, note });
+  dateInput.value = '';
+  noteInput.value = '';
+  persistPaminnelser();
+  renderPaminnelser();
+};
+
+document.getElementById('goToProjektoversiktCard').onclick = openHome;
+document.getElementById('goToPersonalBtn').onclick = openPersonal;
 
 function openProject(p){
   activeProjectId = p.id;
@@ -414,9 +930,13 @@ function setProjectSubView(view){
   document.getElementById('ekonomiSubview').style.display = view === 'ekonomi' ? 'block' : 'none';
   document.getElementById('medlemsinfoSubview').style.display = view === 'medlemsinfo' ? 'block' : 'none';
   document.getElementById('intressenterSubview').style.display = view === 'intressenter' ? 'block' : 'none';
+  document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
+  document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
   if(view === 'ekonomi') loadEkonomi(activeProjectId);
   if(view === 'medlemsinfo') renderMedlemsinfo();
   if(view === 'intressenter') loadInterests().then(renderIntressenterTab);
+  if(view === 'material') loadMaterial(activeProjectId);
+  if(view === 'tidsplan') loadTidsplan(activeProjectId);
 }
 
 function openCalendarScreen(){
@@ -602,6 +1122,33 @@ function buyerSummaryHtml(buyer){
   return '<div style="font-family:\'JetBrains Mono\',monospace; font-size:12px; line-height:1.5; text-align:left;">' + parts.join('') + '</div>';
 }
 
+// Samma visuella mönster som makeCheckCell, men för Medlemsinformation-tabellen
+// (renderar om medlemsvyn istället för checklistan efteråt).
+function makeMedlemsCheckCell(apt, field, label){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const box = document.createElement('div');
+  box.className = 'check' + (apt[field].done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = apt[field].done ? fieldStamp(apt[field]) : label;
+  box.onclick = async () => {
+    if(!myName){ showToast('Ange ditt namn först'); return; }
+    apt[field].done = !apt[field].done;
+    apt[field].by = apt[field].done ? myName : '';
+    apt[field].at = apt[field].done ? new Date().toISOString() : '';
+    renderMedlemsinfo();
+    await persistApartments();
+  };
+  td.appendChild(box);
+  if(apt[field].done && apt[field].by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt[field].by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
 function renderMedlemsinfo(){
   const body = document.getElementById('medlemsBody');
   const table = document.getElementById('medlemsTable');
@@ -649,6 +1196,7 @@ function renderMedlemsinfo(){
       tr.appendChild(notSoldTd2);
     }
 
+    tr.appendChild(makeMedlemsCheckCell(apt, 'upplatenKoncern', 'Upplåten inom koncernen'));
     tr.appendChild(makeEditableTextCell(apt, 'anlaggningsid', 'Anläggnings-ID…'));
 
     body.appendChild(tr);
@@ -916,7 +1464,7 @@ document.getElementById('saldModalOverlay').addEventListener('click', e => {
   if(e.target.id === 'saldModalOverlay') closeSaldModal();
 });
 document.getElementById('saldSaveBtn').onclick = async () => {
-  if(!myName){ showToast('Ange ditt namn först'); closeSaldModal(); document.getElementById('nameInput').focus(); return; }
+  if(!myName){ showToast('Ange ditt namn först'); closeSaldModal(); return; }
   const apt = apartments.find(a => a.id === currentSaldAptId);
   if(!apt){ closeSaldModal(); return; }
   const done = document.getElementById('saldDoneCheckbox').checked;
@@ -1074,7 +1622,7 @@ document.getElementById('slutbetaldModalOverlay').addEventListener('click', e =>
   if(e.target.id === 'slutbetaldModalOverlay') closeSlutbetaldModal();
 });
 document.getElementById('slutbetaldSaveBtn').onclick = async () => {
-  if(!myName){ showToast('Ange ditt namn först'); closeSlutbetaldModal(); document.getElementById('nameInput').focus(); return; }
+  if(!myName){ showToast('Ange ditt namn först'); closeSlutbetaldModal(); return; }
   const apt = apartments.find(a => a.id === currentSlutbetaldAptId);
   if(!apt){ closeSlutbetaldModal(); return; }
   const done = document.getElementById('slutbetaldDoneCheckbox').checked;
@@ -1100,7 +1648,7 @@ function makeCheckCell(apt, field){
   box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
   box.title = apt[field].done ? fieldStamp(apt[field]) : CHECK_LABELS[field];
   box.onclick = async () => {
-    if(!myName){ showToast('Ange ditt namn först'); document.getElementById('nameInput').focus(); return; }
+    if(!myName){ showToast('Ange ditt namn först'); return; }
     apt[field].done = !apt[field].done;
     apt[field].by = apt[field].done ? myName : '';
     apt[field].at = apt[field].done ? new Date().toISOString() : '';
@@ -1178,7 +1726,7 @@ document.getElementById('tillvalModalOverlay').addEventListener('click', e => {
   if(e.target.id === 'tillvalModalOverlay') closeTillvalModal();
 });
 document.getElementById('tillvalSaveBtn').onclick = async () => {
-  if(!myName){ showToast('Ange ditt namn först'); closeTillvalModal(); document.getElementById('nameInput').focus(); return; }
+  if(!myName){ showToast('Ange ditt namn först'); closeTillvalModal(); return; }
   const apt = apartments.find(a => a.id === currentTillvalAptId);
   if(!apt){ closeTillvalModal(); return; }
   const note = document.getElementById('tillvalNoteInput').value.trim();
@@ -1212,7 +1760,7 @@ function makeDateCell(apt, field){
   input.className = 'date-input' + (apt[field].date ? ' filled' : '');
   input.value = apt[field].date || '';
   input.onchange = async () => {
-    if(!myName){ showToast('Ange ditt namn först'); document.getElementById('nameInput').focus(); input.value = apt[field].date || ''; return; }
+    if(!myName){ showToast('Ange ditt namn först'); input.value = apt[field].date || ''; return; }
     apt[field].date = input.value;
     apt[field].by = input.value ? myName : '';
     apt[field].at = input.value ? new Date().toISOString() : '';
@@ -1240,16 +1788,6 @@ function ensureAddRow(){
   // Adds a persistent input row at bottom of table body for quick entry
 }
 
-document.getElementById('nameSave').onclick = () => {
-  const val = document.getElementById('nameInput').value.trim();
-  if(val) saveName(val);
-};
-document.getElementById('nameInput').addEventListener('keydown', e => {
-  if(e.key === 'Enter'){ const v = e.target.value.trim(); if(v) saveName(v); }
-});
-document.getElementById('changeName').onclick = () => {
-  myName = ''; renderNameUI(); document.getElementById('nameInput').focus();
-};
 
 // ---------- Ekonomi ----------
 function ekonomiKey(projectId){ return 'ekonomi:' + projectId; }
@@ -1410,7 +1948,7 @@ document.getElementById('sieUploadBtn').onclick = () => {
 document.getElementById('sieFileInput').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   if(!files.length) return;
-  if(!myName){ showToast('Ange ditt namn först'); document.getElementById('nameInput').focus(); e.target.value = ''; return; }
+  if(!myName){ showToast('Ange ditt namn först'); e.target.value = ''; return; }
 
   const statusEl = document.getElementById('sieUploadStatus');
   let okCount = 0, failCount = 0;
@@ -1691,7 +2229,7 @@ function renderIntrRow(entry){
   const overdue = entry.status === 'Kontaktad' && lastKontakt && daysSince(lastKontakt) >= 3;
 
   const row = document.createElement('div');
-  row.className = 'intr-row' + (entry.hanterad ? ' handled' : '') + (overdue ? ' overdue' : '');
+  row.className = 'intr-row' + (isStruken(entry) ? ' handled' : '') + (overdue ? ' overdue' : '');
 
   const cb = document.createElement('input');
   cb.type = 'checkbox';
@@ -1710,7 +2248,7 @@ function renderIntrRow(entry){
   const top = document.createElement('div');
   top.className = 'intr-row-top';
   const nameSpan = document.createElement('span');
-  nameSpan.className = 'intr-name' + (entry.hanterad ? ' handled' : '');
+  nameSpan.className = 'intr-name' + (isStruken(entry) ? ' handled' : '');
   nameSpan.textContent = entry.namn;
   top.appendChild(nameSpan);
 
@@ -2128,6 +2666,1299 @@ document.getElementById('intrNewBtnP').onclick = () => {
   document.getElementById('intrStatusFilterP').innerHTML = optsHtml;
 })();
 
+// ---------- Material (rumsbeskrivning) ----------
+function materialKey(projectId){ return 'material:' + projectId; }
+function emptyMaterial(){ return { rooms: [] }; }
+function emptyMaterialProduct(){
+  return { id: uid(), name:'', supplier:'', priceExVat:'', priceIncVat:'', warranty:'', appliesTo: [], unitAmount:'', unitKind:'st', ordered:false, deliveries:{} };
+}
+
+// Räknar fram totalmängden att beställa: mängd per lägenhet x antal lägenheter av
+// rummets lägenhetstyp (varje rum hör till EN lägenhetstyp, satt via bofaktablad-
+// uppladdningen eller vald i rullistan när rummet skapades).
+function materialOrderQuantity(room, product){
+  const count = materialMatchingApartments(room).length;
+  const raw = parseFloat((product.unitAmount || '').toString().replace(',', '.'));
+  const perUnit = isNaN(raw) || raw <= 0 ? 1 : raw;
+  const total = perUnit * count;
+  const totalStr = Number.isInteger(total) ? String(total) : total.toFixed(2).replace(/0+$/,'').replace(/\.$/,'').replace('.', ',');
+  return { count, perUnit, total, totalStr, unit: product.unitKind || 'st' };
+}
+
+let materialData = emptyMaterial();
+
+async function loadMaterial(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(materialKey(projectId), true);
+    materialData = (res && res.value) ? JSON.parse(res.value) : emptyMaterial();
+  }catch(e){
+    materialData = emptyMaterial();
+  }
+  if(!Array.isArray(materialData.rooms)) materialData.rooms = [];
+  materialData.rooms.forEach(room => {
+    if(!Array.isArray(room.products)) room.products = [];
+    if(typeof room.floor !== 'string') room.floor = '';
+    if(typeof room.areaSqm !== 'string') room.areaSqm = '';
+    if(typeof room.unitType !== 'string') room.unitType = '';
+    room.products.forEach(p => {
+      if(!Array.isArray(p.appliesTo)) p.appliesTo = [];
+      if(!p.deliveries || typeof p.deliveries !== 'object') p.deliveries = {};
+      if(typeof p.unitAmount !== 'string') p.unitAmount = '';
+      if(p.unitKind !== 'kvm' && p.unitKind !== 'st') p.unitKind = 'st';
+    });
+  });
+  renderMaterial();
+}
+
+async function persistMaterial(){
+  try{
+    await withRetry(() => window.storage.set(materialKey(activeProjectId), JSON.stringify(materialData), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara material', e, () => persistMaterial());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+function materialSqmTypes(){
+  const set = new Set(apartments.map(a => (a.totalyta||'').toString().trim()).filter(Boolean));
+  return Array.from(set).sort((a,b) => parseFloat(a) - parseFloat(b));
+}
+
+function materialMatchingApartments(room){
+  if(!room.unitType) return [];
+  return apartments.filter(a => (a.totalyta||'').toString().trim() === room.unitType);
+}
+
+function formatWarranty(v){
+  const digits = (v || '').toString().replace(/[^0-9]/g, '');
+  return digits ? digits + ' år' : '—';
+}
+
+function formatMaterialPrice(v){
+  const n = parseFloat(v);
+  return isNaN(n) ? (v || '—') : formatNumberSv(String(Math.round(n)));
+}
+
+function refreshMaterialUnitTypeOptions(){
+  const sel = document.getElementById('materialUnitTypeFilter');
+  const current = sel.value;
+  const sqmTypes = materialSqmTypes();
+  sel.innerHTML = '<option value="">Välj lägenhetstyp (kvm)…</option>' +
+    sqmTypes.map(sqm => '<option value="' + escapeHtml(sqm) + '">' + escapeHtml(sqm) + ' kvm</option>').join('');
+  if(sqmTypes.includes(current)) sel.value = current;
+}
+
+function currentMaterialUnitType(){
+  return document.getElementById('materialUnitTypeFilter').value;
+}
+
+function renderMaterial(){
+  refreshMaterialUnitTypeOptions();
+  const unitType = currentMaterialUnitType();
+  const container = document.getElementById('materialRooms');
+  const empty = document.getElementById('materialEmptyState');
+  const noType = document.getElementById('materialNoTypeState');
+  container.innerHTML = '';
+
+  if(!unitType){
+    noType.style.display = 'block';
+    empty.style.display = 'none';
+    return;
+  }
+  noType.style.display = 'none';
+
+  const roomsForType = materialData.rooms.filter(r => r.unitType === unitType);
+  if(roomsForType.length === 0){
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  roomsForType.forEach(room => container.appendChild(renderMaterialRoom(room)));
+}
+
+document.getElementById('materialUnitTypeFilter').addEventListener('change', renderMaterial);
+
+function renderMaterialRoom(room){
+  const wrap = document.createElement('div');
+  wrap.className = 'material-room';
+
+  const sameTypeRooms = materialData.rooms.filter(r => r.unitType === room.unitType);
+  const idx = sameTypeRooms.findIndex(r => r.id === room.id);
+
+  const header = document.createElement('div');
+  header.className = 'material-room-header';
+  const h3 = document.createElement('h3');
+  h3.textContent = room.name;
+  header.appendChild(h3);
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'material-move-btn';
+  upBtn.textContent = '▲';
+  upBtn.title = 'Flytta upp';
+  upBtn.disabled = idx === 0;
+  upBtn.onclick = () => moveMaterialRoom(room, -1);
+  header.appendChild(upBtn);
+
+  const downBtn = document.createElement('button');
+  downBtn.className = 'material-move-btn';
+  downBtn.textContent = '▼';
+  downBtn.title = 'Flytta ner';
+  downBtn.disabled = idx === sameTypeRooms.length - 1;
+  downBtn.onclick = () => moveMaterialRoom(room, 1);
+  header.appendChild(downBtn);
+
+  const rmBtn = document.createElement('button');
+  rmBtn.textContent = '✕';
+  rmBtn.title = 'Ta bort rum';
+  rmBtn.onclick = async () => {
+    materialData.rooms = materialData.rooms.filter(r => r.id !== room.id);
+    renderMaterial();
+    await persistMaterial();
+  };
+  header.appendChild(rmBtn);
+  wrap.appendChild(header);
+
+  if(room.floor || room.areaSqm || room.unitType){
+    const sub = document.createElement('div');
+    sub.className = 'material-room-sub';
+    sub.textContent = [
+      room.unitType ? room.unitType + ' kvm' : '',
+      room.floor,
+      room.areaSqm ? room.areaSqm + ' m²' : ''
+    ].filter(Boolean).join(' · ');
+    wrap.appendChild(sub);
+  }
+
+  if(room.products.length > 0){
+    const scroll = document.createElement('div');
+    scroll.className = 'table-scroll';
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML =
+      '<tr>' +
+        '<th>Produkt</th><th>Leverantör</th><th class="center">Pris exkl</th><th class="center">Pris inkl</th>' +
+        '<th>Garanti</th><th class="center">Antal</th><th class="center">Beställd</th><th></th><th></th>' +
+      '</tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    room.products.forEach(product => tbody.appendChild(renderMaterialProductRow(room, product)));
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    wrap.appendChild(scroll);
+  }
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'material-add-product-btn';
+  addBtn.textContent = '+ Lägg till produkt';
+  addBtn.onclick = () => openMaterialProductModal(room, null);
+  wrap.appendChild(addBtn);
+
+  return wrap;
+}
+
+function makeMaterialOrderedCell(product){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const box = document.createElement('div');
+  box.className = 'check' + (product.ordered ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = product.ordered ? 'Beställd' : 'Ej beställd';
+  box.onclick = async () => {
+    product.ordered = !product.ordered;
+    renderMaterial();
+    await persistMaterial();
+  };
+  td.appendChild(box);
+  return td;
+}
+
+function renderMaterialProductRow(room, product){
+  const tr = document.createElement('tr');
+
+  const nameTd = makeCell(product.name, '');
+  nameTd.style.cursor = 'pointer';
+  nameTd.className = 'material-editable-cell';
+  nameTd.title = 'Klicka för att redigera';
+  nameTd.onclick = () => openMaterialProductModal(room, product);
+  tr.appendChild(nameTd);
+
+  tr.appendChild(makeCell(product.supplier, ''));
+  tr.appendChild(makeCell(formatMaterialPrice(product.priceExVat), 'center'));
+  tr.appendChild(makeCell(formatMaterialPrice(product.priceIncVat), 'center'));
+  tr.appendChild(makeCell(formatWarranty(product.warranty), ''));
+
+  const qty = materialOrderQuantity(room, product);
+  const countTd = document.createElement('td');
+  countTd.className = 'center';
+  countTd.textContent = qty.totalStr + ' ' + qty.unit;
+  countTd.title = qty.perUnit + ' ' + qty.unit + ' × ' + qty.count + ' lägenheter';
+  tr.appendChild(countTd);
+
+  tr.appendChild(makeMaterialOrderedCell(product));
+
+  const deliveryTd = document.createElement('td');
+  const deliveryBtn = document.createElement('button');
+  deliveryBtn.className = 'material-delivery-btn';
+  deliveryBtn.textContent = 'Leveranser';
+  deliveryBtn.onclick = () => openMaterialDeliveryModal(room, product);
+  deliveryTd.appendChild(deliveryBtn);
+  tr.appendChild(deliveryTd);
+
+  const actionsTd = document.createElement('td');
+  actionsTd.className = 'row-actions';
+  const rmBtn = document.createElement('button');
+  rmBtn.className = 'remove-btn';
+  rmBtn.textContent = '✕';
+  rmBtn.title = 'Ta bort produkt';
+  rmBtn.onclick = async () => {
+    room.products = room.products.filter(p => p.id !== product.id);
+    renderMaterial();
+    await persistMaterial();
+  };
+  actionsTd.appendChild(rmBtn);
+  tr.appendChild(actionsTd);
+
+  return tr;
+}
+
+// ---------- Rum / Beställningslista ----------
+let materialView = 'rum';
+
+document.querySelectorAll('.material-view-tab').forEach(btn => {
+  btn.onclick = () => {
+    materialView = btn.dataset.materialView;
+    document.querySelectorAll('.material-view-tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.getElementById('materialRoomsView').style.display = materialView === 'rum' ? 'block' : 'none';
+    document.getElementById('materialOrderView').style.display = materialView === 'bestallningslista' ? 'block' : 'none';
+    document.getElementById('materialDeliveryScheduleView').style.display = materialView === 'leveransschema' ? 'block' : 'none';
+    if(materialView === 'bestallningslista') renderMaterialOrderList();
+    if(materialView === 'leveransschema') renderMaterialDeliverySchedule();
+  };
+});
+
+// ---------- Leveransschema (kalenderliknande vy, samma grid-stil som Tidsplan) ----------
+function isoWeekInfo(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if(target.getDay() !== 4){
+    target.setMonth(0, 1 + ((4 - target.getDay()) + 7) % 7);
+  }
+  const week = 1 + Math.round((firstThursday - target.valueOf()) / (7 * 24 * 3600 * 1000));
+  return { year: new Date(firstThursday).getFullYear(), week };
+}
+function isoWeekKey(dateStr){ const i = isoWeekInfo(dateStr); return i.year + '-' + String(i.week).padStart(2,'0'); }
+function dateToLocalIso(d){
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function addIsoWeeks(year, week, delta){
+  // Räkna om till en riktig kalenderdag (torsdagen i veckan) och stega därifrån - undviker manuellt årsskifte-krångel.
+  // OBS: bygg datumsträngen från lokala år/månad/dag (INTE toISOString, som konverterar till UTC
+  // och kan tappa en dag bakåt beroende på tidszon, vilket ger fel veckonummer nära veckoskiften).
+  const jan4 = new Date(year, 0, 4);
+  const dayNr = (jan4.getDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setDate(jan4.getDate() - dayNr);
+  const target = new Date(week1Monday);
+  target.setDate(week1Monday.getDate() + (week - 1 + delta) * 7);
+  return isoWeekInfo(dateToLocalIso(target));
+}
+
+function renderMaterialDeliverySchedule(){
+  const grid = document.getElementById('materialDeliveryScheduleGrid');
+  const wrap = grid.parentElement;
+  const empty = document.getElementById('materialDeliveryScheduleEmptyState');
+  grid.innerHTML = '';
+
+  // Samla alla (rum, produkt, lägenhet, datum) som har ett leveransdatum satt.
+  const entries = [];
+  materialData.rooms.forEach(room => {
+    room.products.forEach(product => {
+      Object.keys(product.deliveries || {}).forEach(aptId => {
+        const d = product.deliveries[aptId];
+        if(d && d.date) entries.push({ room, product, aptId, date: d.date });
+      });
+    });
+  });
+
+  if(entries.length === 0){
+    wrap.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  wrap.style.display = 'block';
+  empty.style.display = 'none';
+
+  // Bygg en sammanhängande veckoskala från första till sista leveransveckan.
+  let minInfo = isoWeekInfo(entries[0].date), maxInfo = minInfo;
+  entries.forEach(e => {
+    const info = isoWeekInfo(e.date);
+    if(info.year < minInfo.year || (info.year === minInfo.year && info.week < minInfo.week)) minInfo = info;
+    if(info.year > maxInfo.year || (info.year === maxInfo.year && info.week > maxInfo.week)) maxInfo = info;
+  });
+  const weekKeys = [];
+  const weekLabels = [];
+  let cursor = minInfo;
+  let guard = 0;
+  while(guard++ < 500){
+    weekKeys.push(cursor.year + '-' + String(cursor.week).padStart(2,'0'));
+    weekLabels.push('v.' + cursor.week + (cursor.year !== minInfo.year ? " '" + String(cursor.year).slice(2) : ''));
+    if(cursor.year === maxInfo.year && cursor.week === maxInfo.week) break;
+    cursor = addIsoWeeks(cursor.year, cursor.week, 1);
+  }
+  const weekIndexByKey = {};
+  weekKeys.forEach((k, i) => { weekIndexByKey[k] = i; });
+  const N = weekKeys.length;
+
+  // Gruppera per produkt (rad) - en produkt kan ha leveranser till flera lägenheter/veckor.
+  const rowsMap = new Map();
+  entries.forEach(e => {
+    const key = e.room.id + ':' + e.product.id;
+    if(!rowsMap.has(key)) rowsMap.set(key, { room: e.room, product: e.product, byWeek: {} });
+    const rowData = rowsMap.get(key);
+    const wIdx = weekIndexByKey[isoWeekKey(e.date)];
+    rowData.byWeek[wIdx] = (rowData.byWeek[wIdx] || 0) + 1;
+  });
+  const rows = Array.from(rowsMap.values());
+
+  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(34px, 1fr))';
+  let rowCounter = 1;
+  function place(el, col, rowNum, colSpan){
+    el.style.gridColumn = colSpan ? (col + ' / span ' + colSpan) : String(col);
+    el.style.gridRow = String(rowNum);
+    grid.appendChild(el);
+  }
+
+  const corner = document.createElement('div');
+  corner.className = 'tidsplan-corner';
+  place(corner, 1, rowCounter);
+  weekLabels.forEach((label, i) => {
+    const wh = document.createElement('div');
+    wh.className = 'tidsplan-week-header';
+    wh.textContent = label;
+    place(wh, i + 2, rowCounter);
+  });
+  rowCounter++;
+
+  rows.forEach(rowData => {
+    const label = document.createElement('div');
+    label.className = 'tidsplan-row-label';
+    label.innerHTML =
+      '<span class="task-name">' + escapeHtml(rowData.product.name) + '</span>' +
+      '<span class="task-ansvarig">' + escapeHtml(rowData.room.name) + '</span>';
+    label.onclick = () => openMaterialDeliveryModal(rowData.room, rowData.product);
+    place(label, 1, rowCounter);
+
+    Object.keys(rowData.byWeek).forEach(wIdxStr => {
+      const wIdx = parseInt(wIdxStr, 10);
+      const marker = document.createElement('div');
+      marker.className = 'delivery-marker';
+      const count = rowData.byWeek[wIdx];
+      marker.textContent = count + ' st';
+      marker.title = 'Klicka för att se/redigera leveranser';
+      marker.onclick = () => openMaterialDeliveryModal(rowData.room, rowData.product);
+      place(marker, wIdx + 2, rowCounter);
+    });
+    rowCounter++;
+  });
+}
+
+function renderMaterialOrderList(){
+  const body = document.getElementById('materialOrderBody');
+  const empty = document.getElementById('materialOrderEmptyState');
+  body.innerHTML = '';
+
+  const allRows = [];
+  materialData.rooms.forEach(room => {
+    room.products.forEach(product => allRows.push({ room, product }));
+  });
+  // Specas separat per lägenhetstyp (varje rum hör till en typ), och inom varje typ
+  // grupperas hela beställningen per leverantör så alla rader för t.ex. Smeg hamnar i följd.
+  allRows.sort((a, b) =>
+    (a.room.unitType || '').localeCompare(b.room.unitType || '', 'sv', {numeric:true}) ||
+    (a.product.supplier || '').localeCompare(b.product.supplier || '', 'sv') ||
+    a.product.name.localeCompare(b.product.name, 'sv')
+  );
+
+  document.querySelector('#materialOrderView .table-scroll').style.display = allRows.length ? 'block' : 'none';
+  empty.style.display = allRows.length ? 'none' : 'block';
+  document.getElementById('materialOrderTotals').style.display = allRows.length ? 'flex' : 'none';
+  if(allRows.length === 0) return;
+
+  let sumEx = 0, sumInc = 0;
+  let lastUnitType = null;
+  allRows.forEach(({ room, product }) => {
+    if(room.unitType !== lastUnitType){
+      lastUnitType = room.unitType;
+      const headerTr = document.createElement('tr');
+      const headerTd = document.createElement('td');
+      headerTd.colSpan = 12;
+      headerTd.className = 'material-order-section';
+      headerTd.textContent = 'Lägenhetstyp: ' + (lastUnitType || '—') + ' kvm';
+      headerTr.appendChild(headerTd);
+      body.appendChild(headerTr);
+    }
+
+    const qty = materialOrderQuantity(room, product);
+    const priceEx = parseFloat(product.priceExVat) || 0;
+    const priceInc = parseFloat(product.priceIncVat) || 0;
+    const totalEx = priceEx * qty.total;
+    const totalInc = priceInc * qty.total;
+    sumEx += totalEx;
+    sumInc += totalInc;
+
+    const tr = document.createElement('tr');
+    const nameTd = makeCell(product.name, '');
+    nameTd.style.cursor = 'pointer';
+    nameTd.className = 'material-editable-cell';
+    nameTd.title = 'Klicka för att redigera';
+    nameTd.onclick = () => openMaterialProductModal(room, product);
+    tr.appendChild(nameTd);
+    tr.appendChild(makeCell(room.name, ''));
+    tr.appendChild(makeCell(product.supplier, ''));
+    tr.appendChild(makeCell(room.unitType ? room.unitType + ' kvm' : '—', 'center'));
+    tr.appendChild(makeCell(qty.perUnit + ' ' + qty.unit, 'center'));
+    tr.appendChild(makeCell(String(qty.count), 'center'));
+    tr.appendChild(makeCell(qty.totalStr + ' ' + qty.unit, 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(product.priceExVat), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(product.priceIncVat), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(String(Math.round(totalEx))), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(String(Math.round(totalInc))), 'center'));
+    tr.appendChild(makeMaterialOrderedCell(product));
+    body.appendChild(tr);
+  });
+
+  document.getElementById('materialOrderTotals').innerHTML =
+    '<span>Summa exkl moms: <strong>' + formatMaterialPrice(String(Math.round(sumEx))) + ' kr</strong></span>' +
+    '<span>Summa inkl moms: <strong>' + formatMaterialPrice(String(Math.round(sumInc))) + ' kr</strong></span>';
+}
+
+document.getElementById('addRoomBtn').onclick = async () => {
+  const unitType = currentMaterialUnitType();
+  if(!unitType){
+    showToast('Välj vilken lägenhetstyp (kvm) rummet gäller för först');
+    return;
+  }
+  const input = document.getElementById('newRoomInput');
+  const name = input.value.trim();
+  if(!name) return;
+  materialData.rooms.push({ id: uid(), name, floor: '', areaSqm: '', unitType, products: [] });
+  input.value = '';
+  renderMaterial();
+  await persistMaterial();
+};
+document.getElementById('newRoomInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addRoomBtn').click();
+});
+
+async function moveMaterialRoom(room, direction){
+  // Byt plats med grannen inom SAMMA lägenhetstyp (var de än ligger i den underliggande listan) -
+  // rum av andra typer visas aldrig tillsammans, så deras inbördes ordning spelar ingen roll.
+  const sameTypeRooms = materialData.rooms.filter(r => r.unitType === room.unitType);
+  const idx = sameTypeRooms.findIndex(r => r.id === room.id);
+  const swapIdx = idx + direction;
+  if(idx === -1 || swapIdx < 0 || swapIdx >= sameTypeRooms.length) return;
+  const other = sameTypeRooms[swapIdx];
+  const realIdxA = materialData.rooms.findIndex(r => r.id === room.id);
+  const realIdxB = materialData.rooms.findIndex(r => r.id === other.id);
+  const tmp = materialData.rooms[realIdxA];
+  materialData.rooms[realIdxA] = materialData.rooms[realIdxB];
+  materialData.rooms[realIdxB] = tmp;
+  renderMaterial();
+  await persistMaterial();
+}
+
+function setBofaktabladStatus(msg, kind){
+  const el = document.getElementById('bofaktabladUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('bofaktabladUploadBtn').onclick = () => {
+  if(!document.getElementById('materialUnitTypeFilter').value){
+    setBofaktabladStatus('Välj vilken lägenhetstyp (kvm) bofaktabladet gäller för först.', 'err');
+    return;
+  }
+  document.getElementById('bofaktabladFileInput').click();
+};
+
+document.getElementById('bofaktabladFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!document.getElementById('materialUnitTypeFilter').value){
+    setBofaktabladStatus('Välj vilken lägenhetstyp (kvm) bofaktabladet gäller för först.', 'err');
+    e.target.value = '';
+    return;
+  }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setBofaktabladStatus('Filen är för stor (max 8 MB).', 'err');
+    return;
+  }
+  const btn = document.getElementById('bofaktabladUploadBtn');
+  btn.disabled = true;
+  setBofaktabladStatus('Läser bofaktabladet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    if(!window.DB || !window.DB.hasSupabase) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+    const { data, error } = await sb.functions.invoke('bright-processor', {
+      body: { pdfBase64, filename: file.name }
+    });
+    if(error) throw error;
+
+    const rooms = (data && Array.isArray(data.rooms)) ? data.rooms : [];
+    if(rooms.length === 0){
+      setBofaktabladStatus('Hittade inga rum i dokumentet.', 'err');
+      return;
+    }
+    const unitType = document.getElementById('materialUnitTypeFilter').value;
+    rooms.forEach(r => {
+      materialData.rooms.push({
+        id: uid(),
+        name: r.name || 'Okänt rum',
+        floor: r.floor || '',
+        areaSqm: r.areaSqm || '',
+        unitType: unitType,
+        products: []
+      });
+    });
+    renderMaterial();
+    await persistMaterial();
+    setBofaktabladStatus('Klart - la till ' + rooms.length + ' rum. Granska ordningen nedan.', 'ok');
+  }catch(err){
+    setBofaktabladStatus('Kunde inte läsa bofaktabladet: ' + err.message, 'err');
+  }finally{
+    btn.disabled = false;
+    document.getElementById('bofaktabladFileInput').value = '';
+  }
+});
+
+// ---------- Lägg till/redigera produkt ----------
+let currentMaterialRoomId = null;
+let currentMaterialProductId = null;
+
+function openMaterialProductModal(room, product){
+  currentMaterialRoomId = room.id;
+  currentMaterialProductId = product ? product.id : null;
+  document.getElementById('materialProductModalTitle').textContent = product ? 'Redigera produkt' : 'Lägg till produkt';
+  document.getElementById('materialProductModalSub').textContent = 'Rum: ' + room.name;
+  document.getElementById('materialProductName').value = product ? product.name : '';
+  const supplierSelect = document.getElementById('materialProductSupplierSelect');
+  const supplierCustom = document.getElementById('materialProductSupplierCustom');
+  const knownSuppliers = Array.from(supplierSelect.options).map(o => o.value).filter(v => v !== '__other__');
+  const currentSupplier = product ? (product.supplier || '') : '';
+  if(currentSupplier && !knownSuppliers.includes(currentSupplier)){
+    supplierSelect.value = '__other__';
+    supplierCustom.value = currentSupplier;
+    supplierCustom.style.display = 'block';
+  } else {
+    supplierSelect.value = currentSupplier || 'Smeg';
+    supplierCustom.value = '';
+    supplierCustom.style.display = 'none';
+  }
+  document.getElementById('materialProductPriceEx').value = product ? product.priceExVat : '';
+  document.getElementById('materialProductPriceInc').value = product ? product.priceIncVat : '';
+  document.getElementById('materialProductWarranty').value = product ? product.warranty : '';
+  document.getElementById('materialProductUnitAmount').value = product ? product.unitAmount : '';
+  document.getElementById('materialProductUnitKind').value = product ? product.unitKind : 'st';
+
+  document.getElementById('materialProductModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('materialProductName').focus(), 0);
+}
+function closeMaterialProductModal(){
+  document.getElementById('materialProductModalOverlay').classList.remove('open');
+  currentMaterialRoomId = null;
+  currentMaterialProductId = null;
+}
+document.getElementById('materialProductSupplierSelect').addEventListener('change', (e) => {
+  document.getElementById('materialProductSupplierCustom').style.display = e.target.value === '__other__' ? 'block' : 'none';
+});
+document.getElementById('materialProductCancelBtn').onclick = closeMaterialProductModal;
+document.getElementById('materialProductModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'materialProductModalOverlay') closeMaterialProductModal();
+});
+document.getElementById('materialProductSaveBtn').onclick = async () => {
+  const room = materialData.rooms.find(r => r.id === currentMaterialRoomId);
+  if(!room){ closeMaterialProductModal(); return; }
+  const name = document.getElementById('materialProductName').value.trim();
+  if(!name){ showToast('Ange ett produktnamn'); return; }
+
+  let product = room.products.find(p => p.id === currentMaterialProductId);
+  if(!product){
+    product = emptyMaterialProduct();
+    room.products.push(product);
+  }
+  product.name = name;
+  const supplierSelected = document.getElementById('materialProductSupplierSelect').value;
+  product.supplier = supplierSelected === '__other__'
+    ? document.getElementById('materialProductSupplierCustom').value.trim()
+    : supplierSelected;
+  product.priceExVat = document.getElementById('materialProductPriceEx').value.replace(/[^0-9]/g, '').trim();
+  product.priceIncVat = document.getElementById('materialProductPriceInc').value.replace(/[^0-9]/g, '').trim();
+  product.warranty = document.getElementById('materialProductWarranty').value.replace(/[^0-9]/g, '').trim();
+  product.unitAmount = document.getElementById('materialProductUnitAmount').value.replace(/[^0-9,\.]/g, '').trim();
+  product.unitKind = document.getElementById('materialProductUnitKind').value === 'kvm' ? 'kvm' : 'st';
+
+  closeMaterialProductModal();
+  renderMaterial();
+  await persistMaterial();
+};
+
+// ---------- Leveranstider per lägenhet ----------
+function openMaterialDeliveryModal(room, product){
+  document.getElementById('materialDeliveryModalSub').textContent = 'Produkt: ' + product.name + ' (' + room.name + ')';
+  const list = document.getElementById('materialDeliveryList');
+  const matching = materialMatchingApartments(room);
+  list.innerHTML = '';
+  if(matching.length === 0){
+    list.innerHTML = '<div style="color:var(--ink-soft); font-size:12.5px;">Inga lägenheter av den här lägenhetstypen (' + escapeHtml(room.unitType || '—') + ' kvm) hittades i projektet.</div>';
+  } else {
+    matching.forEach(apt => {
+      const row = document.createElement('div');
+      row.className = 'material-delivery-row';
+      const label = document.createElement('span');
+      label.textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+      row.appendChild(label);
+      const existing = product.deliveries[apt.id];
+      const input = document.createElement('input');
+      input.type = 'date';
+      input.className = 'date-input' + (existing && existing.date ? ' filled' : '');
+      input.value = (existing && existing.date) || '';
+      input.onchange = async () => {
+        if(!myName){ showToast('Ange ditt namn först'); input.value = (existing && existing.date) || ''; return; }
+        product.deliveries[apt.id] = { date: input.value, by: input.value ? myName : '', at: input.value ? new Date().toISOString() : '' };
+        input.className = 'date-input' + (input.value ? ' filled' : '');
+        await persistMaterial();
+      };
+      row.appendChild(input);
+      list.appendChild(row);
+    });
+  }
+  document.getElementById('materialDeliveryModalOverlay').classList.add('open');
+}
+function closeMaterialDeliveryModal(){
+  document.getElementById('materialDeliveryModalOverlay').classList.remove('open');
+  renderMaterial();
+}
+document.getElementById('materialDeliveryCloseBtn').onclick = closeMaterialDeliveryModal;
+document.getElementById('materialDeliveryModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'materialDeliveryModalOverlay') closeMaterialDeliveryModal();
+});
+
+// ---------- Skapa rumsbeskrivning (PDF) ----------
+document.getElementById('createRumsbeskrivningBtn').onclick = () => {
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(16);
+  doc.text('Rumsbeskrivning' + (proj ? ' – ' + proj.name : ''), 14, 18);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Skapad ' + new Date().toLocaleDateString('sv-SE'), 14, 24);
+
+  let y = 32;
+  const roomsWithProducts = materialData.rooms.filter(r => r.products.length > 0);
+  roomsWithProducts.forEach(room => {
+    doc.setFontSize(13);
+    doc.setTextColor(20);
+    doc.text(room.name + (room.unitType ? ' (' + room.unitType + ' kvm)' : ''), 14, y);
+    const rows = room.products.map(p => [
+      p.name, p.supplier || '—',
+      p.priceExVat ? formatMaterialPrice(p.priceExVat) + ' kr' : '—',
+      p.priceIncVat ? formatMaterialPrice(p.priceIncVat) + ' kr' : '—',
+      formatWarranty(p.warranty),
+      (() => { const q = materialOrderQuantity(room, p); return q.totalStr + ' ' + q.unit; })()
+    ]);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Produkt', 'Leverantör', 'Pris exkl moms', 'Pris inkl moms', 'Garanti', 'Antal']],
+      body: rows,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 12;
+  });
+
+  if(roomsWithProducts.length === 0){
+    doc.setFontSize(11);
+    doc.setTextColor(120);
+    doc.text('Inga produkter tillagda än.', 14, y);
+  }
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Rumsbeskrivning' + fileNamePart + '.pdf');
+};
+
+// ---------- Tidsplan (Gantt-schema) ----------
+function tidsplanKey(projectId){ return 'tidsplan:' + projectId; }
+function emptyTidsplan(){
+  return {
+    weeks: [],
+    houses: [],
+    legend: [
+      { task: 'VVS – grovinstallation', ansvarig: 'VVS', color: '#5B9BD5' },
+      { task: 'Ventilation – kanal/installation', ansvarig: 'Vent', color: '#70AD47' },
+      { task: 'El – rör, dosor & kablage', ansvarig: 'El', color: '#FFC000' },
+      { task: 'Installationskontroll / komplettering', ansvarig: 'Samordning', color: '#A5A5A5' },
+      { task: 'Snickare – komplettering/regling', ansvarig: 'Snickare', color: '#C55A11' },
+      { task: 'Gipsning väggar', ansvarig: 'Snickare', color: '#ED7D31' },
+      { task: 'Gipsning tak / inklädnader', ansvarig: 'Snickare', color: '#F4B183' },
+      { task: 'Kontroll före nästa skede', ansvarig: 'PL', color: '#8064A2' }
+    ],
+    avstamningslinje: { weekIndex: null }
+  };
+}
+function emptyTidsplanRow(){
+  return { id: uid(), task: '', ansvarig: '', color: '#5B9BD5', startIndex: null, endIndex: null, comment: '' };
+}
+
+let tidsplanData = emptyTidsplan();
+let tidsplanStamMode = false;
+
+async function loadTidsplan(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(tidsplanKey(projectId), true);
+    tidsplanData = (res && res.value) ? JSON.parse(res.value) : emptyTidsplan();
+  }catch(e){
+    tidsplanData = emptyTidsplan();
+  }
+  if(!Array.isArray(tidsplanData.weeks)) tidsplanData.weeks = [];
+  if(!Array.isArray(tidsplanData.houses)) tidsplanData.houses = [];
+  if(!Array.isArray(tidsplanData.legend)) tidsplanData.legend = emptyTidsplan().legend;
+  if(!tidsplanData.avstamningslinje || typeof tidsplanData.avstamningslinje !== 'object') tidsplanData.avstamningslinje = { weekIndex: null };
+  tidsplanData.houses.forEach(h => {
+    if(!Array.isArray(h.rows)) h.rows = [];
+    h.rows.forEach(r => {
+      if(typeof r.task !== 'string') r.task = '';
+      if(typeof r.ansvarig !== 'string') r.ansvarig = '';
+      if(typeof r.color !== 'string') r.color = '#5B9BD5';
+      if(typeof r.comment !== 'string') r.comment = '';
+      if(typeof r.startIndex !== 'number') r.startIndex = null;
+      if(typeof r.endIndex !== 'number') r.endIndex = null;
+    });
+  });
+  tidsplanStamMode = false;
+  renderTidsplan();
+}
+
+async function persistTidsplan(){
+  try{
+    await withRetry(() => window.storage.set(tidsplanKey(activeProjectId), JSON.stringify(tidsplanData), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara tidsplan', e, () => persistTidsplan());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+// ---------- Legend ----------
+function renderTidsplanLegend(){
+  const list = document.getElementById('tidsplanLegendList');
+  list.innerHTML = '';
+  tidsplanData.legend.forEach((entry, idx) => {
+    const row = document.createElement('div');
+    row.className = 'tidsplan-legend-row';
+    const swatch = document.createElement('div');
+    swatch.className = 'tidsplan-legend-swatch';
+    swatch.style.background = entry.color;
+    row.appendChild(swatch);
+    const task = document.createElement('span');
+    task.className = 'legend-task';
+    task.textContent = entry.task;
+    row.appendChild(task);
+    const ansvarig = document.createElement('span');
+    ansvarig.className = 'legend-ansvarig';
+    ansvarig.textContent = entry.ansvarig;
+    row.appendChild(ansvarig);
+    const rmBtn = document.createElement('button');
+    rmBtn.textContent = '✕';
+    rmBtn.title = 'Ta bort från legend';
+    rmBtn.onclick = async () => {
+      tidsplanData.legend.splice(idx, 1);
+      renderTidsplanLegend();
+      await persistTidsplan();
+    };
+    row.appendChild(rmBtn);
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('addLegendBtn').onclick = async () => {
+  const task = document.getElementById('legendTaskInput').value.trim();
+  if(!task) return;
+  const ansvarig = document.getElementById('legendAnsvarigInput').value.trim();
+  const color = document.getElementById('legendColorInput').value;
+  tidsplanData.legend.push({ task, ansvarig, color });
+  document.getElementById('legendTaskInput').value = '';
+  document.getElementById('legendAnsvarigInput').value = '';
+  renderTidsplanLegend();
+  await persistTidsplan();
+};
+
+// ---------- Hus / veckor ----------
+document.getElementById('addHouseBtn').onclick = async () => {
+  const input = document.getElementById('newHouseInput');
+  const name = input.value.trim();
+  if(!name) return;
+  tidsplanData.houses.push({ id: uid(), name, rows: [] });
+  input.value = '';
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('newHouseInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addHouseBtn').click();
+});
+
+document.getElementById('addWeekBtn').onclick = async () => {
+  const last = tidsplanData.weeks[tidsplanData.weeks.length - 1];
+  let nextLabel = 'v.1';
+  if(last){
+    const m = last.match(/^v\.(\d+)$/i);
+    if(m){
+      const n = parseInt(m[1], 10);
+      nextLabel = 'v.' + (n >= 52 ? 1 : n + 1);
+    }
+  }
+  tidsplanData.weeks.push(nextLabel);
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+async function removeTidsplanHouse(house){
+  tidsplanData.houses = tidsplanData.houses.filter(h => h.id !== house.id);
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+async function moveTidsplanHouse(house, direction){
+  const idx = tidsplanData.houses.findIndex(h => h.id === house.id);
+  const swapIdx = idx + direction;
+  if(idx === -1 || swapIdx < 0 || swapIdx >= tidsplanData.houses.length) return;
+  const tmp = tidsplanData.houses[idx];
+  tidsplanData.houses[idx] = tidsplanData.houses[swapIdx];
+  tidsplanData.houses[swapIdx] = tmp;
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+async function addTidsplanRow(house){
+  house.rows.push(emptyTidsplanRow());
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+// ---------- Avstämningslinje ----------
+document.getElementById('tidsplanStamBtn').onclick = () => {
+  tidsplanStamMode = !tidsplanStamMode;
+  document.getElementById('tidsplanStamHint').style.display = tidsplanStamMode ? 'block' : 'none';
+  renderTidsplan();
+};
+document.getElementById('tidsplanRemoveStamBtn').onclick = async () => {
+  tidsplanData.avstamningslinje.weekIndex = null;
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+async function placeTidsplanStamline(weekIndex){
+  tidsplanData.avstamningslinje.weekIndex = weekIndex;
+  tidsplanStamMode = false;
+  document.getElementById('tidsplanStamHint').style.display = 'none';
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+// ---------- Rad-redigering (modal) ----------
+let tidsplanEditingHouseId = null;
+let tidsplanEditingRowId = null;
+
+function openTidsplanRowModal(house, row){
+  tidsplanEditingHouseId = house.id;
+  tidsplanEditingRowId = row.id;
+  document.getElementById('tidsplanRowModalTitle').textContent = row.task ? 'Redigera uppgift' : 'Ny uppgift';
+  document.getElementById('tidsplanRowTask').value = row.task || '';
+  document.getElementById('tidsplanRowAnsvarig').value = row.ansvarig || '';
+  document.getElementById('tidsplanRowColor').value = row.color || '#5B9BD5';
+  document.getElementById('tidsplanRowComment').value = row.comment || '';
+  document.getElementById('tidsplanRowModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('tidsplanRowTask').focus(), 0);
+}
+function closeTidsplanRowModal(){
+  document.getElementById('tidsplanRowModalOverlay').classList.remove('open');
+  tidsplanEditingHouseId = null;
+  tidsplanEditingRowId = null;
+}
+document.getElementById('tidsplanRowCancelBtn').onclick = closeTidsplanRowModal;
+document.getElementById('tidsplanRowModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'tidsplanRowModalOverlay') closeTidsplanRowModal();
+});
+document.getElementById('tidsplanRowTask').addEventListener('input', (e) => {
+  const match = tidsplanData.legend.find(l => l.task.toLowerCase() === e.target.value.trim().toLowerCase());
+  if(match){
+    document.getElementById('tidsplanRowAnsvarig').value = match.ansvarig;
+    document.getElementById('tidsplanRowColor').value = match.color;
+  }
+});
+document.getElementById('tidsplanRowSaveBtn').onclick = async () => {
+  const house = tidsplanData.houses.find(h => h.id === tidsplanEditingHouseId);
+  const row = house && house.rows.find(r => r.id === tidsplanEditingRowId);
+  if(!row){ closeTidsplanRowModal(); return; }
+  row.task = document.getElementById('tidsplanRowTask').value.trim();
+  row.ansvarig = document.getElementById('tidsplanRowAnsvarig').value.trim();
+  row.color = document.getElementById('tidsplanRowColor').value;
+  row.comment = document.getElementById('tidsplanRowComment').value.trim();
+  closeTidsplanRowModal();
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('tidsplanRowDeleteBtn').onclick = async () => {
+  const house = tidsplanData.houses.find(h => h.id === tidsplanEditingHouseId);
+  if(house) house.rows = house.rows.filter(r => r.id !== tidsplanEditingRowId);
+  closeTidsplanRowModal();
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+// ---------- Rendering ----------
+function renderTidsplan(){
+  renderTidsplanLegend();
+  const grid = document.getElementById('tidsplanGrid');
+  const empty = document.getElementById('tidsplanEmptyState');
+  const wrap = document.getElementById('tidsplanGridWrap');
+  grid.innerHTML = '';
+
+  if(tidsplanData.houses.length === 0){
+    wrap.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  wrap.style.display = 'block';
+  empty.style.display = 'none';
+
+  const N = tidsplanData.weeks.length;
+  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(34px, 1fr))';
+
+  let rowCounter = 1;
+
+  function place(el, col, rowNum, colSpan){
+    el.style.gridColumn = colSpan ? (col + ' / span ' + colSpan) : String(col);
+    el.style.gridRow = String(rowNum);
+    grid.appendChild(el);
+  }
+
+  // Header-rad: hörncell + veckor
+  const corner = document.createElement('div');
+  corner.className = 'tidsplan-corner';
+  place(corner, 1, rowCounter);
+  tidsplanData.weeks.forEach((w, i) => {
+    const wh = document.createElement('div');
+    wh.className = 'tidsplan-week-header' + (tidsplanStamMode ? ' stam-pickable' : '');
+    wh.textContent = w;
+    if(tidsplanStamMode){
+      wh.title = 'Klicka för att placera avstämningslinjen här';
+      wh.onclick = () => placeTidsplanStamline(i);
+    }
+    place(wh, i + 2, rowCounter);
+  });
+  rowCounter++;
+
+  tidsplanData.houses.forEach((house, houseIdx) => {
+    const houseRow = document.createElement('div');
+    houseRow.className = 'tidsplan-house-row';
+    const nameSpan = document.createElement('span');
+    nameSpan.style.flex = '1';
+    nameSpan.textContent = house.name;
+    houseRow.appendChild(nameSpan);
+    const upBtn = document.createElement('button');
+    upBtn.textContent = '▲';
+    upBtn.title = 'Flytta upp';
+    upBtn.disabled = houseIdx === 0;
+    upBtn.onclick = () => moveTidsplanHouse(house, -1);
+    houseRow.appendChild(upBtn);
+    const downBtn = document.createElement('button');
+    downBtn.textContent = '▼';
+    downBtn.title = 'Flytta ner';
+    downBtn.disabled = houseIdx === tidsplanData.houses.length - 1;
+    downBtn.onclick = () => moveTidsplanHouse(house, 1);
+    houseRow.appendChild(downBtn);
+    const addRowBtn = document.createElement('button');
+    addRowBtn.textContent = '+ Lägg till rad';
+    addRowBtn.onclick = () => addTidsplanRow(house);
+    houseRow.appendChild(addRowBtn);
+    const rmHouseBtn = document.createElement('button');
+    rmHouseBtn.className = 'tidsplan-house-remove';
+    rmHouseBtn.textContent = '✕ Ta bort hus';
+    rmHouseBtn.onclick = () => removeTidsplanHouse(house);
+    houseRow.appendChild(rmHouseBtn);
+    place(houseRow, 1, rowCounter, N + 1);
+    rowCounter++;
+
+    house.rows.forEach(row => {
+      const thisRowNum = rowCounter;
+      const label = document.createElement('div');
+      label.className = 'tidsplan-row-label';
+      label.innerHTML =
+        '<span class="task-name">' + escapeHtml(row.task || 'Namnlös uppgift') + '</span>' +
+        (row.ansvarig ? '<span class="task-ansvarig">' + escapeHtml(row.ansvarig) + '</span>' : '');
+      label.onclick = () => openTidsplanRowModal(house, row);
+      place(label, 1, thisRowNum);
+
+      if(row.startIndex === null || row.endIndex === null){
+        for(let i = 0; i < N; i++){
+          const cell = document.createElement('div');
+          cell.className = 'tidsplan-week-cell';
+          cell.title = 'Klicka för att lägga uppgiften här';
+          cell.onclick = async () => {
+            row.startIndex = i;
+            row.endIndex = i;
+            renderTidsplan();
+            await persistTidsplan();
+          };
+          place(cell, i + 2, thisRowNum);
+        }
+      } else {
+        const bar = document.createElement('div');
+        bar.className = 'tidsplan-bar';
+        bar.style.background = row.color;
+        bar.textContent = row.task || 'Namnlös uppgift';
+        bar.title = row.comment || row.task;
+        place(bar, row.startIndex + 2, thisRowNum, row.endIndex - row.startIndex + 1);
+
+        const handle = document.createElement('div');
+        handle.className = 'tidsplan-bar-handle';
+        bar.appendChild(handle);
+
+        wireTidsplanBarDrag(bar, handle, house, row);
+      }
+      rowCounter++;
+    });
+  });
+
+  // Avstämningslinje
+  if(tidsplanData.avstamningslinje.weekIndex !== null && N > 0){
+    const line = document.createElement('div');
+    line.className = 'tidsplan-stamline';
+    place(line, tidsplanData.avstamningslinje.weekIndex + 2, 1, 1);
+    line.style.gridRow = '1 / ' + rowCounter;
+    document.getElementById('tidsplanRemoveStamBtn').style.display = 'inline-block';
+  } else {
+    document.getElementById('tidsplanRemoveStamBtn').style.display = 'none';
+  }
+}
+
+// ---------- Dra i stapel: flytta / förläng ----------
+function getTidsplanColWidth(){
+  const grid = document.getElementById('tidsplanGrid');
+  const totalWidth = grid.getBoundingClientRect().width;
+  const N = Math.max(tidsplanData.weeks.length, 1);
+  return (totalWidth - 210) / N;
+}
+
+function wireTidsplanBarDrag(bar, handle, house, row){
+  let dragState = null;
+
+  bar.addEventListener('mousedown', (e) => {
+    if(e.target === handle) return;
+    e.preventDefault();
+    dragState = { mode: 'move', startX: e.clientX, moved: 0, origStart: row.startIndex, origEnd: row.endIndex };
+  });
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragState = { mode: 'resize', startX: e.clientX, moved: 0, origStart: row.startIndex, origEnd: row.endIndex };
+  });
+
+  function onMove(e){
+    if(!dragState) return;
+    const colWidth = getTidsplanColWidth();
+    const deltaPx = e.clientX - dragState.startX;
+    dragState.moved = Math.abs(deltaPx);
+    const deltaWeeks = Math.round(deltaPx / colWidth);
+    const N = tidsplanData.weeks.length;
+
+    if(dragState.mode === 'move'){
+      const length = dragState.origEnd - dragState.origStart;
+      let newStart = dragState.origStart + deltaWeeks;
+      newStart = Math.max(0, Math.min(newStart, N - 1 - length));
+      const newEnd = newStart + length;
+      bar.style.gridColumn = (newStart + 2) + ' / span ' + (newEnd - newStart + 1);
+      bar._pendingStart = newStart;
+      bar._pendingEnd = newEnd;
+    } else {
+      let newEnd = dragState.origEnd + deltaWeeks;
+      newEnd = Math.max(dragState.origStart, Math.min(newEnd, N - 1));
+      bar.style.gridColumn = (dragState.origStart + 2) + ' / span ' + (newEnd - dragState.origStart + 1);
+      bar._pendingStart = dragState.origStart;
+      bar._pendingEnd = newEnd;
+    }
+  }
+
+  async function onUp(){
+    if(!dragState) return;
+    const wasClick = dragState.moved < 4;
+    const ds = dragState;
+    dragState = null;
+    if(wasClick){
+      renderTidsplan();
+      openTidsplanRowModal(house, row);
+      return;
+    }
+    if(typeof bar._pendingStart === 'number'){
+      row.startIndex = bar._pendingStart;
+      row.endIndex = bar._pendingEnd;
+    }
+    renderTidsplan();
+    await persistTidsplan();
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// ---------- Importera från Excel ----------
+function tidsplanFindLegendMatch(text){
+  const t = (text || '').trim().toLowerCase();
+  if(!t) return null;
+  return tidsplanData.legend.find(l => l.task.toLowerCase() === t) ||
+    tidsplanData.legend.find(l => t.includes(l.task.toLowerCase()) || l.task.toLowerCase().includes(t));
+}
+
+function setTidsplanImportStatus(msg, kind){
+  const el = document.getElementById('tidsplanImportStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('tidsplanImportBtn').onclick = () => {
+  document.getElementById('tidsplanImportInput').click();
+};
+
+document.getElementById('tidsplanImportInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  setTidsplanImportStatus('Läser Excel-filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
+
+    // Läs ev. Inställningar-flik som legend (arbetsmoment/ansvarig/färgkod-kolumner)
+    const settingsSheetName = wb.SheetNames.find(n => /inställning/i.test(n));
+    if(settingsSheetName){
+      const s = wb.Sheets[settingsSheetName];
+      const rows = XLSX.utils.sheet_to_json(s, { header: 1 });
+      for(let i = 1; i < rows.length; i++){
+        const [task, ansvarig, color] = rows[i];
+        if(task && color && /^#/.test(color) && !tidsplanData.legend.some(l => l.task === task)){
+          tidsplanData.legend.push({ task: String(task), ansvarig: ansvarig ? String(ansvarig) : '', color: String(color) });
+        }
+      }
+    }
+
+    const sheetName = wb.SheetNames.find(n => /tidsplan/i.test(n)) || wb.SheetNames[0];
+    const sheet = wb.Sheets[sheetName];
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    const merges = sheet['!merges'] || [];
+
+    function cellText(r, c){
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[ref];
+      return cell && cell.v !== undefined ? String(cell.v).trim() : '';
+    }
+    function mergeFor(r, c){
+      return merges.find(m => m.s.r === r && m.s.c === c);
+    }
+
+    // Hitta header-rader (celler som matchar v.NN i följd)
+    const headerRows = [];
+    for(let r = range.s.r; r <= range.e.r; r++){
+      let weekCols = [];
+      for(let c = range.s.c; c <= range.e.c; c++){
+        if(/^v\.\d+$/i.test(cellText(r, c))) weekCols.push(c);
+      }
+      if(weekCols.length >= 3) headerRows.push({ r, cols: weekCols });
+    }
+
+    if(headerRows.length === 0){
+      setTidsplanImportStatus('Hittade inga veckorubriker (t.ex. "v.35") i filen.', 'err');
+      return;
+    }
+
+    const firstHeader = headerRows[0];
+    const weeks = firstHeader.cols.map(c => cellText(firstHeader.r, c));
+    if(tidsplanData.weeks.length === 0) tidsplanData.weeks = weeks;
+    const colToWeekIndex = {};
+    firstHeader.cols.forEach((c, i) => { colToWeekIndex[c] = i; });
+    const firstWeekCol = firstHeader.cols[0];
+    const lastWeekCol = firstHeader.cols[firstHeader.cols.length - 1];
+
+    let housesAdded = 0, rowsAdded = 0;
+    for(let hIdx = 0; hIdx < headerRows.length; hIdx++){
+      const startR = headerRows[hIdx].r;
+      const endR = (hIdx + 1 < headerRows.length) ? headerRows[hIdx + 1].r - 1 : range.e.r;
+
+      // Hitta husnamn: leta "HUS n" i blockets första rader
+      let houseName = 'Hus ' + (hIdx + 1);
+      for(let r = startR; r <= Math.min(startR + 3, endR); r++){
+        for(let c = range.s.c; c <= range.e.c; c++){
+          const t = cellText(r, c);
+          if(/^hus\s*\d+/i.test(t)){ houseName = t; break; }
+        }
+      }
+
+      const house = { id: uid(), name: houseName, rows: [] };
+
+      // Gå igenom raderna i blocket, leta efter text-celler inom veckokolumnerna
+      const seenLabelCells = new Set();
+      for(let r = startR + 1; r <= endR; r++){
+        for(let c = firstWeekCol; c <= lastWeekCol; c++){
+          const key = r + ':' + c;
+          if(seenLabelCells.has(key)) continue;
+          const text = cellText(r, c);
+          if(!text || /^v\.\d+$/i.test(text) || /^hus\s*\d+/i.test(text)) continue;
+
+          const merge = mergeFor(r, c);
+          let sCol = c, eCol = c;
+          if(merge){
+            sCol = merge.s.c; eCol = merge.e.c;
+            for(let mc = sCol; mc <= eCol; mc++) seenLabelCells.add(r + ':' + mc);
+          }
+          if(sCol < firstWeekCol || eCol > lastWeekCol) continue;
+
+          const legendMatch = tidsplanFindLegendMatch(text);
+          house.rows.push({
+            id: uid(),
+            task: text,
+            ansvarig: legendMatch ? legendMatch.ansvarig : '',
+            color: legendMatch ? legendMatch.color : '#5B9BD5',
+            startIndex: colToWeekIndex[sCol] !== undefined ? colToWeekIndex[sCol] : 0,
+            endIndex: colToWeekIndex[eCol] !== undefined ? colToWeekIndex[eCol] : 0,
+            comment: ''
+          });
+          rowsAdded++;
+        }
+      }
+
+      tidsplanData.houses.push(house);
+      housesAdded++;
+    }
+
+    renderTidsplan();
+    await persistTidsplan();
+    setTidsplanImportStatus('Klart - la till ' + housesAdded + ' hus och ' + rowsAdded + ' uppgifter. Granska och justera nedan.', 'ok');
+  }catch(err){
+    setTidsplanImportStatus('Kunde inte läsa filen: ' + err.message, 'err');
+  }finally{
+    document.getElementById('tidsplanImportInput').value = '';
+  }
+});
+
 const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minuter - bara ett fåtal personer använder verktyget
 
 document.getElementById('manualSyncBtn').onclick = () => {
@@ -2147,43 +3978,44 @@ setInterval(() => {
 }, SYNC_INTERVAL_MS);
 
 async function init(){
-  await loadName();
   await loadProjects();
-  openHome();
+  const info = await DB.getCurrentUserInfo();
+  myName = PERSONAL_NAMES_BY_EMAIL[(info.email || '').toLowerCase()] || info.name || '';
+  myPersonId = info.id;
+  renderNameUI();
+  openPersonal();
 }
 
-// ---------- Delad åtkomstkod ----------
-// Gatern i sig avgör bara OM appen visas. Vem-är-du (myName) hanteras som förut av name-gaten.
-function showCodeGateError(msg){
-  const el = document.getElementById('codeGateError');
+// ---------- Personlig inloggning (eget konto per medarbetare) ----------
+function showPersonalLoginError(msg){
+  const el = document.getElementById('personalLoginError');
   el.textContent = msg;
   el.style.display = 'block';
 }
 
-async function attemptCodeGate(code){
-  if(!code) return;
-  const btn = document.getElementById('codeGateSubmit');
+async function attemptPersonalLogin(){
+  const email = document.getElementById('personalLoginEmail').value.trim();
+  const password = document.getElementById('personalLoginPassword').value;
+  if(!email || !password) return;
+  const btn = document.getElementById('personalLoginSubmit');
   btn.disabled = true;
   try{
-    const ok = await DB.checkAccessCode(code);
-    if(ok){
+    const res = await DB.signIn(email, password);
+    if(res.ok){
       document.getElementById('codeGateOverlay').classList.remove('open');
       await startApp();
     } else {
-      showCodeGateError('Fel kod, försök igen.');
+      showPersonalLoginError('Fel e-post eller lösenord, försök igen.');
     }
   }catch(e){
-    showCodeGateError('Kunde inte verifiera koden just nu. Försök igen om en stund.');
+    showPersonalLoginError('Kunde inte logga in just nu. Försök igen om en stund.');
   }finally{
     btn.disabled = false;
   }
 }
-
-document.getElementById('codeGateSubmit').onclick = () => {
-  attemptCodeGate(document.getElementById('codeGateInput').value.trim());
-};
-document.getElementById('codeGateInput').addEventListener('keydown', e => {
-  if(e.key === 'Enter') attemptCodeGate(e.target.value.trim());
+document.getElementById('personalLoginSubmit').onclick = attemptPersonalLogin;
+document.getElementById('personalLoginPassword').addEventListener('keydown', e => {
+  if(e.key === 'Enter') attemptPersonalLogin();
 });
 
 // ---------- Realtidssynk: ersätter/kompletterar 30-minuterspollningen ovan ----------

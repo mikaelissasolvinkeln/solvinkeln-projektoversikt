@@ -142,6 +142,145 @@
     font-family:'JetBrains Mono', monospace; font-size: 9px; color: var(--amber);
     display:block; margin-top:2px; white-space:nowrap;
   }
+  .material-toolbar{
+    display:flex; align-items:center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  .material-toolbar input{
+    border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:12.5px; width:200px;
+    font-family:'Inter',sans-serif;
+  }
+  #addRoomBtn, #bofaktabladUploadBtn{
+    background:none; border:1px dashed var(--blue); color:var(--blue); border-radius:6px;
+    padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer;
+  }
+  #bofaktabladUploadBtn:disabled{ opacity:0.5; cursor:default; }
+  #materialUnitTypeFilter{
+    font-family:'Inter', sans-serif; font-size: 12.5px; padding: 7px 8px; border-radius: 6px;
+    border: 1px solid var(--line-soft); background: #fff; color: var(--ink); cursor:pointer;
+  }
+  .material-room-sub{
+    font-family:'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); margin: -8px 0 12px;
+  }
+  .material-move-btn{
+    background:none; border:none; color: var(--ink-soft); cursor:pointer; font-size:13px; padding: 2px 4px;
+  }
+  .material-move-btn:hover{ color: var(--blue); }
+  .material-move-btn:disabled{ opacity: 0.25; cursor: default; }
+  .material-pdf-btn{
+    margin-left:auto; background: var(--ink); color:#fff; border:none; border-radius: 7px;
+    padding: 8px 16px; font-size: 13px; font-weight:600; cursor:pointer; font-family:'Inter', sans-serif;
+  }
+  .material-room{
+    background: var(--paper); border: 1px solid var(--line-soft); border-radius: var(--radius);
+    padding: 18px 20px; margin-bottom: 18px;
+  }
+  .material-room-header{
+    display:flex; align-items:center; gap: 10px; margin-bottom: 14px;
+  }
+  .material-room-header h3{
+    font-family:'Fraunces', serif; font-weight: 700; font-size: 17px; margin: 0; flex: 1;
+  }
+  .material-room-header button{
+    background:none; border:none; color: var(--ink-soft); cursor:pointer; font-size:15px; opacity:0.5; padding:3px;
+  }
+  .material-room-header button:hover{ opacity:1; color: var(--danger); }
+  .material-add-product-btn{
+    background:none; border:1px dashed var(--blue); color:var(--blue); border-radius:6px;
+    padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer; margin-top: 10px;
+  }
+  .material-sqm-tags{ font-family:'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+  .material-editable-cell{ text-decoration: underline dotted; text-underline-offset: 3px; }
+  .material-editable-cell:hover{ color: var(--blue); }
+  .material-delivery-btn{
+    background: none; border:1px solid var(--line-soft); border-radius:6px; color: var(--blue);
+    padding: 4px 8px; font-size: 11px; cursor:pointer; white-space:nowrap;
+  }
+  .material-delivery-list{ display:flex; flex-direction:column; gap:8px; max-height: 50vh; overflow-y:auto; margin-bottom: 14px; }
+  .material-delivery-row{
+    display:flex; align-items:center; justify-content:space-between; gap: 10px;
+    border: 1px solid var(--line-soft); border-radius: 7px; padding: 8px 12px;
+  }
+  .material-delivery-row .date-input{ width: 160px; }
+
+  /* ---------- Tidsplan ---------- */
+  input[type="color"]{
+    width: 44px; height: 34px; padding: 2px; border: 1px solid var(--line-soft);
+    border-radius: 6px; cursor: pointer; background: #fff;
+  }
+  .tidsplan-legend-list{ display:flex; flex-direction:column; gap:6px; }
+  .tidsplan-legend-row{
+    display:flex; align-items:center; gap: 10px; font-size: 12.5px;
+    padding: 4px 0; border-bottom: 1px solid var(--line-soft);
+  }
+  .tidsplan-legend-swatch{ width:14px; height:14px; border-radius:4px; flex-shrink:0; }
+  .tidsplan-legend-row .legend-task{ font-weight:600; min-width: 200px; }
+  .tidsplan-legend-row .legend-ansvarig{ color: var(--ink-soft); flex:1; }
+  .tidsplan-legend-row button{
+    background:none; border:none; color: var(--ink-soft); cursor:pointer; font-size:14px; opacity:0.5; padding:2px 6px;
+  }
+  .tidsplan-legend-row button:hover{ opacity:1; color: var(--danger); }
+
+  .tidsplan-grid-wrap{
+    overflow-x: auto; background: var(--paper); border: 1px solid var(--line-soft); border-radius: var(--radius);
+    padding: 10px;
+  }
+  .tidsplan-grid{
+    display: grid;
+    position: relative;
+    font-family: 'Inter', sans-serif;
+  }
+  .tidsplan-week-header{
+    font-family:'JetBrains Mono', monospace; font-size: 11px; font-weight:700; color: var(--ink-soft);
+    text-align:center; padding: 6px 2px; border-bottom: 2px solid var(--line); cursor: default;
+    white-space: nowrap;
+  }
+  .tidsplan-week-header.stam-pickable{ cursor: pointer; background: var(--blue-soft); }
+  .tidsplan-week-header.stam-pickable:hover{ background: var(--amber-soft); }
+  .tidsplan-corner{ border-bottom: 2px solid var(--line); }
+  .tidsplan-house-row{
+    background: var(--blue-soft); font-family:'Fraunces', serif; font-weight:700; font-size: 14px;
+    color: var(--ink); padding: 6px 10px; display:flex; align-items:center; gap:10px;
+  }
+  .tidsplan-house-row button{
+    background:none; border:1px solid var(--line-soft); color: var(--ink-soft); border-radius:6px;
+    padding: 3px 8px; font-size: 11px; cursor:pointer; font-family:'Inter',sans-serif; font-weight:600;
+  }
+  .tidsplan-house-row button:hover{ color: var(--blue); }
+  .tidsplan-house-row button:disabled{ opacity: 0.3; cursor: default; }
+  .tidsplan-house-row button:disabled:hover{ color: var(--ink-soft); }
+  .tidsplan-house-row .tidsplan-house-remove:hover{ color: var(--danger); }
+  .tidsplan-row-label{
+    font-size: 12px; padding: 4px 10px; border-bottom: 1px solid var(--line-soft);
+    cursor: pointer; display:flex; flex-direction:column; justify-content:center; gap:1px;
+  }
+  .tidsplan-row-label:hover{ background: var(--blue-soft); }
+  .tidsplan-row-label .task-name{ font-weight:600; color: var(--ink); }
+  .tidsplan-row-label .task-ansvarig{ font-family:'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-soft); }
+  .tidsplan-week-cell{
+    border-bottom: 1px solid var(--line-soft); border-left: 1px solid var(--line-soft);
+    cursor: pointer; min-height: 32px;
+  }
+  .tidsplan-week-cell:hover{ background: var(--blue-soft); }
+  .tidsplan-bar{
+    border-radius: 5px; color: #fff; font-size: 11px; font-weight:600; padding: 5px 8px;
+    display:flex; align-items:center; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+    cursor: grab; margin: 3px 2px; position: relative; user-select: none;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .tidsplan-bar:active{ cursor: grabbing; }
+  .tidsplan-bar-handle{
+    position:absolute; right:0; top:0; bottom:0; width: 8px; cursor: ew-resize;
+    background: rgba(255,255,255,0.35);
+  }
+  .delivery-marker{
+    background: var(--good); color:#fff; border-radius: 5px; font-size: 11px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; margin: 4px 3px; cursor:pointer;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .delivery-marker:hover{ opacity: 0.85; }
+  .tidsplan-stamline{
+    width: 2px; background: var(--danger); justify-self:center; pointer-events:none; z-index: 5;
+  }
   tr.moved-in{ background: rgba(76,122,94,0.10); }
   tr.moved-in .lgh-cell{ background: rgba(76,122,94,0.10); }
   tr.moved-in:hover{ background: rgba(76,122,94,0.16); }
@@ -253,15 +392,26 @@
   .sub-tabs{
     display:flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--line-soft);
   }
-  .sub-tab{
+  .sub-tab, .material-view-tab{
     font-family:'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600;
     padding: 9px 16px; border-radius: 8px 8px 0 0; cursor:pointer;
     color: var(--ink-soft); border: 1px solid transparent; border-bottom:none; background: transparent;
   }
-  .sub-tab.active{
+  .sub-tab.active, .material-view-tab.active{
     color: var(--blue); background: var(--paper); border-color: var(--line-soft); position:relative; top:1px;
   }
-  .sub-tab:hover:not(.active){ color: var(--ink); }
+  .sub-tab:hover:not(.active), .material-view-tab:hover:not(.active){ color: var(--ink); }
+  .material-order-section{
+    background: var(--blue-soft); font-family:'JetBrains Mono', monospace; font-weight:700;
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--blue);
+    padding: 8px 10px !important;
+  }
+  .material-order-totals{
+    margin-top: 14px; font-family:'JetBrains Mono', monospace; font-size: 13px; color: var(--ink);
+    display:flex; gap: 24px; justify-content: flex-end; padding: 10px 14px;
+    background: var(--paper); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  }
+  .material-order-totals strong{ color: var(--blue); }
   .ekonomi-placeholder{
     padding: 50px 20px; text-align:center; color: var(--ink-soft); font-size: 14px;
     background: var(--paper); border: 1px dashed var(--line-soft); border-radius: var(--radius);
@@ -277,6 +427,57 @@
   .eko-section .eko-sub{
     font-size: 12.5px; color: var(--ink-soft); margin: 0 0 16px;
   }
+  .add-inline-btn{
+    background: var(--ink); color:#fff; border:none; border-radius:8px;
+    padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer;
+    transition: opacity 0.15s ease; font-family:'Inter',sans-serif;
+  }
+  .add-inline-btn:hover{ opacity:0.85; }
+  .quick-add-row{
+    display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    background: var(--blue-soft); border-radius:10px; padding:12px 14px; margin-bottom:14px;
+  }
+  .quick-add-row input{
+    border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;
+    font-family:'Inter',sans-serif; background:#fff;
+  }
+  .quick-add-row input[type="text"]{ flex:1; min-width:160px; }
+  .liggaren-status-btn{
+    background:none; border:1px solid var(--line-soft); color:var(--ink-soft);
+    border-radius:6px; padding:6px 11px; font-size:12px; cursor:pointer; font-family:'Inter',sans-serif;
+  }
+  .liggaren-status-btn.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .liggaren-card{
+    position:relative; border:1px solid var(--line-soft); border-radius:10px;
+    padding:12px 14px; margin-bottom:10px; overflow:hidden;
+  }
+  .liggaren-card.critical{ border-color: var(--danger); }
+  .liggaren-card.done{ opacity:0.6; }
+  .liggaren-card.delegated-out{ border-left: 4px solid var(--blue); }
+  .liggaren-card.delegated-in{ border-left: 4px solid var(--good); }
+  .liggaren-origin-pill{ border-radius:5px; padding:2px 8px; font-size:11.5px; font-weight:600; }
+  .liggaren-origin-pill.from{ background: rgba(76,122,94,0.15); color: var(--good); }
+  .liggaren-origin-pill.to{ background: var(--blue-soft); color: var(--blue); }
+  .liggaren-case-no{ font-family:'JetBrains Mono', monospace; font-size:11.5px; color:var(--ink-soft); display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  .liggaren-prio-dots{ display:inline-flex; gap:2px; }
+  .liggaren-prio-dots span{ width:6px; height:6px; border-radius:50%; background:var(--line); display:inline-block; }
+  .liggaren-prio-dots span.filled{ background: var(--dot-color, var(--ink-soft)); }
+  .liggaren-title{ font-weight:600; font-size:14.5px; margin-bottom:4px; }
+  .liggaren-meta{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--ink-soft); }
+  .liggaren-pill{ background:var(--blue-soft); color:var(--blue); border-radius:5px; padding:2px 8px; font-size:11.5px; }
+  .liggaren-deadline.overdue, .liggaren-deadline.critical{ color:var(--danger); font-weight:600; }
+  .liggaren-stamp{
+    position:absolute; top:10px; right:-28px; transform:rotate(35deg);
+    background:var(--good); color:#fff; font-size:10.5px; font-weight:700;
+    padding:2px 32px; letter-spacing:0.05em;
+  }
+  .liggaren-actions{ display:flex; align-items:center; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .liggaren-actions button{
+    background:none; border:1px solid var(--line-soft); color:var(--ink-soft);
+    border-radius:6px; padding:5px 10px; font-size:11.5px; cursor:pointer; font-family:'Inter',sans-serif;
+  }
+  .liggaren-actions button.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .liggaren-actions button.danger{ color:var(--danger); border-color:var(--danger); }
   .eko-upload-row{
     display:flex; align-items:center; gap: 12px; flex-wrap: wrap;
   }
@@ -516,9 +717,10 @@
     display:block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--ink-soft); font-family:'JetBrains Mono', monospace; margin-bottom: 6px;
   }
-  .modal-box textarea, .modal-box input[type="text"]{
+  .modal-box textarea, .modal-box input[type="text"], .modal-box select{
     width: 100%; box-sizing: border-box; border: 1px solid var(--line-soft); border-radius: 7px;
     padding: 8px 10px; font-family: 'Inter', sans-serif; font-size: 13.5px; margin-bottom: 14px;
+    background: #fff; cursor: pointer;
   }
   .modal-checks{
     display:flex; gap: 18px; margin-bottom: 14px; flex-wrap: wrap;
@@ -556,12 +758,16 @@
 <div id="codeGateOverlay" class="modal-overlay open">
   <div class="modal-box">
     <h3 style="font-family:'Fraunces',serif;font-weight:700;font-size:19px;margin:0 0 6px;">Solvinkeln Fastigheter</h3>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 14px;">Ange den delade åtkomstkoden för att öppna projektöversikten.</p>
-    <input id="codeGateInput" type="password" placeholder="Åtkomstkod" autocomplete="off"
-      style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:7px;padding:9px 11px;font-size:14px;margin-bottom:10px;">
-    <p id="codeGateError" style="display:none;color:var(--danger);font-size:12.5px;margin:0 0 10px;"></p>
-    <div class="modal-actions">
-      <button id="codeGateSubmit" style="background:var(--ink);color:#fff;">Fortsätt</button>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 14px;">Logga in med ditt personliga konto.</p>
+    <div id="personalLoginFields">
+      <input id="personalLoginEmail" type="email" placeholder="E-post" autocomplete="username"
+        style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:7px;padding:9px 11px;font-size:14px;margin-bottom:8px;">
+      <input id="personalLoginPassword" type="password" placeholder="Lösenord" autocomplete="current-password"
+        style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:7px;padding:9px 11px;font-size:14px;margin-bottom:10px;">
+      <p id="personalLoginError" style="display:none;color:var(--danger);font-size:12.5px;margin:0 0 10px;"></p>
+      <div class="modal-actions">
+        <button id="personalLoginSubmit" style="background:var(--ink);color:#fff;">Logga in</button>
+      </div>
     </div>
   </div>
 </div>
@@ -572,14 +778,86 @@
   <div class="eyebrow"><span class="dot"></span> Delad projektöversikt · synkas automatiskt</div>
   <h1>Projektöversikt</h1>
 
-  <div id="nameGate" class="name-gate" style="display:none;">
-    <p>Ange ditt namn eller dina initialer så syns det när du bockar av något.</p>
-    <input id="nameInput" type="text" placeholder="t.ex. Anna A" maxlength="30">
-    <button id="nameSave">Spara</button>
-  </div>
   <div id="currentUser" class="current-user" style="display:none;">
     Du är inloggad som <strong id="currentUserName" style="color:var(--ink)"></strong>
-    <button id="changeName">byt</button>
+    <button id="goToPersonalBtn" style="display:none;">Mitt skrivbord</button>
+  </div>
+
+  <div id="personalScreen" style="display:none;">
+    <h1 id="personalGreeting" style="margin-bottom:2px;">Hej!</h1>
+    <p class="sub" style="margin-bottom:20px;">Din personliga sida.</p>
+
+    <div class="home-grid" style="margin-bottom:24px;">
+      <div class="home-card" id="goToProjektoversiktCard">
+        <div class="home-card-title">Projektöversikt</div>
+        <div class="home-card-sub">Checklistor, ekonomi, material, tidsplan m.m.</div>
+      </div>
+    </div>
+
+    <div class="eko-section" style="margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:6px;">
+        <div>
+          <h3 style="margin-bottom:2px;">Ärenden</h3>
+          <p class="eko-sub" style="margin:0;">Ärenden du skapat eller fått tilldelade - bara ni två ser dem.</p>
+        </div>
+        <button id="liggarenNewBtn" class="add-inline-btn">+ Nytt ärende</button>
+      </div>
+
+      <div id="liggarenForm" style="display:none; margin:14px 0; padding:14px; border:1px solid var(--line-soft); border-radius:10px;">
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+          <input type="text" id="liggarenTitleInput" placeholder="Vad gäller ärendet?" style="flex:2; min-width:200px; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;">
+          <select id="liggarenProjectInput" style="flex:1; min-width:160px; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;"></select>
+          <input type="date" id="liggarenDeadlineInput" style="border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;">
+          <select id="liggarenPriorityInput" style="border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;">
+            <option value="1">Prioritet 1 (högst)</option>
+            <option value="2">Prioritet 2</option>
+            <option value="3" selected>Prioritet 3</option>
+            <option value="4">Prioritet 4</option>
+            <option value="5">Prioritet 5 (lägst)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:8px;">
+          <label style="font-size:12.5px; color:var(--ink-soft); display:block; margin-bottom:4px;">Tilldela till</label>
+          <select id="liggarenAssigneeInput" style="width:100%; max-width:220px; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;"></select>
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft); margin-bottom:8px;">
+          <input type="checkbox" id="liggarenNotifyCheck"> Skicka mejlutkast när ärendet blir klart
+        </label>
+        <div id="liggarenNotifyFields" style="display:none; margin-bottom:8px;">
+          <select id="liggarenNotifyAddressSelect" style="width:100%; max-width:320px; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px; margin-bottom:6px;"></select>
+          <input type="email" id="liggarenNotifyCustomInput" placeholder="E-postadress" style="display:none; width:100%; max-width:320px; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px;">
+        </div>
+        <div class="modal-actions">
+          <button id="liggarenCancelBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>
+          <button id="liggarenSaveBtn" style="background:var(--ink); color:#fff;">Spara ärende</button>
+        </div>
+      </div>
+
+      <div class="material-toolbar">
+        <div id="liggarenStatusFilters" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+        <select id="liggarenProjectFilter" style="margin-left:auto; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:12.5px;"></select>
+        <select id="liggarenSortSelect" style="border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:12.5px;">
+          <option value="priority">Sortera: Prioritet</option>
+          <option value="date">Sortera: Datum</option>
+        </select>
+        <button id="liggarenClearAllBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft); border-radius:6px; padding:7px 11px; font-size:11.5px;">Rensa alla</button>
+      </div>
+
+      <div id="liggarenList"></div>
+      <div id="liggarenEmptyState" class="empty-state" style="display:none;">Inga ärenden här än.</div>
+    </div>
+
+    <div class="eko-section">
+      <h3>Påminnelser</h3>
+      <p class="eko-sub">Enkel egen kalender - länkas mot Microsoft 365 längre fram.</p>
+      <div class="quick-add-row">
+        <input type="date" id="newPaminnelseDate">
+        <input type="text" id="newPaminnelseNote" placeholder="Anteckning, t.ex. Ring kunden">
+        <button id="addPaminnelseBtn" class="add-inline-btn">+ Lägg till</button>
+      </div>
+      <div id="paminnelserList"></div>
+      <div id="paminnelserEmptyState" class="empty-state" style="display:none;">Inga påminnelser tillagda än.</div>
+    </div>
   </div>
 
   <div id="homeScreen">
@@ -601,6 +879,8 @@
       <button class="sub-tab" data-view="ekonomi">Ekonomi</button>
       <button class="sub-tab" data-view="medlemsinfo">Medlemsinformation</button>
       <button class="sub-tab" data-view="intressenter">Intressenter</button>
+      <button class="sub-tab" data-view="material">Material</button>
+      <button class="sub-tab" data-view="tidsplan">Tidsplan</button>
     </div>
 
     <div id="checklistaSubview">
@@ -709,6 +989,7 @@
                 <th style="text-align:left;">Adress</th>
                 <th style="text-align:left;">Köpare 1</th>
                 <th style="text-align:left;">Köpare 2</th>
+                <th style="text-align:center;">Upplåten inom koncernen</th>
                 <th style="text-align:left;">Anläggnings-ID</th>
               </tr>
             </thead>
@@ -731,6 +1012,84 @@
         </div>
       </div>
       <div class="intr-list" id="intrListP"></div>
+    </div>
+
+    <div id="materialSubview" style="display:none;">
+      <div class="material-toolbar">
+        <input type="text" id="newRoomInput" placeholder="Nytt rum, t.ex. Kök" maxlength="40">
+        <button id="addRoomBtn">+ Lägg till rum</button>
+        <select id="materialUnitTypeFilter"><option value="">Välj lägenhetstyp (kvm)…</option></select>
+        <button id="bofaktabladUploadBtn">📄 Läs in rum från bofaktablad (PDF)</button>
+        <input type="file" id="bofaktabladFileInput" accept="application/pdf" style="display:none;">
+        <button id="createRumsbeskrivningBtn" class="material-pdf-btn">📄 Skapa rumsbeskrivning (PDF)</button>
+      </div>
+      <div id="bofaktabladUploadStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
+
+      <div class="sub-tabs" style="margin-bottom:16px;">
+        <button class="material-view-tab active" data-material-view="rum">Rum</button>
+        <button class="material-view-tab" data-material-view="bestallningslista">Beställningslista</button>
+        <button class="material-view-tab" data-material-view="leveransschema">Leveransschema</button>
+      </div>
+
+      <div id="materialRoomsView">
+        <div id="materialNoTypeState" class="empty-state" style="display:none;">Välj en lägenhetstyp (kvm) ovan för att se eller lägga till rum för den typen.</div>
+        <div id="materialRooms"></div>
+        <div id="materialEmptyState" class="empty-state" style="display:none;">Inga rum tillagda än för den här lägenhetstypen. Lägg till ett rum ovan, eller läs in från ett bofaktablad.</div>
+      </div>
+      <div id="materialOrderView" style="display:none;">
+        <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Produkt</th><th>Rum</th><th>Leverantör</th><th>Hustyp</th>
+              <th class="center">Mängd/enhet</th><th class="center">Antal enheter</th><th class="center">Totalt</th>
+              <th class="center">à-pris exkl</th><th class="center">à-pris inkl</th>
+              <th class="center">Summa exkl</th><th class="center">Summa inkl</th><th class="center">Beställd</th>
+            </tr></thead>
+            <tbody id="materialOrderBody"></tbody>
+          </table>
+        </div>
+        <div id="materialOrderEmptyState" class="empty-state" style="display:none;">Inga produkter tillagda än.</div>
+        <div id="materialOrderTotals" class="material-order-totals"></div>
+      </div>
+
+      <div id="materialDeliveryScheduleView" style="display:none;">
+        <div class="tidsplan-grid-wrap">
+          <div id="materialDeliveryScheduleGrid" class="tidsplan-grid"></div>
+        </div>
+        <div id="materialDeliveryScheduleEmptyState" class="empty-state" style="display:none;">Inga leveranser inlagda än. Sätt leveransdatum via "Leveranser"-knappen på en produkt i Rum-vyn.</div>
+      </div>
+    </div>
+
+    <div id="tidsplanSubview" style="display:none;">
+      <div class="material-toolbar">
+        <input type="text" id="newHouseInput" placeholder="Nytt hus, t.ex. HUS 1" maxlength="40">
+        <button id="addHouseBtn">+ Lägg till hus</button>
+        <button id="addWeekBtn">+ Lägg till vecka</button>
+        <button id="tidsplanImportBtn">📄 Importera från Excel (.xlsx)</button>
+        <input type="file" id="tidsplanImportInput" accept=".xlsx" style="display:none;">
+        <button id="tidsplanStamBtn" class="material-pdf-btn" style="margin-left:0;">📍 Stäm av</button>
+        <button id="tidsplanRemoveStamBtn" style="display:none;">Ta bort avstämningslinje</button>
+      </div>
+      <div id="tidsplanImportStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
+      <p id="tidsplanStamHint" class="eko-sub" style="display:none; color:var(--danger); font-weight:600;">Klicka på en veckorubrik i schemat nedan för att placera avstämningslinjen där.</p>
+
+      <div class="material-room" style="margin-bottom:16px;">
+        <div class="material-room-header">
+          <h3>Legend (arbetsmoment · ansvarig · färg)</h3>
+        </div>
+        <div id="tidsplanLegendList" class="tidsplan-legend-list"></div>
+        <div class="material-toolbar" style="margin-top:10px; margin-bottom:0;">
+          <input type="text" id="legendTaskInput" placeholder="Arbetsmoment, t.ex. Målare">
+          <input type="text" id="legendAnsvarigInput" placeholder="Ansvarig" style="width:120px;">
+          <input type="color" id="legendColorInput" value="#5B9BD5">
+          <button id="addLegendBtn">+ Lägg till i legend</button>
+        </div>
+      </div>
+
+      <div id="tidsplanGridWrap" class="tidsplan-grid-wrap">
+        <div id="tidsplanGrid" class="tidsplan-grid"></div>
+      </div>
+      <div id="tidsplanEmptyState" class="empty-state" style="display:none;">Inga hus tillagda än. Lägg till ett hus ovan, eller importera från Excel.</div>
     </div>
   </div>
 
@@ -983,10 +1342,91 @@
   </div>
 </div>
 
+<div id="materialProductModalOverlay" class="modal-overlay">
+  <div class="modal-box modal-box-wide">
+    <h3 id="materialProductModalTitle">Lägg till produkt</h3>
+    <p class="modal-sub" id="materialProductModalSub">Rum: —</p>
+
+    <label class="field-label" for="materialProductName">Produkt</label>
+    <input type="text" id="materialProductName" placeholder="t.ex. Kylskåp">
+
+    <div class="buyer-grid">
+      <div class="buyer-col">
+        <label class="field-label" for="materialProductSupplierSelect">Leverantör</label>
+        <select id="materialProductSupplierSelect">
+          <option value="Smeg">Smeg</option>
+          <option value="Siemens">Siemens</option>
+          <option value="Bjelin">Bjelin</option>
+          <option value="Bricmate">Bricmate</option>
+          <option value="Tapwell">Tapwell</option>
+          <option value="Haven">Haven</option>
+          <option value="__other__">Skriv in själv…</option>
+        </select>
+        <input type="text" id="materialProductSupplierCustom" placeholder="Leverantörsnamn" style="display:none; margin-top:6px;">
+        <label class="field-label" for="materialProductWarranty">Garanti (år)</label>
+        <input type="text" id="materialProductWarranty" placeholder="t.ex. 5">
+      </div>
+      <div class="buyer-col">
+        <label class="field-label" for="materialProductPriceEx">Pris exkl moms (kr)</label>
+        <input type="text" id="materialProductPriceEx" placeholder="t.ex. 8990">
+        <label class="field-label" for="materialProductPriceInc">Pris inkl moms (kr)</label>
+        <input type="text" id="materialProductPriceInc" placeholder="t.ex. 11237">
+      </div>
+    </div>
+
+    <label class="field-label">Mängd per lägenhet (à-priset ovan gäller per den här enheten)</label>
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <input type="text" id="materialProductUnitAmount" placeholder="t.ex. 25 (kvm) eller 1 (st)" style="flex:1; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:7px; padding:9px 11px; font-family:'Inter',sans-serif; font-size:13.5px;">
+      <select id="materialProductUnitKind" style="width:90px; border:1px solid var(--line-soft); border-radius:7px; padding:9px 6px; font-family:'Inter',sans-serif; font-size:13.5px;">
+        <option value="st">st</option>
+        <option value="kvm">kvm</option>
+      </select>
+    </div>
+
+    <div class="modal-actions">
+      <button id="materialProductCancelBtn">Avbryt</button>
+      <button id="materialProductSaveBtn">Spara</button>
+    </div>
+  </div>
+</div>
+
+<div id="materialDeliveryModalOverlay" class="modal-overlay">
+  <div class="modal-box modal-box-wide">
+    <h3>Leveranstider</h3>
+    <p class="modal-sub" id="materialDeliveryModalSub">Produkt: —</p>
+    <div id="materialDeliveryList" class="material-delivery-list"></div>
+    <div class="modal-actions">
+      <button id="materialDeliveryCloseBtn">Stäng</button>
+    </div>
+  </div>
+</div>
+
+<div id="tidsplanRowModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h3 id="tidsplanRowModalTitle">Redigera uppgift</h3>
+    <label class="field-label" for="tidsplanRowTask">Arbetsmoment</label>
+    <input type="text" id="tidsplanRowTask" placeholder="t.ex. Målare">
+    <label class="field-label" for="tidsplanRowAnsvarig">Ansvarig</label>
+    <input type="text" id="tidsplanRowAnsvarig" placeholder="t.ex. Målare">
+    <label class="field-label" for="tidsplanRowColor">Färg</label>
+    <input type="color" id="tidsplanRowColor" style="margin-bottom:14px;">
+    <label class="field-label" for="tidsplanRowComment">Kommentar</label>
+    <input type="text" id="tidsplanRowComment" placeholder="valfritt">
+    <div class="modal-actions">
+      <button id="tidsplanRowDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger); margin-right:auto;">Ta bort rad</button>
+      <button id="tidsplanRowCancelBtn">Avbryt</button>
+      <button id="tidsplanRowSaveBtn">Spara</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="config.js"></script>
 <script src="db.js"></script>
 <script src="app.js"></script>

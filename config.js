@@ -11,10 +11,3 @@
 
 window.SUPABASE_URL = 'https://nntrsltognfkfsmmvbss.supabase.co';
 window.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5udHJzbHRvZ25ma2ZzbW12YnNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDM3NjcsImV4cCI6MjEwMjcxOTc2N30.RR2vAezNa9fc7UJbO02IngfLaArZPtlAZgfjXBeYYBE';
-
-// Den delade koden alla fyra loggar in med (byt till något ni själva väljer).
-// I lokalt testläge jämförs koden direkt mot detta värde.
-// I Supabase-läge loggar koden in mot ett delat Auth-konto - se MIGRATION.md
-// för hur ni skapar det kontot (SHARED_AUTH_EMAIL nedan måste matcha).
-window.ACCESS_CODE = '1234';
-window.SHARED_AUTH_EMAIL = 'mikael.issa@solvinkeln.se';

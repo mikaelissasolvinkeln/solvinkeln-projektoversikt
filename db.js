@@ -30,8 +30,6 @@
     window.SUPABASE_ANON_KEY.indexOf('YOUR_') !== 0
   );
 
-  const ACCESS_CODE = window.ACCESS_CODE || '';
-  const SHARED_EMAIL = window.SHARED_AUTH_EMAIL || 'team@example.com';
   const SESSION_FLAG = 'sf-access-granted';
   const LOCAL_PREFIX = 'sf-local:';
 
@@ -40,21 +38,106 @@
     sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
   }
 
-  // ---------- Åtkomstkod / inloggning ----------
-  async function checkAccessCode(code){
-    if(!hasSupabase){
-      const ok = code === ACCESS_CODE;
-      if(ok) sessionStorage.setItem(SESSION_FLAG, '1');
-      return ok;
-    }
-    const { error } = await sb.auth.signInWithPassword({ email: SHARED_EMAIL, password: code });
-    return !error;
-  }
-
+  // ---------- Inloggning (eget konto per medarbetare) ----------
   async function isAuthenticated(){
     if(!hasSupabase) return sessionStorage.getItem(SESSION_FLAG) === '1';
     const { data } = await sb.auth.getSession();
     return !!(data && data.session);
+  }
+
+  async function signIn(email, password){
+    if(!hasSupabase) return { ok: false, error: 'Kräver att Supabase är påkopplat' };
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if(!error) sessionStorage.setItem(SESSION_FLAG, '1');
+    return { ok: !error, error: error ? error.message : null };
+  }
+
+  async function getCurrentUserInfo(){
+    if(!hasSupabase) return { id: null, email: null, name: '' };
+    const { data } = await sb.auth.getUser();
+    const user = data && data.user;
+    if(!user) return { id: null, email: null, name: '' };
+    const name = (user.user_metadata && user.user_metadata.name) || '';
+    return { id: user.id, email: user.email, name };
+  }
+
+  // ---------- Hjälp för nyskapade tabeller: PostgREST's schema-cache kan vara
+  // efter direkt efter att en tabell skapats (kortvarigt PGRST205-fel på just
+  // det första anropet efter en sidladdning) - ett enda återförsök efter en
+  // kort paus räcker för att undvika att det syns för användaren. ----------
+  function isSchemaCacheMiss(error){
+    return error && error.code === 'PGRST205';
+  }
+  function wait(ms){ return new Promise(res => setTimeout(res, ms)); }
+  async function withCacheRetry(op){
+    let result = await op();
+    if(isSchemaCacheMiss(result.error)){
+      await wait(1500);
+      result = await op();
+    }
+    return result;
+  }
+
+  // ---------- Privat, personlig data (egen tabell, egen RLS - se schema-personal.sql) ----------
+  async function getPersonalData(key){
+    if(!hasSupabase) return localGet('personal:' + key);
+    const { data: userData } = await sb.auth.getUser();
+    if(!userData || !userData.user) return null;
+    const { data, error } = await withCacheRetry(() => sb.from('personal_data')
+      .select('value').eq('user_id', userData.user.id).eq('key', key).maybeSingle());
+    if(error) throw error;
+    return data ? { value: data.value } : null;
+  }
+  async function setPersonalData(key, value){
+    if(!hasSupabase){ localSet('personal:' + key, value); return; }
+    const { data: userData } = await sb.auth.getUser();
+    if(!userData || !userData.user) throw new Error('Inte inloggad');
+    const row = { user_id: userData.user.id, key, value, updated_at: new Date().toISOString() };
+    const { error } = await withCacheRetry(() => sb.from('personal_data').upsert(row));
+    if(error) throw error;
+  }
+
+  // ---------- Liggaren: ärenden som kan tilldelas en kollega (egen tabell,
+  // egen RLS - se schema-liggaren.sql). En rad syns bara för den som skapade
+  // den och den den är tilldelad till. ----------
+  async function listLiggarenTasks(){
+    if(!hasSupabase) return JSON.parse(localGet('liggaren-tasks')?.value || '[]');
+    const { data, error } = await withCacheRetry(() => sb.from('liggaren_tasks')
+      .select('*').order('created_at', { ascending: false }));
+    if(error) throw error;
+    return data || [];
+  }
+  async function insertLiggarenTask(row){
+    if(!hasSupabase){
+      const tasks = JSON.parse(localGet('liggaren-tasks')?.value || '[]');
+      const withId = { ...row, id: 'local-' + Date.now(), created_at: new Date().toISOString() };
+      tasks.unshift(withId);
+      localSet('liggaren-tasks', JSON.stringify(tasks));
+      return withId;
+    }
+    const { data, error } = await withCacheRetry(() => sb.from('liggaren_tasks').insert(row).select().single());
+    if(error) throw error;
+    return data;
+  }
+  async function updateLiggarenTask(id, patch){
+    if(!hasSupabase){
+      const tasks = JSON.parse(localGet('liggaren-tasks')?.value || '[]');
+      const next = tasks.map(t => t.id === id ? { ...t, ...patch } : t);
+      localSet('liggaren-tasks', JSON.stringify(next));
+      return;
+    }
+    const row = { ...patch, updated_at: new Date().toISOString() };
+    const { error } = await withCacheRetry(() => sb.from('liggaren_tasks').update(row).eq('id', id));
+    if(error) throw error;
+  }
+  async function deleteLiggarenTask(id){
+    if(!hasSupabase){
+      const tasks = JSON.parse(localGet('liggaren-tasks')?.value || '[]');
+      localSet('liggaren-tasks', JSON.stringify(tasks.filter(t => t.id !== id)));
+      return;
+    }
+    const { error } = await withCacheRetry(() => sb.from('liggaren_tasks').delete().eq('id', id));
+    if(error) throw error;
   }
 
   // ---------- Lokalt lager (personlig data + testläge utan Supabase) ----------
@@ -119,8 +202,15 @@
   }
 
   window.DB = {
-    checkAccessCode,
     isAuthenticated,
+    signIn,
+    getCurrentUserInfo,
+    getPersonalData,
+    setPersonalData,
+    listLiggarenTasks,
+    insertLiggarenTask,
+    updateLiggarenTask,
+    deleteLiggarenTask,
     onRemoteChange(cb){ listeners.push(cb); },
     hasSupabase
   };
