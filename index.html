@@ -392,15 +392,15 @@
   .sub-tabs{
     display:flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--line-soft);
   }
-  .sub-tab, .material-view-tab{
+  .sub-tab, .material-view-tab, .ekonomi-sub-tab{
     font-family:'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600;
     padding: 9px 16px; border-radius: 8px 8px 0 0; cursor:pointer;
     color: var(--ink-soft); border: 1px solid transparent; border-bottom:none; background: transparent;
   }
-  .sub-tab.active, .material-view-tab.active{
+  .sub-tab.active, .material-view-tab.active, .ekonomi-sub-tab.active{
     color: var(--blue); background: var(--paper); border-color: var(--line-soft); position:relative; top:1px;
   }
-  .sub-tab:hover:not(.active), .material-view-tab:hover:not(.active){ color: var(--ink); }
+  .sub-tab:hover:not(.active), .material-view-tab:hover:not(.active), .ekonomi-sub-tab:hover:not(.active){ color: var(--ink); }
   .material-order-section{
     background: var(--blue-soft); font-family:'JetBrains Mono', monospace; font-weight:700;
     font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--blue);
@@ -442,6 +442,31 @@
     font-family:'Inter',sans-serif; background:#fff;
   }
   .quick-add-row input[type="text"]{ flex:1; min-width:160px; }
+  .upload-btn{
+    background: var(--ink); color:#fff; border:none; border-radius: 6px;
+    padding: 7px 12px; font-size: 12.5px; font-weight:600; cursor:pointer; white-space:nowrap;
+  }
+  .upload-btn:disabled{ opacity: 0.5; cursor: default; }
+  .eko-inline-input{
+    width:100%; box-sizing:border-box; border:1px solid transparent; background:transparent;
+    border-radius:5px; padding:4px 6px; font-size:13.5px; font-family:'JetBrains Mono', monospace;
+    text-align:right; color:var(--ink);
+  }
+  .eko-inline-input:hover, .eko-inline-input:focus{ border-color: var(--line-soft); background:#fff; }
+  .eko-compare-table select.eko-inline-select{
+    width:100%; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;
+    font-size:12.5px; font-family:'Inter',sans-serif; background:#fff;
+  }
+  .eko-row-uncategorized td{ background: rgba(178,59,59,0.06); }
+  .eko-subtle{ color: var(--ink-soft); font-size: 11.5px; }
+  .ekonomi-field-row{ margin-bottom: 10px; }
+  .ekonomi-field-row label{ display:block; font-size:12.5px; color:var(--ink-soft); margin-bottom:4px; }
+  .ekonomi-field-row input{
+    width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px;
+    padding:8px 10px; font-size:13.5px; font-family:'Inter',sans-serif;
+  }
+  .ekonomi-clickable-table tr{ cursor:pointer; }
+  .ekonomi-clickable-table tr:hover td{ background: var(--blue-soft); }
   .liggaren-status-btn{
     background:none; border:1px solid var(--line-soft); color:var(--ink-soft);
     border-radius:6px; padding:6px 11px; font-size:12px; cursor:pointer; font-family:'Inter',sans-serif;
@@ -463,6 +488,12 @@
   .liggaren-prio-dots span{ width:6px; height:6px; border-radius:50%; background:var(--line); display:inline-block; }
   .liggaren-prio-dots span.filled{ background: var(--dot-color, var(--ink-soft)); }
   .liggaren-title{ font-weight:600; font-size:14.5px; margin-bottom:4px; }
+  .liggaren-description{ font-size:12.5px; color:var(--ink-soft); margin-bottom:6px; white-space:pre-wrap; }
+  .liggaren-comment-label{ font-size:11px; color:var(--ink-soft); font-weight:600; margin:8px 0 3px; text-transform:uppercase; letter-spacing:0.03em; }
+  .liggaren-comment-input{
+    width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px;
+    padding:7px 9px; font-size:12.5px; font-family:'Inter',sans-serif; resize:vertical; background:#fff;
+  }
   .liggaren-meta{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--ink-soft); }
   .liggaren-pill{ background:var(--blue-soft); color:var(--blue); border-radius:5px; padding:2px 8px; font-size:11.5px; }
   .liggaren-deadline.overdue, .liggaren-deadline.critical{ color:var(--danger); font-weight:600; }
@@ -781,6 +812,7 @@
   <div id="currentUser" class="current-user" style="display:none;">
     Du är inloggad som <strong id="currentUserName" style="color:var(--ink)"></strong>
     <button id="goToPersonalBtn" style="display:none;">Mitt skrivbord</button>
+    <button id="goToEkonomiBtn" style="display:none;">Ekonomi</button>
   </div>
 
   <div id="personalScreen" style="display:none;">
@@ -791,6 +823,10 @@
       <div class="home-card" id="goToProjektoversiktCard">
         <div class="home-card-title">Projektöversikt</div>
         <div class="home-card-sub">Checklistor, ekonomi, material, tidsplan m.m.</div>
+      </div>
+      <div class="home-card" id="goToEkonomiCard" style="display:none;">
+        <div class="home-card-title">Ekonomi</div>
+        <div class="home-card-sub">Likviditet, lån, budget - alla projekt</div>
       </div>
     </div>
 
@@ -815,6 +851,10 @@
             <option value="4">Prioritet 4</option>
             <option value="5">Prioritet 5 (lägst)</option>
           </select>
+        </div>
+        <div style="margin-bottom:8px;">
+          <textarea id="liggarenDescriptionInput" placeholder="Beskrivning (valfritt) - mer detaljer om vad ärendet gäller" rows="2"
+            style="width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:13.5px; font-family:'Inter',sans-serif; resize:vertical;"></textarea>
         </div>
         <div style="margin-bottom:8px;">
           <label style="font-size:12.5px; color:var(--ink-soft); display:block; margin-bottom:4px;">Tilldela till</label>
@@ -857,6 +897,330 @@
       </div>
       <div id="paminnelserList"></div>
       <div id="paminnelserEmptyState" class="empty-state" style="display:none;">Inga påminnelser tillagda än.</div>
+    </div>
+  </div>
+
+  <div id="companyEkonomiScreen" style="display:none;">
+    <div class="project-header">
+      <button id="backToPersonalFromEkonomiBtn" class="back-btn">← Tillbaka</button>
+      <h2 class="project-header-name">Ekonomi</h2>
+    </div>
+
+    <div class="sub-tabs" id="ekonomiSubTabsBar" style="margin-bottom:16px;">
+      <button class="ekonomi-sub-tab active" data-ekonomi-view="oversikt">Översikt</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="projekt">Projekt</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="budget">Budget/förväntad vinst</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="likviditet">Likviditet</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="lan">Lån</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="vinstsolvinkeln">Förväntad vinst Solvinkeln</button>
+    </div>
+
+    <div id="ekonomiOversiktView">
+      <div class="home-grid">
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiAktivaProjekt">—</div>
+          <div class="home-card-sub">Aktiva projekt</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLikviditet">—</div>
+          <div class="home-card-sub">Likviditet</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLanevolym">—</div>
+          <div class="home-card-sub">Utnyttjad lånevolym (externt)</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLanSolvinkeln">—</div>
+          <div class="home-card-sub">Koncerninterna lån Solvinkeln</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLanNBE">—</div>
+          <div class="home-card-sub">Koncerninterna lån NBE</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLanDerome">—</div>
+          <div class="home-card-sub">Koncerninterna lån Derome</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiLanBORO">—</div>
+          <div class="home-card-sub">Koncerninterna lån BORO</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiFastighetsvarde">—</div>
+          <div class="home-card-sub">Fastighetsvärde</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoKpiVinstSolvinkeln">—</div>
+          <div class="home-card-sub">Förväntad vinst Solvinkeln</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="ekonomiProjektView" style="display:none;">
+      <div class="add-project" style="margin: 0 0 14px;">
+        <input type="text" id="ekonomiNewProjectInput" placeholder="Nytt projektnamn, t.ex. Brf Skogslunden" maxlength="60">
+        <button id="ekonomiAddProjectBtn">+ Lägg till projekt</button>
+      </div>
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Brf</th>
+              <th style="text-align:left;">Ort</th>
+              <th style="text-align:left;">JV-partner</th>
+              <th>Ägarandel</th>
+              <th style="text-align:left;">Status</th>
+              <th>Förväntad vinst</th>
+              <th>Sålda bostäder</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiProjektBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="ekonomiBudgetView" style="display:none;">
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Brf</th>
+              <th>Budget</th>
+              <th>Utfall</th>
+              <th>Differens</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiBudgetBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="ekonomiLikviditetView" style="display:none;">
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Brf</th><th>Likviditet</th></tr></thead>
+          <tbody id="ekonomiLikviditetBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="ekonomiLanView" style="display:none;">
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Brf</th>
+              <th>Fastighetsvärde</th>
+              <th>Externt lån</th>
+              <th>Lån Solvinkeln</th>
+              <th>Lån NBE</th>
+              <th>Lån Derome</th>
+              <th>Lån BORO</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiLanBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="ekonomiVinstSolvinkelnView" style="display:none;">
+      <p class="eko-sub" style="margin:0 0 10px;">Förväntad entreprenadsvinst + ägarandel × förväntad vinst, per projekt. Redigeras under fliken Projekt.</p>
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Brf</th><th>Förväntad vinst Solvinkeln</th></tr></thead>
+          <tbody id="ekonomiVinstSolvinkelnBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="ekonomiProjektBudgetView" style="display:none;">
+      <div class="project-header">
+        <button id="backToEkonomiBudgetListBtn" class="back-btn">← Budget</button>
+        <h2 id="ekonomiProjektBudgetTitle" class="project-header-name"></h2>
+      </div>
+
+      <div class="home-grid" style="margin-bottom:20px;">
+        <div class="home-card">
+          <div class="home-card-title" id="ekoBudgetKvm">—</div>
+          <div class="home-card-sub">Total antal kvm</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoBudgetIntakter">—</div>
+          <div class="home-card-sub">Intäkter</div>
+          <div class="home-card-figures">
+            <div class="figure-row"><span>kr/kvm</span><strong id="ekoBudgetIntakterPerKvm">—</strong></div>
+          </div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title">
+            <input type="number" id="ekoBudgetForelangslanInput" class="eko-inline-input" style="text-align:left;font-size:20px;font-family:'Fraunces',serif;font-weight:700;padding:0;">
+          </div>
+          <div class="home-card-sub">Förelångslån</div>
+          <div class="home-card-figures">
+            <div class="figure-row"><span>kr/kvm</span><strong id="ekoBudgetForelangslanPerKvm">—</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-scroll" style="margin-bottom:24px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Kostnadspost</th>
+              <th>Budget</th>
+              <th>Budget kr/kvm</th>
+              <th>Utfall</th>
+              <th>Utfall kr/kvm</th>
+              <th>Differens</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiBudgetKategoriBody"></tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-bottom:4px;">Reskontra</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp en leverantörsreskontra (PDF) - redan inlästa fakturor (samma löpnummer) läses inte in igen.</p>
+      <div class="contract-upload-row">
+        <button type="button" id="reskontraUploadBtn" class="upload-btn">📄 Läs in reskontra (PDF)</button>
+        <input type="file" id="reskontraFileInput" accept="application/pdf" style="display:none;">
+        <span id="reskontraUploadStatus" class="contract-upload-status"></span>
+      </div>
+
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Löpnr</th>
+              <th style="text-align:left;">Leverantör</th>
+              <th style="text-align:left;">Fakturadatum</th>
+              <th>Belopp</th>
+              <th>Justerat belopp</th>
+              <th style="text-align:left;">Kategori</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiReskontraBody"></tbody>
+        </table>
+        <div id="ekonomiReskontraEmptyState" class="empty-state" style="display:none;">Ingen reskontra inläst än för det här projektet.</div>
+      </div>
+    </div>
+
+    <div id="ekonomiProjektLanView" style="display:none;">
+      <div class="project-header">
+        <button id="backToEkonomiLanListBtn" class="back-btn">← Lån</button>
+        <h2 id="ekonomiProjektLanTitle" class="project-header-name"></h2>
+      </div>
+
+      <div class="table-scroll" style="margin-bottom:24px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Post</th><th>Belopp</th><th style="text-align:left;">Bokas som inbetalning</th></tr></thead>
+          <tbody id="ekonomiLanFieldsBody"></tbody>
+        </table>
+        <p class="eko-sub" style="margin:6px 0 0;">Datumet styr vilken månad lånebeloppet räknas som inbetalning i likviditetsplanen.</p>
+      </div>
+
+      <h3 style="margin-bottom:4px;">Läs in från balansräkning (BR)</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp en BR (PDF) och rikta varje post mot rätt fält ovan. En ny uppladdning ersätter listan nedan - fälten ovan ändras inte förrän du klickar "Tillämpa på fälten ovan".</p>
+      <div class="contract-upload-row">
+        <button type="button" id="brUploadBtn" class="upload-btn">📄 Läs in BR (PDF)</button>
+        <input type="file" id="brFileInput" accept="application/pdf" style="display:none;">
+        <span id="brUploadStatus" class="contract-upload-status"></span>
+      </div>
+
+      <div class="table-scroll" style="margin-bottom:12px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Konto</th>
+              <th>Belopp</th>
+              <th style="text-align:left;">Riktas mot</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiBrItemsBody"></tbody>
+        </table>
+        <div id="ekonomiBrItemsEmptyState" class="empty-state" style="display:none;">Ingen BR inläst än för det här projektet.</div>
+      </div>
+      <button id="applyBrItemsBtn" class="add-inline-btn">Tillämpa på fälten ovan</button>
+    </div>
+
+    <div id="ekonomiProjektLikviditetView" style="display:none;">
+      <div class="project-header">
+        <button id="backToEkonomiLikviditetListBtn" class="back-btn">← Likviditet</button>
+        <h2 id="ekonomiProjektLikviditetTitle" class="project-header-name"></h2>
+      </div>
+
+      <div style="max-width:260px; margin-bottom:20px;">
+        <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:4px;">Ingående likviditet (kr)</label>
+        <input type="number" id="ekoLikviditetIngaendeInput" class="eko-inline-input" style="text-align:left; border:1px solid var(--line-soft); background:#fff;">
+      </div>
+
+      <p class="eko-sub" style="margin:0 0 10px;">
+        Inbetalningar = slutbetalningar från lägenhetslistan + lån bokade på sin inbetalningsmånad (Lån-fliken).
+        Utbetalningar = kategoriserade reskontraposter (Budget-fliken), räknade på förfallodatum.
+      </p>
+
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Månad</th>
+              <th>Inbetalningar</th>
+              <th>Utbetalningar</th>
+              <th>Netto</th>
+              <th>Saldo</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiLikviditetPlanBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="ekonomiProjektModalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h3>Projektinfo</h3>
+      <p class="modal-sub" id="ekonomiProjektModalSub"></p>
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">Ort</label>
+      <input type="text" id="ekonomiProjektOrtInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">JV-partner</label>
+      <select id="ekonomiProjektJvInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+        <option value="">Välj JV-partner…</option>
+        <option value="Derome">Derome</option>
+        <option value="NBE">NBE</option>
+        <option value="Boro">Boro</option>
+        <option value="Cederdalen">Cederdalen</option>
+      </select>
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">Ägarandel (%)</label>
+      <input type="number" id="ekonomiProjektAgarandelInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">Status</label>
+      <select id="ekonomiProjektStatusInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+        <option value="Kommande">Kommande</option>
+        <option value="Bygglov/projektering">Bygglov/projektering</option>
+        <option value="Pågående">Pågående</option>
+        <option value="Avslutat">Avslutat</option>
+      </select>
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">Förväntad vinst (kr)</label>
+      <input type="number" id="ekonomiProjektVinstInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+      <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin:10px 0 4px;">Förväntad entreprenadsvinst (kr)</label>
+      <input type="number" id="ekonomiProjektEntreprenadsvinstInput" style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-size:13.5px;">
+      <div style="margin-top:10px;padding:10px 12px;background:var(--blue-soft);border-radius:8px;font-size:13px;color:var(--blue);">
+        Förväntad vinst Solvinkeln: <strong id="ekonomiProjektVinstSolvinkelnPreview">0,0 MSEK</strong>
+      </div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button id="ekonomiProjektModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
+        <button id="ekonomiProjektModalSave" style="background:var(--ink);color:#fff;">Spara</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ekonomiNumberModalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h3 id="ekonomiNumberModalTitle">Redigera</h3>
+      <p class="modal-sub" id="ekonomiNumberModalSub"></p>
+      <div id="ekonomiNumberModalFields"></div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button id="ekonomiNumberModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
+        <button id="ekonomiNumberModalSave" style="background:var(--ink);color:#fff;">Spara</button>
+      </div>
     </div>
   </div>
 
