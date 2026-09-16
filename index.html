@@ -910,6 +910,7 @@
       <button class="ekonomi-sub-tab active" data-ekonomi-view="oversikt">Översikt</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="projekt">Projekt</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="budget">Budget/förväntad vinst</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="mark">Mark</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="likviditet">Likviditet</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="lan">Lån</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="vinstsolvinkeln">Förväntad vinst Solvinkeln</button>
@@ -995,6 +996,37 @@
       </div>
     </div>
 
+    <div id="ekonomiMarkView" style="display:none;">
+      <div class="home-grid" style="margin-bottom:20px;">
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiForvarvspris">—</div>
+          <div class="home-card-sub">Totalt förvärvspris</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiGatukostnad">—</div>
+          <div class="home-card-sub">Total gatukostnad</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiVattenanslutning">—</div>
+          <div class="home-card-sub">Total vattenanslutning</div>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Brf</th>
+              <th>Antal fastigheter</th>
+              <th>Förvärvspris</th>
+              <th>Vattenanslutning</th>
+              <th>Gatukostnad</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiMarkBody"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div id="ekonomiLikviditetView" style="display:none;">
       <div class="table-scroll">
         <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
@@ -1051,13 +1083,27 @@
             <div class="figure-row"><span>kr/kvm</span><strong id="ekoBudgetIntakterPerKvm">—</strong></div>
           </div>
         </div>
-        <div class="home-card">
-          <div class="home-card-title">
-            <input type="number" id="ekoBudgetForelangslanInput" class="eko-inline-input" style="text-align:left;font-size:20px;font-family:'Fraunces',serif;font-weight:700;padding:0;">
-          </div>
-          <div class="home-card-sub">Förelångslån</div>
+        <div class="home-card" id="ekoBudgetForeningslanCard" style="cursor:pointer;">
+          <div class="home-card-title" id="ekoBudgetForeningslan">—</div>
+          <div class="home-card-sub">Föreningslån (klicka för att ändra)</div>
           <div class="home-card-figures">
-            <div class="figure-row"><span>kr/kvm</span><strong id="ekoBudgetForelangslanPerKvm">—</strong></div>
+            <div class="figure-row"><span>kr/kvm</span><strong id="ekoBudgetForeningslanPerKvm">—</strong></div>
+          </div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoBudgetTotalkostnad">—</div>
+          <div class="home-card-sub">Totalkostnad</div>
+          <div class="home-card-figures">
+            <div class="figure-row"><span>Budget</span><strong id="ekoBudgetTotalkostnadBudget">—</strong></div>
+            <div class="figure-row"><span>Utfall</span><strong id="ekoBudgetTotalkostnadUtfall">—</strong></div>
+          </div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoBudgetVinst">—</div>
+          <div class="home-card-sub">Vinst</div>
+          <div class="home-card-figures">
+            <div class="figure-row"><span>Budget</span><strong id="ekoBudgetVinstBudget">—</strong></div>
+            <div class="figure-row"><span>Utfall</span><strong id="ekoBudgetVinstUtfall">—</strong></div>
           </div>
         </div>
       </div>
@@ -1101,6 +1147,40 @@
           <tbody id="ekonomiReskontraBody"></tbody>
         </table>
         <div id="ekonomiReskontraEmptyState" class="empty-state" style="display:none;">Ingen reskontra inläst än för det här projektet.</div>
+      </div>
+    </div>
+
+    <div id="ekonomiProjektMarkView" style="display:none;">
+      <div class="project-header">
+        <button id="backToEkonomiMarkListBtn" class="back-btn">← Mark</button>
+        <h2 id="ekonomiProjektMarkTitle" class="project-header-name"></h2>
+      </div>
+
+      <p class="eko-sub" style="margin:0 0 10px;">En förening kan äga flera fastigheter - varje köpebrev läggs till som en egen rad nedan.</p>
+      <div class="table-scroll" style="margin-bottom:12px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Fastighetsbeteckning</th>
+              <th style="text-align:left;">Ort</th>
+              <th>Förvärvspris</th>
+              <th>Vattenanslutning</th>
+              <th>Gatukostnad</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiMarkFastigheterBody"></tbody>
+        </table>
+        <div id="ekonomiMarkFastigheterEmptyState" class="empty-state" style="display:none;">Ingen fastighet inlagd än för den här föreningen.</div>
+      </div>
+      <button id="ekonomiAddFastighetBtn" class="add-inline-btn" style="margin-bottom:24px;">+ Lägg till fastighet</button>
+
+      <h3 style="margin-bottom:4px;">Läs in från köpebrev</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp ett köpebrev (PDF) så läggs en ny fastighetsrad till automatiskt ovan - du kan alltid justera den för hand efteråt.</p>
+      <div class="contract-upload-row">
+        <button type="button" id="kopebrevUploadBtn" class="upload-btn">📄 Läs in köpebrev (PDF)</button>
+        <input type="file" id="kopebrevFileInput" accept="application/pdf" style="display:none;">
+        <span id="kopebrevUploadStatus" class="contract-upload-status"></span>
       </div>
     </div>
 
@@ -1220,6 +1300,25 @@
       <div class="modal-actions" style="margin-top:14px;">
         <button id="ekonomiNumberModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
         <button id="ekonomiNumberModalSave" style="background:var(--ink);color:#fff;">Spara</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ekonomiForeningslanModalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h3>Föreningslån</h3>
+      <p class="modal-sub">Fyll i antingen totalbeloppet eller kr/kvm - det andra fältet räknas ut automatiskt.</p>
+      <div class="ekonomi-field-row">
+        <label>Totalt (kr)</label>
+        <input type="number" id="ekoForeningslanTotalInput">
+      </div>
+      <div class="ekonomi-field-row">
+        <label>Per kvm (kr)</label>
+        <input type="number" id="ekoForeningslanPerKvmInput">
+      </div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button id="ekoForeningslanModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
+        <button id="ekoForeningslanModalSave" style="background:var(--ink);color:#fff;">Spara</button>
       </div>
     </div>
   </div>

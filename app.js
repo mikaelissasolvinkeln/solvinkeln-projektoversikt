@@ -26,7 +26,8 @@ const EKONOMI_KEYS = {
   reskontra: 'ekonomi-reskontra',
   likviditet: 'ekonomi-likviditet',
   lan: 'ekonomi-lan',
-  brItems: 'ekonomi-br-items'
+  brItems: 'ekonomi-br-items',
+  mark: 'ekonomi-mark'
 };
 // Fast lista kostnadsposter i en projektbudget - Totalkostnad räknas alltid ut,
 // tilldelas aldrig en reskontrarad.
@@ -139,8 +140,9 @@ let liggarenConfirmClear = false;
 let myPersonId = null;
 let myEmail = '';
 let isEkonomiAdmin = false;
-let companyEkonomiData = { meta: {}, budgetDetalj: {}, reskontra: {}, likviditet: {}, lan: {}, brItems: {} };
+let companyEkonomiData = { meta: {}, budgetDetalj: {}, reskontra: {}, likviditet: {}, lan: {}, brItems: {}, mark: {} };
 let currentEkonomiBudgetProjectId = null;
+let currentEkonomiMarkProjectId = null;
 let ekonomiBudgetAreaRevenue = { kvm: 0, intakter: 0 };
 let currentEkonomiLanProjectId = null;
 let currentEkonomiLikviditetProjectId = null;
@@ -366,7 +368,10 @@ async function persistProjects(){
 }
 
 async function addProject(name){
-  if(!name) return false;
+  if(!name){
+    showToast('Skriv ett projektnamn först');
+    return false;
+  }
   if(projects.some(p => p.name.toLowerCase() === name.toLowerCase())){
     showToast('Det finns redan ett projekt med det namnet');
     return false;
@@ -392,6 +397,12 @@ document.getElementById('newProjectInput').addEventListener('keydown', e => {
 function formatMSEK(value){
   if(!value && value !== 0) return '—';
   return (value / 1000000).toLocaleString('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' MSEK';
+}
+
+// Fullt utskrivet belopp med mellanslag som tusentalsavgränsare, t.ex. 45000000 -> "45 000 000 kr".
+function formatKrFull(value){
+  if(!value && value !== 0) return '—';
+  return Math.round(value).toLocaleString('sv-SE') + ' kr';
 }
 
 async function loadProjectSummary(p){
@@ -970,13 +981,14 @@ function renderPaminnelser(){
 // ---------- Ekonomi (företagsövergripande) ----------
 async function loadEkonomiData(){
   try{
-    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems] = await Promise.all([
+    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark] = await Promise.all([
       DB.getPersonalData(EKONOMI_KEYS.meta),
       DB.getPersonalData(EKONOMI_KEYS.budgetDetalj),
       DB.getPersonalData(EKONOMI_KEYS.reskontra),
       DB.getPersonalData(EKONOMI_KEYS.likviditet),
       DB.getPersonalData(EKONOMI_KEYS.lan),
-      DB.getPersonalData(EKONOMI_KEYS.brItems)
+      DB.getPersonalData(EKONOMI_KEYS.brItems),
+      DB.getPersonalData(EKONOMI_KEYS.mark)
     ]);
     companyEkonomiData = {
       meta: (meta && JSON.parse(meta.value)) || {},
@@ -984,7 +996,8 @@ async function loadEkonomiData(){
       reskontra: (reskontra && JSON.parse(reskontra.value)) || {},
       likviditet: (likviditet && JSON.parse(likviditet.value)) || {},
       lan: (lan && JSON.parse(lan.value)) || {},
-      brItems: (brItems && JSON.parse(brItems.value)) || {}
+      brItems: (brItems && JSON.parse(brItems.value)) || {},
+      mark: (mark && JSON.parse(mark.value)) || {}
     };
   }catch(e){
     showDebugError('Kunde inte läsa ekonomidata', e);
@@ -1017,12 +1030,14 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
+  document.getElementById('ekonomiMarkView').style.display = view === 'mark' ? 'block' : 'none';
   document.getElementById('ekonomiLikviditetView').style.display = view === 'likviditet' ? 'block' : 'none';
   document.getElementById('ekonomiLanView').style.display = view === 'lan' ? 'block' : 'none';
   document.getElementById('ekonomiVinstSolvinkelnView').style.display = view === 'vinstsolvinkeln' ? 'block' : 'none';
   if(view === 'oversikt') renderEkonomiOversikt();
   else if(view === 'projekt') renderEkonomiProjekt();
   else if(view === 'budget') renderEkonomiBudgetList();
+  else if(view === 'mark') renderEkonomiMarkList();
   else if(view === 'vinstsolvinkeln') renderEkonomiVinstSolvinkeln();
   else renderEkonomiNumberTab(view);
 }
@@ -1094,8 +1109,8 @@ async function openEkonomiProjektBudget(project){
   currentEkonomiBudgetProjectId = project.id;
   document.getElementById('ekonomiProjektBudgetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
-  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektBudgetView').style.display = 'block';
@@ -1109,19 +1124,174 @@ function closeEkonomiProjektBudget(){
   setEkonomiSubView('budget');
 }
 
+// ---------- Mark-detalj: köpebrevsuppgifter per projekt (en förening kan äga flera fastigheter) ----------
+function renderEkonomiMarkList(){
+  const tbody = document.getElementById('ekonomiMarkBody');
+  tbody.innerHTML = '';
+  let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0;
+  projects.forEach(p => {
+    const fastigheter = companyEkonomiData.mark[p.id] || [];
+    const sum = fastigheter.reduce((acc, f) => {
+      acc.forvarvspris += f.forvarvspris || 0;
+      acc.vattenanslutning += f.vattenanslutning || 0;
+      acc.gatukostnad += f.gatukostnad || 0;
+      return acc;
+    }, { forvarvspris: 0, vattenanslutning: 0, gatukostnad: 0 });
+    totalForvarvspris += sum.forvarvspris;
+    totalGatukostnad += sum.gatukostnad;
+    totalVattenanslutning += sum.vattenanslutning;
+    const row = document.createElement('tr');
+    row.onclick = () => openEkonomiProjektMark(p);
+    row.innerHTML =
+      '<td>' + escapeHtml(p.name) + '</td>' +
+      '<td>' + fastigheter.length + '</td>' +
+      '<td>' + (sum.forvarvspris ? formatKrFull(sum.forvarvspris) : '—') + '</td>' +
+      '<td>' + (sum.vattenanslutning ? formatKrFull(sum.vattenanslutning) : '—') + '</td>' +
+      '<td>' + (sum.gatukostnad ? formatKrFull(sum.gatukostnad) : '—') + '</td>';
+    tbody.appendChild(row);
+  });
+  document.getElementById('ekoMarkKpiForvarvspris').textContent = formatKrFull(totalForvarvspris);
+  document.getElementById('ekoMarkKpiGatukostnad').textContent = formatKrFull(totalGatukostnad);
+  document.getElementById('ekoMarkKpiVattenanslutning').textContent = formatKrFull(totalVattenanslutning);
+}
+
+function openEkonomiProjektMark(project){
+  currentEkonomiMarkProjectId = project.id;
+  document.getElementById('ekonomiProjektMarkTitle').textContent = project.name;
+  document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView',
+    'ekonomiProjektLikviditetView'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('ekonomiProjektMarkView').style.display = 'block';
+  setKopebrevUploadStatus('', '');
+  renderEkonomiProjektMark();
+}
+
+function closeEkonomiProjektMark(){
+  document.getElementById('ekonomiProjektMarkView').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar').style.display = 'flex';
+  setEkonomiSubView('mark');
+}
+
+function renderEkonomiProjektMark(){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const tbody = document.getElementById('ekonomiMarkFastigheterBody');
+  const empty = document.getElementById('ekonomiMarkFastigheterEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = fastigheter.length ? 'none' : 'block';
+  fastigheter.forEach(fast => {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td>';
+
+    const textFields = [
+      { key: 'fastighetsbeteckning', cell: 0 },
+      { key: 'ort', cell: 1 }
+    ];
+    textFields.forEach(tf => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'eko-inline-input';
+      input.style.textAlign = 'left';
+      input.value = fast[tf.key] || '';
+      input.onchange = () => saveEkonomiMarkFastighet(fast.id, { [tf.key]: input.value.trim() });
+      row.children[tf.cell].appendChild(input);
+    });
+
+    const numberFields = [
+      { key: 'forvarvspris', cell: 2 },
+      { key: 'vattenanslutning', cell: 3 },
+      { key: 'gatukostnad', cell: 4 }
+    ];
+    numberFields.forEach(nf => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'eko-inline-input';
+      input.value = fast[nf.key] || '';
+      input.placeholder = '0';
+      input.onchange = () => saveEkonomiMarkFastighet(fast.id, { [nf.key]: parseFloat(input.value) || 0 });
+      row.children[nf.cell].appendChild(input);
+    });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort fastighet';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
+    row.children[5].appendChild(removeBtn);
+    row.children[5].className = 'row-actions';
+
+    tbody.appendChild(row);
+  });
+}
+
+async function persistEkonomiMark(){
+  await DB.setPersonalData(EKONOMI_KEYS.mark, JSON.stringify(companyEkonomiData.mark));
+}
+
+async function addEkonomiMarkFastighet(){
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
+  companyEkonomiData.mark[pid].push({
+    id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
+    fastighetsbeteckning: '', ort: '', forvarvspris: 0, vattenanslutning: 0, gatukostnad: 0
+  });
+  try{
+    await persistEkonomiMark();
+    renderEkonomiProjektMark();
+  }catch(err){
+    showDebugError('Kunde inte lägga till fastighet', err);
+  }
+}
+
+async function saveEkonomiMarkFastighet(fastId, patch){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const idx = fastigheter.findIndex(f => f.id === fastId);
+  if(idx === -1) return;
+  fastigheter[idx] = { ...fastigheter[idx], ...patch };
+  try{
+    await persistEkonomiMark();
+  }catch(err){
+    showDebugError('Kunde inte spara fastighet', err);
+  }
+}
+
+async function removeEkonomiMarkFastighet(fastId){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  companyEkonomiData.mark[pid] = fastigheter.filter(f => f.id !== fastId);
+  try{
+    await persistEkonomiMark();
+    renderEkonomiProjektMark();
+  }catch(err){
+    showDebugError('Kunde inte ta bort fastighet', err);
+  }
+}
+
+function setKopebrevUploadStatus(msg, kind){
+  const el = document.getElementById('kopebrevUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
 function renderEkonomiProjektBudget(){
   const pid = currentEkonomiBudgetProjectId;
   const detail = companyEkonomiData.budgetDetalj[pid] || {};
   const kategorier = detail.kategorier || {};
-  const forelangslan = detail.forelangslan || 0;
+  const foreningslan = detail.foreningslan || 0;
   const kvm = ekonomiBudgetAreaRevenue.kvm;
   const intakter = ekonomiBudgetAreaRevenue.intakter;
 
   document.getElementById('ekoBudgetKvm').textContent = kvm ? kvm.toLocaleString('sv-SE', { maximumFractionDigits: 0 }) + ' kvm' : '—';
-  document.getElementById('ekoBudgetIntakter').textContent = formatMSEK(intakter);
+  document.getElementById('ekoBudgetIntakter').textContent = formatKrFull(intakter);
   document.getElementById('ekoBudgetIntakterPerKvm').textContent = formatKrPerKvm(intakter, kvm);
-  document.getElementById('ekoBudgetForelangslanInput').value = forelangslan || '';
-  document.getElementById('ekoBudgetForelangslanPerKvm').textContent = formatKrPerKvm(forelangslan, kvm);
+  document.getElementById('ekoBudgetForeningslan').textContent = formatKrFull(foreningslan);
+  document.getElementById('ekoBudgetForeningslanPerKvm').textContent = formatKrPerKvm(foreningslan, kvm);
 
   const ledger = companyEkonomiData.reskontra[pid] || [];
   const utfallByCategory = {};
@@ -1145,9 +1315,9 @@ function renderEkonomiProjektBudget(){
       '<td>' + escapeHtml(cat) + '</td>' +
       '<td></td>' +
       '<td>' + formatKrPerKvm(budget, kvm) + '</td>' +
-      '<td>' + formatMSEK(utfall) + '</td>' +
+      '<td>' + formatKrFull(utfall) + '</td>' +
       '<td>' + formatKrPerKvm(utfall, kvm) + '</td>' +
-      '<td class="' + (diff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(diff) + '</td>';
+      '<td class="' + (diff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(diff) + '</td>';
     const input = document.createElement('input');
     input.type = 'number';
     input.className = 'eko-inline-input';
@@ -1162,19 +1332,29 @@ function renderEkonomiProjektBudget(){
   totalRow.className = 'eko-row-resultat';
   totalRow.innerHTML =
     '<td>Totalkostnad</td>' +
-    '<td>' + formatMSEK(totalBudget) + '</td>' +
+    '<td>' + formatKrFull(totalBudget) + '</td>' +
     '<td>' + formatKrPerKvm(totalBudget, kvm) + '</td>' +
-    '<td>' + formatMSEK(totalUtfall) + '</td>' +
+    '<td>' + formatKrFull(totalUtfall) + '</td>' +
     '<td>' + formatKrPerKvm(totalUtfall, kvm) + '</td>' +
-    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(totalDiff) + '</td>';
+    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(totalDiff) + '</td>';
   tbody.appendChild(totalRow);
+
+  // Totalkostnad- och Vinst-korten längst upp - Vinst = Intäkter + Föreningslån - Totalkostnad
+  document.getElementById('ekoBudgetTotalkostnad').textContent = formatKrFull(totalBudget);
+  document.getElementById('ekoBudgetTotalkostnadBudget').textContent = formatKrFull(totalBudget);
+  document.getElementById('ekoBudgetTotalkostnadUtfall').textContent = formatKrFull(totalUtfall);
+  const vinstBudget = intakter + foreningslan - totalBudget;
+  const vinstUtfall = intakter + foreningslan - totalUtfall;
+  document.getElementById('ekoBudgetVinst').textContent = formatKrFull(vinstBudget);
+  document.getElementById('ekoBudgetVinstBudget').textContent = formatKrFull(vinstBudget);
+  document.getElementById('ekoBudgetVinstUtfall').textContent = formatKrFull(vinstUtfall);
 
   renderEkonomiReskontraTable();
 }
 
 async function saveEkonomiBudgetCategoryValue(cat, value){
   const pid = currentEkonomiBudgetProjectId;
-  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { forelangslan: 0, kategorier: {} };
+  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { foreningslan: 0, kategorier: {} };
   if(!companyEkonomiData.budgetDetalj[pid].kategorier) companyEkonomiData.budgetDetalj[pid].kategorier = {};
   companyEkonomiData.budgetDetalj[pid].kategorier[cat] = value;
   try{
@@ -1182,6 +1362,31 @@ async function saveEkonomiBudgetCategoryValue(cat, value){
     renderEkonomiProjektBudget();
   }catch(e){
     showDebugError('Kunde inte spara budget', e);
+  }
+}
+
+function openEkonomiForeningslanModal(){
+  const pid = currentEkonomiBudgetProjectId;
+  const detail = companyEkonomiData.budgetDetalj[pid] || {};
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  const total = detail.foreningslan || 0;
+  document.getElementById('ekoForeningslanTotalInput').value = total || '';
+  document.getElementById('ekoForeningslanPerKvmInput').value = (kvm && total) ? Math.round(total / kvm) : '';
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.add('open');
+}
+
+async function saveEkonomiForeningslanModal(){
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const total = parseFloat(document.getElementById('ekoForeningslanTotalInput').value) || 0;
+  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { foreningslan: 0, kategorier: {} };
+  companyEkonomiData.budgetDetalj[pid].foreningslan = total;
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.remove('open');
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
+    renderEkonomiProjektBudget();
+  }catch(err){
+    showDebugError('Kunde inte spara föreningslån', err);
   }
 }
 
@@ -1254,8 +1459,8 @@ function openEkonomiProjektLan(project){
   currentEkonomiLanProjectId = project.id;
   document.getElementById('ekonomiProjektLanTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
-  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLanView').style.display = 'block';
@@ -1460,8 +1665,8 @@ async function openEkonomiProjektLikviditet(project){
   currentEkonomiLikviditetProjectId = project.id;
   document.getElementById('ekonomiProjektLikviditetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
-  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLikviditetView').style.display = 'block';
@@ -1781,17 +1986,22 @@ document.getElementById('ekonomiNewProjectInput').addEventListener('keydown', e 
 });
 
 document.getElementById('backToEkonomiBudgetListBtn').onclick = closeEkonomiProjektBudget;
-document.getElementById('ekoBudgetForelangslanInput').addEventListener('change', async (e) => {
-  const pid = currentEkonomiBudgetProjectId;
-  if(!pid) return;
-  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { forelangslan: 0, kategorier: {} };
-  companyEkonomiData.budgetDetalj[pid].forelangslan = parseFloat(e.target.value) || 0;
-  try{
-    await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
-    renderEkonomiProjektBudget();
-  }catch(err){
-    showDebugError('Kunde inte spara förelångslån', err);
-  }
+document.getElementById('ekoBudgetForeningslanCard').onclick = openEkonomiForeningslanModal;
+document.getElementById('ekoForeningslanModalCancel').onclick = () => {
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.remove('open');
+};
+document.getElementById('ekoForeningslanModalSave').onclick = saveEkonomiForeningslanModal;
+document.getElementById('ekoForeningslanTotalInput').addEventListener('input', (e) => {
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  if(!kvm) return;
+  const total = parseFloat(e.target.value) || 0;
+  document.getElementById('ekoForeningslanPerKvmInput').value = Math.round(total / kvm) || '';
+});
+document.getElementById('ekoForeningslanPerKvmInput').addEventListener('input', (e) => {
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  if(!kvm) return;
+  const perKvm = parseFloat(e.target.value) || 0;
+  document.getElementById('ekoForeningslanTotalInput').value = Math.round(perKvm * kvm) || '';
 });
 
 document.getElementById('reskontraUploadBtn').onclick = () => {
@@ -1837,6 +2047,50 @@ document.getElementById('reskontraFileInput').addEventListener('change', async (
     renderEkonomiProjektBudget();
   }catch(err){
     setReskontraStatus('Kunde inte läsa reskontran: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+document.getElementById('backToEkonomiMarkListBtn').onclick = closeEkonomiProjektMark;
+document.getElementById('ekonomiAddFastighetBtn').onclick = addEkonomiMarkFastighet;
+document.getElementById('kopebrevUploadBtn').onclick = () => {
+  document.getElementById('kopebrevFileInput').click();
+};
+document.getElementById('kopebrevFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setKopebrevUploadStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('kopebrevUploadBtn');
+  btn.disabled = true;
+  setKopebrevUploadStatus('Läser köpebrevet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kopebrev', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
+    companyEkonomiData.mark[pid].push({
+      id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
+      fastighetsbeteckning: data.fastighetsbeteckning || '',
+      ort: data.ort || '',
+      forvarvspris: data.forvarvspris || 0,
+      vattenanslutning: data.vattenanslutning || 0,
+      gatukostnad: data.gatukostnad || 0
+    });
+    await persistEkonomiMark();
+    setKopebrevUploadStatus('Köpebrevet inläst - ny fastighet tillagd.', 'ok');
+    renderEkonomiProjektMark();
+  }catch(err){
+    setKopebrevUploadStatus('Kunde inte läsa köpebrevet: ' + (err.message || err), 'err');
   }finally{
     btn.disabled = false;
     e.target.value = '';
