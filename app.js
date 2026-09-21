@@ -66,7 +66,7 @@ const LIGGAREN_PRIORITIES = [1, 2, 3, 4, 5];
 const LIGGAREN_PRIORITY_COLOR = p => (p <= 2 ? 'var(--danger)' : p === 3 ? 'var(--blue)' : 'var(--ink-soft)');
 const LIGGAREN_DEFAULT_EMAILS = ['Mikael.issa@solvinkeln.se', 'Saman.haake@solvinkeln.se', 'Rebecka.bergvall@solvinkeln.se'];
 const LIGGAREN_PROJECTS = [
-  'Solvinkeln Fastigheter AB', 'Saman', 'Rebecka', 'Ashur', 'Aygun',
+  'Privat', 'Solvinkeln Fastigheter AB', 'Saman', 'Rebecka', 'Ashur', 'Aygun',
   'Brf Gladö Sjöutsikten', 'Brf Gladö Sjöglimten', 'Brf Gladö Höjden', 'Brf Gladö Utsikten', 'Brf Gladö Viken',
   'Brf Aktrisen', 'Brf Kulissen', 'Brf Regissören', 'Brf Vistabergshöjden', 'Brf Glömstahöjden',
   'Projekt Nacka Kummelnäs', 'Brf Enköping'
@@ -137,6 +137,8 @@ let liggarenProjectFilterVal = 'alla';
 let liggarenSortBy = 'priority';
 let liggarenEditingMailId = null;
 let liggarenConfirmClear = false;
+let liggarenViewMode = 'expanded';
+let liggarenExpandedCompactId = null;
 let myPersonId = null;
 let myEmail = '';
 let isEkonomiAdmin = false;
@@ -515,6 +517,7 @@ function mapLiggarenRow(row){
     project: row.project,
     deadline: row.deadline,
     priority: row.priority,
+    ekonomi: row.ekonomi != null ? row.ekonomi : null,
     status: row.status,
     createdBy: row.created_by,
     createdByName: row.created_by_name,
@@ -600,6 +603,7 @@ function liggarenResetForm(){
   document.getElementById('liggarenProjectInput').value = '';
   document.getElementById('liggarenDeadlineInput').value = '';
   document.getElementById('liggarenPriorityInput').value = '3';
+  document.getElementById('liggarenEkonomiInput').value = '';
   liggarenPopulateAssigneeSelect();
   document.getElementById('liggarenNotifyCheck').checked = false;
   document.getElementById('liggarenNotifyFields').style.display = 'none';
@@ -615,6 +619,8 @@ async function liggarenSaveTask(){
   const project = document.getElementById('liggarenProjectInput').value;
   const deadline = document.getElementById('liggarenDeadlineInput').value || null;
   const priority = parseInt(document.getElementById('liggarenPriorityInput').value, 10) || 3;
+  const ekonomiVal = document.getElementById('liggarenEkonomiInput').value;
+  const ekonomi = ekonomiVal !== '' ? parseFloat(ekonomiVal) : null;
   const notifyEmail = document.getElementById('liggarenNotifyCheck').checked;
   const addrSelect = document.getElementById('liggarenNotifyAddressSelect').value;
   const notifyAddress = (addrSelect === 'other' ? document.getElementById('liggarenNotifyCustomInput').value.trim() : addrSelect);
@@ -626,6 +632,7 @@ async function liggarenSaveTask(){
     title, description, project,
     deadline,
     priority,
+    ekonomi,
     status: LIGGAREN_STATUS.OPPET,
     created_by: myPersonId,
     created_by_name: myName,
@@ -674,6 +681,26 @@ async function liggarenSetPriority(id, p){
     renderArenden();
   }catch(e){
     showDebugError('Kunde inte ändra prioritet', e);
+  }
+}
+
+async function liggarenSetProject(id, project){
+  try{
+    await DB.updateLiggarenTask(id, { project });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ändra projekt', e);
+  }
+}
+
+async function liggarenSetEkonomi(id, ekonomi){
+  try{
+    await DB.updateLiggarenTask(id, { ekonomi });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte spara ekonomi', e);
   }
 }
 
@@ -757,12 +784,59 @@ function renderArenden(){
       return b.createdAt.localeCompare(a.createdAt);
     });
 
+  const viewModeBar = document.getElementById('liggarenViewModeToggle');
+  viewModeBar.innerHTML = '';
+  [['expanded', 'Utökad'], ['compact', 'Kompakt']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'liggaren-status-btn' + (liggarenViewMode === key ? ' active' : '');
+    btn.textContent = label;
+    btn.onclick = () => { liggarenViewMode = key; liggarenExpandedCompactId = null; renderArenden(); };
+    viewModeBar.appendChild(btn);
+  });
+
   const list = document.getElementById('liggarenList');
   const empty = document.getElementById('liggarenEmptyState');
   list.innerHTML = '';
   empty.style.display = visible.length ? 'none' : 'block';
 
   visible.forEach(t => {
+    if(liggarenViewMode === 'compact' && liggarenExpandedCompactId !== t.id){
+      list.appendChild(buildLiggarenCompactRow(t));
+      return;
+    }
+    list.appendChild(buildLiggarenCard(t));
+  });
+}
+
+function buildLiggarenCompactRow(t){
+  const overdue = liggarenIsPastDue(t);
+  const critical = liggarenIsCritical(t);
+  const delegatedOut = t.createdBy === myPersonId && t.assignedTo !== myPersonId;
+  const delegatedIn = t.assignedTo === myPersonId && t.createdBy !== myPersonId;
+  const row = document.createElement('div');
+  row.className = 'liggaren-compact-row' + (t.status === LIGGAREN_STATUS.KLART ? ' done' : '') +
+    (delegatedOut ? ' delegated-out' : '') + (delegatedIn ? ' delegated-in' : '');
+  row.onclick = () => { liggarenExpandedCompactId = t.id; renderArenden(); };
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'liggaren-compact-title';
+  titleEl.textContent = t.title;
+  row.appendChild(titleEl);
+
+  const projectEl = document.createElement('span');
+  projectEl.className = 'liggaren-compact-project';
+  projectEl.textContent = t.project || '—';
+  row.appendChild(projectEl);
+
+  const deadlineEl = document.createElement('span');
+  deadlineEl.className = 'liggaren-compact-deadline' + (overdue ? ' overdue' : critical ? ' critical' : '');
+  deadlineEl.textContent = t.deadline || '—';
+  row.appendChild(deadlineEl);
+
+  return row;
+}
+
+function buildLiggarenCard(t){
     const critical = liggarenIsCritical(t);
     const overdue = liggarenIsPastDue(t);
     const delegatedOut = t.createdBy === myPersonId && t.assignedTo !== myPersonId;
@@ -828,12 +902,21 @@ function renderArenden(){
       origin.textContent = '→ Tilldelat: ' + t.assignedToName;
       meta.appendChild(origin);
     }
-    if(t.project){
-      const pill = document.createElement('span');
-      pill.className = 'liggaren-pill';
-      pill.textContent = t.project;
-      meta.appendChild(pill);
-    }
+    const projectSelect = document.createElement('select');
+    projectSelect.className = 'liggaren-pill-select';
+    projectSelect.innerHTML = '<option value="">Inget projekt</option>' +
+      LIGGAREN_PROJECTS.map(p => '<option value="' + escapeHtml(p) + '"' + (t.project === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>').join('');
+    projectSelect.onchange = () => liggarenSetProject(t.id, projectSelect.value || null);
+    meta.appendChild(projectSelect);
+
+    const ekonomiInput = document.createElement('input');
+    ekonomiInput.type = 'number';
+    ekonomiInput.className = 'liggaren-ekonomi-input';
+    ekonomiInput.placeholder = 'Ekonomi (kr)';
+    ekonomiInput.value = t.ekonomi != null ? t.ekonomi : '';
+    ekonomiInput.onchange = () => liggarenSetEkonomi(t.id, ekonomiInput.value === '' ? null : (parseFloat(ekonomiInput.value) || 0));
+    meta.appendChild(ekonomiInput);
+
     if(t.deadline){
       const dl = document.createElement('span');
       dl.className = 'liggaren-deadline' + (overdue ? ' overdue' : critical ? ' critical' : '');
@@ -924,8 +1007,7 @@ function renderArenden(){
       }
     };
     card.appendChild(commentInput);
-    list.appendChild(card);
-  });
+    return card;
 }
 
 async function loadPaminnelser(){
