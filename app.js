@@ -502,6 +502,9 @@ function openHome(){
 async function openPersonal(){
   showScreen('personal');
   document.getElementById('personalGreeting').textContent = myName ? ('Hej, ' + myName + '!') : 'Hej!';
+  liggarenStatusFilter = 'oppet';
+  liggarenViewMode = 'compact';
+  liggarenExpandedCompactId = null;
   await Promise.all([loadArenden(), loadPaminnelser()]);
   renderArenden();
   renderPaminnelser();
