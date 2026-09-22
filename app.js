@@ -65,6 +65,8 @@ const LIGGAREN_STATUS_ORDER = [LIGGAREN_STATUS.OPPET, LIGGAREN_STATUS.PAGAENDE, 
 const LIGGAREN_PRIORITIES = [1, 2, 3, 4, 5];
 const LIGGAREN_PRIORITY_COLOR = p => (p <= 2 ? 'var(--danger)' : p === 3 ? 'var(--blue)' : 'var(--ink-soft)');
 const LIGGAREN_DEFAULT_EMAILS = ['Mikael.issa@solvinkeln.se', 'Saman.haake@solvinkeln.se', 'Rebecka.bergvall@solvinkeln.se'];
+const LIGGAREN_RECURRING_KEY = 'liggaren-recurring-templates';
+const SWEDISH_MONTHS = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december'];
 const LIGGAREN_PROJECTS = [
   'Privat', 'Solvinkeln Fastigheter AB', 'Saman', 'Rebecka', 'Ashur', 'Aygun',
   'Brf Gladö Sjöutsikten', 'Brf Gladö Sjöglimten', 'Brf Gladö Höjden', 'Brf Gladö Utsikten', 'Brf Gladö Viken',
@@ -139,6 +141,7 @@ let liggarenEditingMailId = null;
 let liggarenConfirmClear = false;
 let liggarenViewMode = 'expanded';
 let liggarenExpandedCompactId = null;
+let liggarenRecurringTemplates = [];
 let myPersonId = null;
 let myEmail = '';
 let isEkonomiAdmin = false;
@@ -505,7 +508,8 @@ async function openPersonal(){
   liggarenStatusFilter = 'oppet';
   liggarenViewMode = 'compact';
   liggarenExpandedCompactId = null;
-  await Promise.all([loadArenden(), loadPaminnelser()]);
+  await Promise.all([loadArenden(), loadPaminnelser(), loadLiggarenRecurring()]);
+  await liggarenCheckRecurring();
   renderArenden();
   renderPaminnelser();
 }
@@ -543,15 +547,17 @@ async function loadArenden(){
   }
 }
 
-function liggarenNextCaseNumber(){
+function liggarenNextCaseNumbers(count){
   const year = new Date().getFullYear();
   const nums = arenden
     .map(t => t.caseNumber)
     .filter(cn => cn && cn.includes('-' + year + '-'))
     .map(cn => parseInt(cn.split('-')[2], 10))
     .filter(n => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 0;
-  return 'SF-' + year + '-' + String(max + 1).padStart(3, '0');
+  let next = (nums.length ? Math.max(...nums) : 0) + 1;
+  const result = [];
+  for(let i = 0; i < count; i++) result.push('SF-' + year + '-' + String(next + i).padStart(3, '0'));
+  return result;
 }
 
 function liggarenBusinessDaysUntil(deadlineStr){
@@ -578,8 +584,7 @@ function liggarenIsCritical(t){
 
 function liggarenPopulateSelects(){
   const projectInput = document.getElementById('liggarenProjectInput');
-  projectInput.innerHTML = '<option value="">Välj projekt/bolag…</option>' +
-    LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+  projectInput.innerHTML = LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
 
   const projectFilter = document.getElementById('liggarenProjectFilter');
   projectFilter.innerHTML = '<option value="alla">Alla projekt</option>' +
@@ -603,10 +608,14 @@ function liggarenPopulateAssigneeSelect(){
 function liggarenResetForm(){
   document.getElementById('liggarenTitleInput').value = '';
   document.getElementById('liggarenDescriptionInput').value = '';
-  document.getElementById('liggarenProjectInput').value = '';
+  [...document.getElementById('liggarenProjectInput').options].forEach(o => o.selected = false);
   document.getElementById('liggarenDeadlineInput').value = '';
+  document.getElementById('liggarenDeadlineInput').disabled = false;
   document.getElementById('liggarenPriorityInput').value = '3';
   document.getElementById('liggarenEkonomiInput').value = '';
+  document.getElementById('liggarenRecurringCheck').checked = false;
+  document.getElementById('liggarenRecurringFields').style.display = 'none';
+  document.getElementById('liggarenRecurringDayInput').value = '1';
   liggarenPopulateAssigneeSelect();
   document.getElementById('liggarenNotifyCheck').checked = false;
   document.getElementById('liggarenNotifyFields').style.display = 'none';
@@ -619,34 +628,59 @@ async function liggarenSaveTask(){
   const title = document.getElementById('liggarenTitleInput').value.trim();
   if(!title) return;
   const description = document.getElementById('liggarenDescriptionInput').value.trim();
-  const project = document.getElementById('liggarenProjectInput').value;
+  const selectedProjects = [...document.getElementById('liggarenProjectInput').selectedOptions].map(o => o.value);
+  const projects = selectedProjects.length ? selectedProjects : [null];
   const deadline = document.getElementById('liggarenDeadlineInput').value || null;
   const priority = parseInt(document.getElementById('liggarenPriorityInput').value, 10) || 3;
   const ekonomiVal = document.getElementById('liggarenEkonomiInput').value;
   const ekonomi = ekonomiVal !== '' ? parseFloat(ekonomiVal) : null;
+  const isRecurring = document.getElementById('liggarenRecurringCheck').checked;
+  const recurringDay = parseInt(document.getElementById('liggarenRecurringDayInput').value, 10) || 1;
   const notifyEmail = document.getElementById('liggarenNotifyCheck').checked;
   const addrSelect = document.getElementById('liggarenNotifyAddressSelect').value;
   const notifyAddress = (addrSelect === 'other' ? document.getElementById('liggarenNotifyCustomInput').value.trim() : addrSelect);
   const assigneeId = document.getElementById('liggarenAssigneeInput').value || myPersonId;
   const assignee = LIGGAREN_PEOPLE.find(p => p.id === assigneeId) || { id: myPersonId, name: myName };
 
-  const row = {
-    case_number: liggarenNextCaseNumber(),
-    title, description, project,
-    deadline,
-    priority,
-    ekonomi,
-    status: LIGGAREN_STATUS.OPPET,
-    created_by: myPersonId,
-    created_by_name: myName,
-    assigned_to: assignee.id,
-    assigned_to_name: assignee.name,
-    notify_email: notifyEmail && !!notifyAddress,
-    notify_address: notifyAddress || '',
-    mail_sent: false
-  };
   try{
-    await DB.insertLiggarenTask(row);
+    const caseNumbers = liggarenNextCaseNumbers(projects.length);
+    const now = new Date();
+    const monthKey = liggarenMonthKey(now);
+    for(let i = 0; i < projects.length; i++){
+      const project = projects[i];
+      const rowTitle = isRecurring ? liggarenRecurringTitle({ baseTitle: title }, now) : title;
+      const row = {
+        case_number: caseNumbers[i],
+        title: rowTitle, description, project,
+        deadline: isRecurring ? null : deadline,
+        priority,
+        ekonomi,
+        status: LIGGAREN_STATUS.OPPET,
+        created_by: myPersonId,
+        created_by_name: myName,
+        assigned_to: assignee.id,
+        assigned_to_name: assignee.name,
+        notify_email: notifyEmail && !!notifyAddress,
+        notify_address: notifyAddress || '',
+        mail_sent: false
+      };
+      await DB.insertLiggarenTask(row);
+      if(isRecurring){
+        liggarenRecurringTemplates.push({
+          id: 'rt' + Date.now() + Math.random().toString(36).slice(2, 7) + i,
+          baseTitle: title,
+          project,
+          priority,
+          dayOfMonth: recurringDay,
+          assignedTo: assignee.id,
+          assignedToName: assignee.name,
+          createdBy: myPersonId,
+          createdByName: myName,
+          lastGeneratedMonth: monthKey
+        });
+      }
+    }
+    if(isRecurring) await persistLiggarenRecurring();
     await loadArenden();
     renderArenden();
     liggarenResetForm();
@@ -809,6 +843,8 @@ function renderArenden(){
     }
     list.appendChild(buildLiggarenCard(t));
   });
+
+  renderLiggarenRecurringList();
 }
 
 function buildLiggarenCompactRow(t){
@@ -1011,6 +1047,95 @@ function buildLiggarenCard(t){
     };
     card.appendChild(commentInput);
     return card;
+}
+
+// ---------- Liggaren: återkommande ärenden (skapas automatiskt varje månad) ----------
+function liggarenMonthKey(date){
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+}
+
+function liggarenRecurringTitle(tpl, date){
+  return tpl.baseTitle + ' ' + SWEDISH_MONTHS[date.getMonth()];
+}
+
+async function loadLiggarenRecurring(){
+  try{
+    const res = await DB.getPersonalData(LIGGAREN_RECURRING_KEY);
+    liggarenRecurringTemplates = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    liggarenRecurringTemplates = [];
+    showDebugError('Kunde inte läsa återkommande ärenden', e);
+  }
+}
+
+async function persistLiggarenRecurring(){
+  try{ await DB.setPersonalData(LIGGAREN_RECURRING_KEY, JSON.stringify(liggarenRecurringTemplates)); }
+  catch(e){ showDebugError('Kunde inte spara återkommande ärenden', e); }
+}
+
+async function liggarenCheckRecurring(){
+  const now = new Date();
+  const monthKey = liggarenMonthKey(now);
+  const due = liggarenRecurringTemplates.filter(tpl =>
+    tpl.createdBy === myPersonId && tpl.lastGeneratedMonth !== monthKey && now.getDate() >= (tpl.dayOfMonth || 1)
+  );
+  if(!due.length) return;
+  try{
+    const caseNumbers = liggarenNextCaseNumbers(due.length);
+    for(let i = 0; i < due.length; i++){
+      const tpl = due[i];
+      const row = {
+        case_number: caseNumbers[i],
+        title: liggarenRecurringTitle(tpl, now),
+        description: '', project: tpl.project,
+        deadline: null,
+        priority: tpl.priority || 3,
+        ekonomi: null,
+        status: LIGGAREN_STATUS.OPPET,
+        created_by: tpl.createdBy,
+        created_by_name: tpl.createdByName,
+        assigned_to: tpl.assignedTo,
+        assigned_to_name: tpl.assignedToName,
+        notify_email: false,
+        notify_address: '',
+        mail_sent: false
+      };
+      await DB.insertLiggarenTask(row);
+      tpl.lastGeneratedMonth = monthKey;
+    }
+    await persistLiggarenRecurring();
+    await loadArenden();
+  }catch(e){
+    showDebugError('Kunde inte skapa återkommande ärenden', e);
+  }
+}
+
+function renderLiggarenRecurringList(){
+  const section = document.getElementById('liggarenRecurringSection');
+  const list = document.getElementById('liggarenRecurringList');
+  const mine = liggarenRecurringTemplates.filter(t => t.createdBy === myPersonId);
+  section.style.display = mine.length ? 'block' : 'none';
+  list.innerHTML = '';
+  mine.forEach(tpl => {
+    const row = document.createElement('div');
+    row.className = 'liggaren-recurring-row';
+    const label = document.createElement('span');
+    label.textContent = tpl.baseTitle + (tpl.project ? ' (' + tpl.project + ')' : '') + ' - skapas dag ' + (tpl.dayOfMonth || 1) + ' varje månad';
+    row.appendChild(label);
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'remove-btn';
+    stopBtn.title = 'Sluta upprepa';
+    stopBtn.textContent = '✕';
+    stopBtn.onclick = () => liggarenStopRecurring(tpl.id);
+    row.appendChild(stopBtn);
+    list.appendChild(row);
+  });
+}
+
+async function liggarenStopRecurring(id){
+  liggarenRecurringTemplates = liggarenRecurringTemplates.filter(t => t.id !== id);
+  await persistLiggarenRecurring();
+  renderLiggarenRecurringList();
 }
 
 async function loadPaminnelser(){
@@ -2016,6 +2141,11 @@ document.getElementById('liggarenTitleInput').addEventListener('keydown', e => {
 });
 document.getElementById('liggarenNotifyCheck').addEventListener('change', e => {
   document.getElementById('liggarenNotifyFields').style.display = e.target.checked ? 'block' : 'none';
+});
+document.getElementById('liggarenRecurringCheck').addEventListener('change', e => {
+  document.getElementById('liggarenRecurringFields').style.display = e.target.checked ? 'block' : 'none';
+  document.getElementById('liggarenDeadlineInput').disabled = e.target.checked;
+  if(e.target.checked) document.getElementById('liggarenDeadlineInput').value = '';
 });
 document.getElementById('liggarenNotifyAddressSelect').addEventListener('change', e => {
   document.getElementById('liggarenNotifyCustomInput').style.display = e.target.value === 'other' ? 'block' : 'none';
