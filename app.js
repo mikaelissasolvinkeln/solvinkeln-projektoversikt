@@ -156,6 +156,7 @@ let ekonomiSubView = 'oversikt';
 let currentEkonomiProjektId = null;
 let ekonomiNumberModalCtx = null;
 let projectSubView = 'checklista'; // 'checklista' | 'ekonomi'
+let entreprenadSubView = 'tidsplan'; // 'tidsplan' | 'byggmoten'
 let apartments = [];
 let myName = '';
 let loaded = false;
@@ -171,6 +172,12 @@ function escapeHtml(str){
   const d = document.createElement('div');
   d.textContent = str;
   return d.innerHTML;
+}
+
+function stripHtml(html){
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
 }
 
 function slugId(name){
@@ -1961,7 +1968,7 @@ function renderEkonomiProjekt(){
     row.onclick = () => openEkonomiProjektModal(p);
     row.innerHTML =
       '<td>' + escapeHtml(p.name) + '</td>' +
-      '<td>' + escapeHtml(meta.ort || '—') + '</td>' +
+      '<td>' + escapeHtml(p.ort || '—') + '</td>' +
       '<td>' + escapeHtml(meta.jvPartner || '—') + '</td>' +
       '<td>' + (meta.agarandel ? meta.agarandel + '%' : '—') + '</td>' +
       '<td style="text-align:left;">' + status + '</td>' +
@@ -2001,7 +2008,7 @@ function openEkonomiProjektModal(p){
   currentEkonomiProjektId = p.id;
   const meta = companyEkonomiData.meta[p.id] || {};
   document.getElementById('ekonomiProjektModalSub').textContent = p.name;
-  document.getElementById('ekonomiProjektOrtInput').value = meta.ort || '';
+  document.getElementById('ekonomiProjektOrtInput').value = p.ort || '';
   document.getElementById('ekonomiProjektJvInput').value = meta.jvPartner || '';
   document.getElementById('ekonomiProjektAgarandelInput').value = meta.agarandel || '';
   document.getElementById('ekonomiProjektStatusInput').value = p.status || 'Pågående';
@@ -2014,19 +2021,19 @@ function openEkonomiProjektModal(p){
 async function saveEkonomiProjektModal(){
   if(!currentEkonomiProjektId) return;
   const meta = {
-    ort: document.getElementById('ekonomiProjektOrtInput').value.trim(),
     jvPartner: document.getElementById('ekonomiProjektJvInput').value,
     agarandel: parseFloat(document.getElementById('ekonomiProjektAgarandelInput').value) || 0,
     forvantadVinst: parseFloat(document.getElementById('ekonomiProjektVinstInput').value) || 0,
     forvantadEntreprenadsvinst: parseFloat(document.getElementById('ekonomiProjektEntreprenadsvinstInput').value) || 0
   };
   companyEkonomiData.meta[currentEkonomiProjektId] = meta;
-  // Status styr om projektet syns i den DELADE Projektöversikten (alla fem
-  // ser den) - sparas därför på det delade projektobjektet, inte i Mikaels
-  // privata ekonomi-projekt-meta.
+  // Status och Ort styr vad som visas i den DELADE Projektöversikten/Byggmöten
+  // (alla fem ser den) - sparas därför på det delade projektobjektet, inte i
+  // Mikaels privata ekonomi-projekt-meta.
   const status = document.getElementById('ekonomiProjektStatusInput').value;
+  const ort = document.getElementById('ekonomiProjektOrtInput').value.trim();
   const project = projects.find(p => p.id === currentEkonomiProjektId);
-  if(project) project.status = status;
+  if(project){ project.status = status; project.ort = ort; }
   document.getElementById('ekonomiProjektModalOverlay').classList.remove('open');
   try{
     await Promise.all([
@@ -2178,6 +2185,7 @@ document.getElementById('goToPersonalBtn').onclick = openPersonal;
 document.getElementById('goToEkonomiCard').onclick = openCompanyEkonomi;
 document.getElementById('goToEkonomiBtn').onclick = openCompanyEkonomi;
 document.getElementById('backToPersonalFromEkonomiBtn').onclick = openPersonal;
+document.getElementById('ekoKpiAktivaProjektCard').onclick = openHome;
 document.querySelectorAll('.ekonomi-sub-tab').forEach(btn => {
   btn.onclick = () => setEkonomiSubView(btn.dataset.ekonomiView);
 });
@@ -2357,6 +2365,7 @@ document.getElementById('ekoLikviditetIngaendeInput').addEventListener('change',
 function openProject(p){
   activeProjectId = p.id;
   projectSubView = 'checklista';
+  entreprenadSubView = 'tidsplan';
   loaded = false;
   showScreen('project');
   document.getElementById('projectHeaderName').textContent = p.name;
@@ -2372,12 +2381,22 @@ function setProjectSubView(view){
   document.getElementById('medlemsinfoSubview').style.display = view === 'medlemsinfo' ? 'block' : 'none';
   document.getElementById('intressenterSubview').style.display = view === 'intressenter' ? 'block' : 'none';
   document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
-  document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
+  document.getElementById('entreprenadSubview').style.display = view === 'entreprenad' ? 'block' : 'none';
   if(view === 'ekonomi') loadEkonomi(activeProjectId);
   if(view === 'medlemsinfo') renderMedlemsinfo();
   if(view === 'intressenter') loadInterests().then(renderIntressenterTab);
   if(view === 'material') loadMaterial(activeProjectId);
+  if(view === 'entreprenad') setEntreprenadSubView(entreprenadSubView || 'tidsplan');
+}
+
+function setEntreprenadSubView(view){
+  entreprenadSubView = view;
+  document.querySelectorAll('.entreprenad-sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.entreprenadView === view));
+  document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
+  document.getElementById('byggmoteListSubview').style.display = view === 'byggmoten' ? 'block' : 'none';
+  document.getElementById('byggmoteFormSubview').style.display = 'none';
   if(view === 'tidsplan') loadTidsplan(activeProjectId);
+  if(view === 'byggmoten') loadByggmoten(activeProjectId);
 }
 
 function openCalendarScreen(){
@@ -2387,6 +2406,9 @@ function openCalendarScreen(){
 
 document.querySelectorAll('.sub-tab').forEach(btn => {
   btn.onclick = () => setProjectSubView(btn.dataset.view);
+});
+document.querySelectorAll('.entreprenad-sub-tab').forEach(btn => {
+  btn.onclick = () => setEntreprenadSubView(btn.dataset.entreprenadView);
 });
 document.getElementById('backToHomeBtn').onclick = openHome;
 document.getElementById('backToHomeFromCalendarBtn').onclick = openHome;
@@ -5399,6 +5421,288 @@ document.getElementById('tidsplanImportInput').addEventListener('change', async 
     document.getElementById('tidsplanImportInput').value = '';
   }
 });
+
+// ---------- Byggmöten (protokoll, en flik under Entreprenad) ----------
+function byggmoteKey(projectId){ return 'byggmoten:' + projectId; }
+const BYGGMOTE_STANDARDPUNKTER = [
+  'Nästa möte', 'Föregående protokoll', 'Tidsplan', 'Bygg', 'VVS', 'El',
+  'Målare', 'Mark', 'Arbetsmiljö', 'Personalliggare'
+];
+function nextByggmoteNr(){
+  const nums = byggmoteList.map(m => parseInt(m.moteNr, 10)).filter(n => !isNaN(n));
+  return String((nums.length ? Math.max(...nums) : 0) + 1);
+}
+function emptyByggmote(){
+  return {
+    id: uid(),
+    moteNr: nextByggmoteNr(),
+    datum: todayStr(),
+    narvarande: [{ namn: '', foretag: '' }],
+    punkter: BYGGMOTE_STANDARDPUNKTER.map(rubrik => ({ rubrik, anteckningar: '', ansvarig: '' }))
+  };
+}
+function currentProjectOrt(){
+  const p = projects.find(pr => pr.id === activeProjectId);
+  return (p && p.ort) || '';
+}
+
+let byggmoteList = [];
+let currentByggmoteId = null;
+
+async function loadByggmoten(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(byggmoteKey(projectId), true);
+    byggmoteList = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    byggmoteList = [];
+  }
+  if(!Array.isArray(byggmoteList)) byggmoteList = [];
+  renderByggmoteList();
+}
+
+async function persistByggmoten(){
+  try{
+    await withRetry(() => window.storage.set(byggmoteKey(activeProjectId), JSON.stringify(byggmoteList), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara byggmötet', e, () => persistByggmoten());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+function renderByggmoteList(){
+  const tbody = document.getElementById('byggmoteListBody');
+  const empty = document.getElementById('byggmoteListEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = byggmoteList.length ? 'none' : 'block';
+  const sorted = [...byggmoteList].sort((a, b) => (parseInt(b.moteNr, 10) || 0) - (parseInt(a.moteNr, 10) || 0));
+  const ort = currentProjectOrt();
+  sorted.forEach(m => {
+    const row = document.createElement('tr');
+    row.onclick = () => openByggmoteForm(m.id);
+    row.innerHTML =
+      '<td>' + escapeHtml(m.moteNr || '—') + '</td>' +
+      '<td>' + escapeHtml(m.datum || '—') + '</td>' +
+      '<td>' + escapeHtml(ort || '—') + '</td>';
+    tbody.appendChild(row);
+  });
+}
+
+function openByggmoteForm(id){
+  currentByggmoteId = id;
+  document.getElementById('byggmoteListSubview').style.display = 'none';
+  document.getElementById('byggmoteFormSubview').style.display = 'block';
+  renderByggmoteForm();
+}
+
+function closeByggmoteForm(){
+  currentByggmoteId = null;
+  document.getElementById('byggmoteFormSubview').style.display = 'none';
+  document.getElementById('byggmoteListSubview').style.display = 'block';
+  renderByggmoteList();
+}
+
+function currentByggmote(){
+  return byggmoteList.find(m => m.id === currentByggmoteId);
+}
+
+function renderByggmoteForm(){
+  const m = currentByggmote();
+  if(!m) return;
+  document.getElementById('byggmoteNrDisplay').textContent = m.moteNr || '—';
+  document.getElementById('byggmoteDatumInput').value = m.datum || '';
+  document.getElementById('byggmoteOrtDisplay').textContent = currentProjectOrt() || '—';
+
+  const narvBody = document.getElementById('byggmoteNarvarandeBody');
+  narvBody.innerHTML = '';
+  m.narvarande.forEach((p, idx) => {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td></td><td></td><td></td>';
+    const namnInput = document.createElement('input');
+    namnInput.type = 'text';
+    namnInput.value = p.namn || '';
+    namnInput.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:5px;padding:5px 7px;font-size:13px;';
+    namnInput.onchange = () => { p.namn = namnInput.value; persistByggmoten(); };
+    row.children[0].appendChild(namnInput);
+    const foretagInput = document.createElement('input');
+    foretagInput.type = 'text';
+    foretagInput.value = p.foretag || '';
+    foretagInput.style.cssText = namnInput.style.cssText;
+    foretagInput.onchange = () => { p.foretag = foretagInput.value; persistByggmoten(); };
+    row.children[1].appendChild(foretagInput);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => { m.narvarande.splice(idx, 1); persistByggmoten(); renderByggmoteForm(); };
+    row.children[2].appendChild(removeBtn);
+    row.children[2].className = 'row-actions';
+    narvBody.appendChild(row);
+  });
+
+  const punkterList = document.getElementById('byggmotePunkterList');
+  punkterList.innerHTML = '';
+  m.punkter.forEach((p, idx) => {
+    const row = document.createElement('div');
+    row.className = 'byggmote-punkt-row';
+    const top = document.createElement('div');
+    top.className = 'byggmote-punkt-row-top';
+    const nrSpan = document.createElement('span');
+    nrSpan.style.cssText = 'font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--ink-soft);';
+    nrSpan.textContent = (idx + 1) + '.';
+    top.appendChild(nrSpan);
+    const rubrikInput = document.createElement('input');
+    rubrikInput.type = 'text';
+    rubrikInput.placeholder = 'Rubrik';
+    rubrikInput.value = p.rubrik || '';
+    rubrikInput.onchange = () => { p.rubrik = rubrikInput.value; persistByggmoten(); };
+    top.appendChild(rubrikInput);
+    const ansvarigInput = document.createElement('input');
+    ansvarigInput.type = 'text';
+    ansvarigInput.className = 'byggmote-punkt-ansvarig';
+    ansvarigInput.placeholder = 'Ansvarig';
+    ansvarigInput.value = p.ansvarig || '';
+    ansvarigInput.onchange = () => { p.ansvarig = ansvarigInput.value; persistByggmoten(); };
+    top.appendChild(ansvarigInput);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort punkt';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => { m.punkter.splice(idx, 1); persistByggmoten(); renderByggmoteForm(); };
+    top.appendChild(removeBtn);
+    row.appendChild(top);
+
+    const anteckningar = document.createElement('div');
+    anteckningar.className = 'byggmote-punkt-anteckningar';
+    anteckningar.contentEditable = 'true';
+    anteckningar.setAttribute('data-placeholder', 'Anteckningar');
+    anteckningar.innerHTML = p.anteckningar || '';
+    anteckningar.oninput = () => { p.anteckningar = anteckningar.innerHTML; };
+    anteckningar.onblur = () => { p.anteckningar = anteckningar.innerHTML; persistByggmoten(); };
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'byggmote-anteckningar-toolbar';
+    const toolbarLabel = document.createElement('span');
+    toolbarLabel.className = 'byggmote-anteckningar-toolbar-label';
+    toolbarLabel.textContent = 'Färg på markerad text:';
+    toolbar.appendChild(toolbarLabel);
+    const swatches = document.createElement('div');
+    swatches.className = 'byggmote-color-swatches';
+    ['red', 'yellow', 'green'].forEach(c => {
+      const swatchBtn = document.createElement('button');
+      swatchBtn.type = 'button';
+      swatchBtn.className = 'byggmote-color-swatch ' + c;
+      swatchBtn.title = c === 'red' ? 'Rött' : c === 'yellow' ? 'Gult' : 'Grönt';
+      swatchBtn.onmousedown = e => e.preventDefault();
+      swatchBtn.onclick = () => applyByggmoteTextColor(anteckningar, p, BYGGMOTE_COLOR_HEX[c]);
+      swatches.appendChild(swatchBtn);
+    });
+    toolbar.appendChild(swatches);
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'byggmote-color-clear-btn';
+    clearBtn.textContent = 'Rensa färg';
+    clearBtn.onmousedown = e => e.preventDefault();
+    clearBtn.onclick = () => applyByggmoteTextColor(anteckningar, p, null);
+    toolbar.appendChild(clearBtn);
+    row.appendChild(toolbar);
+    row.appendChild(anteckningar);
+    punkterList.appendChild(row);
+  });
+}
+
+const BYGGMOTE_COLOR_HEX = { red: '#B23B3B', yellow: '#B5762C', green: '#4C7A5E' };
+function applyByggmoteTextColor(el, p, colorHex){
+  el.focus();
+  document.execCommand('styleWithCSS', false, true);
+  document.execCommand('foreColor', false, colorHex || '#22190F');
+  p.anteckningar = el.innerHTML;
+  persistByggmoten();
+}
+
+document.getElementById('byggmoteNewBtn').onclick = () => {
+  const m = emptyByggmote();
+  byggmoteList.push(m);
+  persistByggmoten();
+  openByggmoteForm(m.id);
+};
+document.getElementById('byggmoteBackBtn').onclick = closeByggmoteForm;
+document.getElementById('byggmoteDatumInput').onchange = e => {
+  const m = currentByggmote(); if(!m) return;
+  m.datum = e.target.value; persistByggmoten();
+};
+document.getElementById('byggmoteAddNarvarandeBtn').onclick = () => {
+  const m = currentByggmote(); if(!m) return;
+  m.narvarande.push({ namn: '', foretag: '' });
+  persistByggmoten();
+  renderByggmoteForm();
+};
+document.getElementById('byggmoteAddPunktBtn').onclick = () => {
+  const m = currentByggmote(); if(!m) return;
+  m.punkter.push({ rubrik: '', anteckningar: '', ansvarig: '' });
+  persistByggmoten();
+  renderByggmoteForm();
+};
+document.getElementById('byggmoteSaveBtn').onclick = async () => {
+  await persistByggmoten();
+  showToast('Byggmötet sparat');
+  closeByggmoteForm();
+};
+document.getElementById('byggmotePdfBtn').onclick = () => {
+  const m = currentByggmote();
+  if(!m) return;
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(16);
+  doc.text('Byggmötesprotokoll' + (proj ? ' – ' + proj.name : ''), 14, 18);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Möte nr: ' + (m.moteNr || '—') + '    Datum: ' + (m.datum || '—') + '    Ort: ' + (currentProjectOrt() || '—'), 14, 24);
+
+  let y = 32;
+  const attendees = m.narvarande.filter(p => p.namn || p.foretag);
+  if(attendees.length){
+    doc.setFontSize(12);
+    doc.setTextColor(20);
+    doc.text('Närvarande', 14, y);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Namn', 'Företag']],
+      body: attendees.map(p => [p.namn || '', p.foretag || '']),
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 10;
+  }
+
+  doc.setFontSize(12);
+  doc.setTextColor(20);
+  doc.text('Punkter', 14, y);
+  doc.autoTable({
+    startY: y + 4,
+    head: [['#', 'Punkt', 'Anteckningar', 'Ansvarig']],
+    body: m.punkter.map((p, i) => [String(i + 1), p.rubrik || '', stripHtml(p.anteckningar), p.ansvarig || '']),
+    styles: { fontSize: 9, valign: 'top' },
+    headStyles: { fillColor: [58, 44, 32] },
+    columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 32 }, 3: { cellWidth: 26 } },
+    margin: { left: 14, right: 14 }
+  });
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Byggmotesprotokoll-' + (m.moteNr || 'utan-nr') + fileNamePart + '.pdf');
+};
+document.getElementById('byggmoteDeleteBtn').onclick = async () => {
+  const m = currentByggmote(); if(!m) return;
+  byggmoteList = byggmoteList.filter(x => x.id !== m.id);
+  await persistByggmoten();
+  closeByggmoteForm();
+};
 
 const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minuter - bara ett fåtal personer använder verktyget
 

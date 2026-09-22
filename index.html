@@ -392,15 +392,15 @@
   .sub-tabs{
     display:flex; gap: 6px; margin-bottom: 18px; border-bottom: 1px solid var(--line-soft);
   }
-  .sub-tab, .material-view-tab, .ekonomi-sub-tab{
+  .sub-tab, .material-view-tab, .ekonomi-sub-tab, .entreprenad-sub-tab{
     font-family:'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600;
     padding: 9px 16px; border-radius: 8px 8px 0 0; cursor:pointer;
     color: var(--ink-soft); border: 1px solid transparent; border-bottom:none; background: transparent;
   }
-  .sub-tab.active, .material-view-tab.active, .ekonomi-sub-tab.active{
+  .sub-tab.active, .material-view-tab.active, .ekonomi-sub-tab.active, .entreprenad-sub-tab.active{
     color: var(--blue); background: var(--paper); border-color: var(--line-soft); position:relative; top:1px;
   }
-  .sub-tab:hover:not(.active), .material-view-tab:hover:not(.active), .ekonomi-sub-tab:hover:not(.active){ color: var(--ink); }
+  .sub-tab:hover:not(.active), .material-view-tab:hover:not(.active), .ekonomi-sub-tab:hover:not(.active), .entreprenad-sub-tab:hover:not(.active){ color: var(--ink); }
   .material-order-section{
     background: var(--blue-soft); font-family:'JetBrains Mono', monospace; font-weight:700;
     font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--blue);
@@ -517,6 +517,32 @@
   .liggaren-compact-project{ min-width:140px; color:var(--ink-soft); font-size:12.5px; }
   .liggaren-compact-deadline{ min-width:90px; text-align:right; font-size:12.5px; color:var(--ink-soft); }
   .liggaren-compact-deadline.overdue, .liggaren-compact-deadline.critical{ color:var(--danger); font-weight:600; }
+  .byggmote-punkt-row{
+    border:1px solid var(--line-soft); border-radius:8px; padding:10px 12px; margin-bottom:8px;
+  }
+  .byggmote-punkt-row-top{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .byggmote-punkt-row-top input[type="text"]{
+    flex:1; font-weight:600; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13.5px;
+  }
+  .byggmote-punkt-ansvarig{ width:140px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px; }
+  .byggmote-punkt-anteckningar{
+    width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px;
+    font-size:13.5px; font-family:'Inter',sans-serif; color: var(--ink); min-height:44px; overflow-wrap:break-word;
+  }
+  .byggmote-punkt-anteckningar:empty:before{ content: attr(data-placeholder); color: var(--ink-soft); }
+  .byggmote-anteckningar-toolbar{ display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .byggmote-anteckningar-toolbar-label{ font-size:11px; color:var(--ink-soft); }
+  .byggmote-color-swatches{ display:flex; gap:5px; align-items:center; }
+  .byggmote-color-swatch{
+    width:18px; height:18px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;
+  }
+  .byggmote-color-swatch.red{ background: var(--danger); }
+  .byggmote-color-swatch.yellow{ background: var(--amber); }
+  .byggmote-color-swatch.green{ background: var(--good); }
+  .byggmote-color-clear-btn{
+    background:none; border:1px solid var(--line-soft); color:var(--ink-soft); border-radius:5px;
+    padding:2px 8px; font-size:11px; cursor:pointer; font-family:'Inter',sans-serif;
+  }
   .liggaren-recurring-row{
     display:flex; align-items:center; justify-content:space-between; gap:10px;
     padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--ink-soft);
@@ -768,10 +794,11 @@
     margin: 0 0 4px; font-family:'Fraunces', serif; font-weight:700; font-size: 19px;
   }
   .modal-sub{ font-size: 12px; color: var(--ink-soft); margin: 0 0 16px; }
-  .modal-box label.field-label{
+  label.field-label{
     display:block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--ink-soft); font-family:'JetBrains Mono', monospace; margin-bottom: 6px;
   }
+  .field-static-value{ font-size:14px; font-weight:600; }
   .modal-box textarea, .modal-box input[type="text"], .modal-box select{
     width: 100%; box-sizing: border-box; border: 1px solid var(--line-soft); border-radius: 7px;
     padding: 8px 10px; font-family: 'Inter', sans-serif; font-size: 13.5px; margin-bottom: 14px;
@@ -960,9 +987,9 @@
 
     <div id="ekonomiOversiktView">
       <div class="home-grid">
-        <div class="home-card">
+        <div class="home-card" id="ekoKpiAktivaProjektCard">
           <div class="home-card-title" id="ekoKpiAktivaProjekt">—</div>
-          <div class="home-card-sub">Aktiva projekt</div>
+          <div class="home-card-sub">Aktiva projekt (klicka för Projektöversikt)</div>
         </div>
         <div class="home-card">
           <div class="home-card-title" id="ekoKpiLikviditet">—</div>
@@ -1385,7 +1412,7 @@
       <button class="sub-tab" data-view="medlemsinfo">Medlemsinformation</button>
       <button class="sub-tab" data-view="intressenter">Intressenter</button>
       <button class="sub-tab" data-view="material">Material</button>
-      <button class="sub-tab" data-view="tidsplan">Tidsplan</button>
+      <button class="sub-tab" data-view="entreprenad">Entreprenad</button>
     </div>
 
     <div id="checklistaSubview">
@@ -1565,36 +1592,103 @@
       </div>
     </div>
 
-    <div id="tidsplanSubview" style="display:none;">
-      <div class="material-toolbar">
-        <input type="text" id="newHouseInput" placeholder="Nytt hus, t.ex. HUS 1" maxlength="40">
-        <button id="addHouseBtn">+ Lägg till hus</button>
-        <button id="addWeekBtn">+ Lägg till vecka</button>
-        <button id="tidsplanImportBtn">📄 Importera från Excel (.xlsx)</button>
-        <input type="file" id="tidsplanImportInput" accept=".xlsx" style="display:none;">
-        <button id="tidsplanStamBtn" class="material-pdf-btn" style="margin-left:0;">📍 Stäm av</button>
-        <button id="tidsplanRemoveStamBtn" style="display:none;">Ta bort avstämningslinje</button>
-      </div>
-      <div id="tidsplanImportStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
-      <p id="tidsplanStamHint" class="eko-sub" style="display:none; color:var(--danger); font-weight:600;">Klicka på en veckorubrik i schemat nedan för att placera avstämningslinjen där.</p>
-
-      <div class="material-room" style="margin-bottom:16px;">
-        <div class="material-room-header">
-          <h3>Legend (arbetsmoment · ansvarig · färg)</h3>
-        </div>
-        <div id="tidsplanLegendList" class="tidsplan-legend-list"></div>
-        <div class="material-toolbar" style="margin-top:10px; margin-bottom:0;">
-          <input type="text" id="legendTaskInput" placeholder="Arbetsmoment, t.ex. Målare">
-          <input type="text" id="legendAnsvarigInput" placeholder="Ansvarig" style="width:120px;">
-          <input type="color" id="legendColorInput" value="#5B9BD5">
-          <button id="addLegendBtn">+ Lägg till i legend</button>
-        </div>
+    <div id="entreprenadSubview" style="display:none;">
+      <div class="sub-tabs" style="margin-bottom:16px;">
+        <button class="entreprenad-sub-tab active" data-entreprenad-view="tidsplan">Tidsplan</button>
+        <button class="entreprenad-sub-tab" data-entreprenad-view="byggmoten">Byggmöten</button>
       </div>
 
-      <div id="tidsplanGridWrap" class="tidsplan-grid-wrap">
-        <div id="tidsplanGrid" class="tidsplan-grid"></div>
+      <div id="tidsplanSubview" style="display:none;">
+        <div class="material-toolbar">
+          <input type="text" id="newHouseInput" placeholder="Nytt hus, t.ex. HUS 1" maxlength="40">
+          <button id="addHouseBtn">+ Lägg till hus</button>
+          <button id="addWeekBtn">+ Lägg till vecka</button>
+          <button id="tidsplanImportBtn">📄 Importera från Excel (.xlsx)</button>
+          <input type="file" id="tidsplanImportInput" accept=".xlsx" style="display:none;">
+          <button id="tidsplanStamBtn" class="material-pdf-btn" style="margin-left:0;">📍 Stäm av</button>
+          <button id="tidsplanRemoveStamBtn" style="display:none;">Ta bort avstämningslinje</button>
+        </div>
+        <div id="tidsplanImportStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
+        <p id="tidsplanStamHint" class="eko-sub" style="display:none; color:var(--danger); font-weight:600;">Klicka på en veckorubrik i schemat nedan för att placera avstämningslinjen där.</p>
+
+        <div class="material-room" style="margin-bottom:16px;">
+          <div class="material-room-header">
+            <h3>Legend (arbetsmoment · ansvarig · färg)</h3>
+          </div>
+          <div id="tidsplanLegendList" class="tidsplan-legend-list"></div>
+          <div class="material-toolbar" style="margin-top:10px; margin-bottom:0;">
+            <input type="text" id="legendTaskInput" placeholder="Arbetsmoment, t.ex. Målare">
+            <input type="text" id="legendAnsvarigInput" placeholder="Ansvarig" style="width:120px;">
+            <input type="color" id="legendColorInput" value="#5B9BD5">
+            <button id="addLegendBtn">+ Lägg till i legend</button>
+          </div>
+        </div>
+
+        <div id="tidsplanGridWrap" class="tidsplan-grid-wrap">
+          <div id="tidsplanGrid" class="tidsplan-grid"></div>
+        </div>
+        <div id="tidsplanEmptyState" class="empty-state" style="display:none;">Inga hus tillagda än. Lägg till ett hus ovan, eller importera från Excel.</div>
       </div>
-      <div id="tidsplanEmptyState" class="empty-state" style="display:none;">Inga hus tillagda än. Lägg till ett hus ovan, eller importera från Excel.</div>
+
+      <div id="byggmoteListSubview" style="display:none;">
+        <div class="material-toolbar">
+          <button id="byggmoteNewBtn" class="add-inline-btn">+ Nytt byggmöte</button>
+        </div>
+        <div class="table-scroll">
+          <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+            <thead>
+              <tr>
+                <th style="text-align:left;">Möte nr</th>
+                <th style="text-align:left;">Datum</th>
+                <th style="text-align:left;">Ort</th>
+              </tr>
+            </thead>
+            <tbody id="byggmoteListBody"></tbody>
+          </table>
+        </div>
+        <div id="byggmoteListEmptyState" class="empty-state" style="display:none;">Inga byggmöten sparade än.</div>
+      </div>
+
+      <div id="byggmoteFormSubview" style="display:none;">
+        <div class="project-header">
+          <button id="byggmoteBackBtn" class="back-btn">← Byggmöten</button>
+          <h2 class="project-header-name">Byggmötesprotokoll</h2>
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; gap:28px; margin-bottom:14px;">
+          <div>
+            <label class="field-label">Möte nr</label>
+            <div id="byggmoteNrDisplay" class="field-static-value">—</div>
+          </div>
+          <div>
+            <label class="field-label" for="byggmoteDatumInput">Datum</label>
+            <input type="date" id="byggmoteDatumInput">
+          </div>
+          <div>
+            <label class="field-label">Ort</label>
+            <div id="byggmoteOrtDisplay" class="field-static-value">—</div>
+          </div>
+        </div>
+
+        <h3 style="margin-bottom:6px;">Närvarande</h3>
+        <div class="table-scroll" style="margin-bottom:8px;">
+          <table class="eko-compare-table" style="width:100%;">
+            <thead><tr><th style="text-align:left;">Namn</th><th style="text-align:left;">Företag</th><th></th></tr></thead>
+            <tbody id="byggmoteNarvarandeBody"></tbody>
+          </table>
+        </div>
+        <button id="byggmoteAddNarvarandeBtn" class="add-inline-btn" style="margin-bottom:20px;">+ Lägg till person</button>
+
+        <h3 style="margin-bottom:6px;">Punkter</h3>
+        <div id="byggmotePunkterList" style="margin-bottom:8px;"></div>
+        <button id="byggmoteAddPunktBtn" class="add-inline-btn" style="margin-bottom:20px;">+ Lägg till punkt</button>
+
+        <div class="modal-actions" style="justify-content:flex-start;">
+          <button id="byggmoteSaveBtn" style="background:var(--ink); color:#fff;">Spara protokoll</button>
+          <button id="byggmotePdfBtn" class="material-pdf-btn">📄 Skriv ut PDF</button>
+          <button id="byggmoteDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort mötet</button>
+        </div>
+      </div>
     </div>
   </div>
 
