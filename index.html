@@ -230,17 +230,32 @@
     font-family: 'Inter', sans-serif;
   }
   .tidsplan-week-header{
-    font-family:'JetBrains Mono', monospace; font-size: 11px; font-weight:700; color: var(--ink-soft);
-    text-align:center; padding: 6px 2px; border-bottom: 2px solid var(--line); cursor: default;
-    white-space: nowrap;
+    font-family:'JetBrains Mono', monospace; font-size: 12px; font-weight:700; color: var(--ink);
+    text-align:center; padding: 4px 2px; border-bottom: 1px solid var(--line-soft); border-left: 1px solid var(--line-soft);
+    white-space: nowrap; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
   }
-  .tidsplan-week-header.stam-pickable{ cursor: pointer; background: var(--blue-soft); }
-  .tidsplan-week-header.stam-pickable:hover{ background: var(--amber-soft); }
+  .tidsplan-week-date-input{
+    font-size:10.5px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--ink-soft);
+    font-family:'Inter',sans-serif; padding:1px 3px;
+  }
+  .tidsplan-week-date-input:hover, .tidsplan-week-date-input:focus{ border-color: var(--line-soft); background: #fff; color: var(--ink); }
+  .tidsplan-day-header{
+    font-family:'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-soft);
+    text-align:center; padding: 3px 1px; border-bottom: 2px solid var(--line); border-left: 1px solid var(--line-soft);
+    display:flex; flex-direction:column; line-height:1.35;
+  }
+  .tidsplan-day-header .tidsplan-day-name{ font-weight:600; }
+  .tidsplan-day-header .tidsplan-day-num{ color: var(--ink); font-weight:700; font-size:11px; }
   .tidsplan-corner{ border-bottom: 2px solid var(--line); }
   .tidsplan-house-row{
     background: var(--blue-soft); font-family:'Fraunces', serif; font-weight:700; font-size: 14px;
     color: var(--ink); padding: 6px 10px; display:flex; align-items:center; gap:10px;
   }
+  .tidsplan-house-name-input{
+    flex:1; min-width:0; background:transparent; border:1px solid transparent; border-radius:5px;
+    font-family:'Fraunces', serif; font-weight:700; font-size:14px; color:var(--ink); padding:2px 6px;
+  }
+  .tidsplan-house-name-input:hover, .tidsplan-house-name-input:focus{ border-color: var(--line-soft); background: #fff; }
   .tidsplan-house-row button{
     background:none; border:1px solid var(--line-soft); color: var(--ink-soft); border-radius:6px;
     padding: 3px 8px; font-size: 11px; cursor:pointer; font-family:'Inter',sans-serif; font-weight:600;
@@ -278,9 +293,12 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.15);
   }
   .delivery-marker:hover{ opacity: 0.85; }
-  .tidsplan-stamline{
-    width: 2px; background: var(--danger); justify-self:center; pointer-events:none; z-index: 5;
-  }
+  .tidsplan-stam-svg{ position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:4; }
+  .tidsplan-stam-path{ fill:none; stroke-width:2; }
+  .tidsplan-stam-path.active{ stroke: var(--danger); }
+  .tidsplan-stam-path.approved{ stroke: var(--ink-soft); stroke-dasharray: 4 3; }
+  .tidsplan-stamline-handle{ justify-self:center; width:14px; cursor: ew-resize; z-index:5; border-radius:3px; }
+  .tidsplan-stamline-handle:hover{ background: rgba(178,59,59,0.15); }
   tr.moved-in{ background: rgba(76,122,94,0.10); }
   tr.moved-in .lgh-cell{ background: rgba(76,122,94,0.10); }
   tr.moved-in:hover{ background: rgba(76,122,94,0.16); }
@@ -424,6 +442,10 @@
   .eko-section h3{
     font-family:'Fraunces', serif; font-weight: 700; font-size: 17px; margin: 0 0 4px;
   }
+  .home-section-title{
+    font-family:'Fraunces', serif; font-weight: 700; font-size: 18px; margin: 28px 0 12px;
+  }
+  .home-section-title:first-child{ margin-top: 0; }
   .eko-section .eko-sub{
     font-size: 12.5px; color: var(--ink-soft); margin: 0 0 16px;
   }
@@ -1397,7 +1419,8 @@
       <input type="text" id="newProjectInput" placeholder="Nytt projektnamn, t.ex. Brf Skogslunden" maxlength="60">
       <button id="addProjectBtn">+ Lägg till projekt</button>
     </div>
-    <div class="home-grid" id="homeGrid"></div>
+    <div class="home-grid" id="homeTopGrid"></div>
+    <div id="homeStatusSections"></div>
   </div>
 
   <div id="projectScreen" style="display:none;">
@@ -1408,10 +1431,9 @@
 
     <div class="sub-tabs">
       <button class="sub-tab" data-view="checklista">Checklista</button>
-      <button class="sub-tab" data-view="ekonomi">Ekonomi</button>
       <button class="sub-tab" data-view="medlemsinfo">Medlemsinformation</button>
+      <button class="sub-tab" data-view="inflyttningsinfo">Inflyttningsinformation</button>
       <button class="sub-tab" data-view="intressenter">Intressenter</button>
-      <button class="sub-tab" data-view="material">Material</button>
       <button class="sub-tab" data-view="entreprenad">Entreprenad</button>
     </div>
 
@@ -1433,6 +1455,7 @@
             <col style="width:5.6%">
             <col style="width:5.6%">
             <col style="width:6%">
+            <col style="width:10%">
             <col style="width:2%">
           </colgroup>
           <thead>
@@ -1451,6 +1474,7 @@
               <th class="center">Fiber</th>
               <th class="center">Brevlåda</th>
               <th class="center">Tillval</th>
+              <th>Kommentar</th>
               <th></th>
             </tr>
           </thead>
@@ -1471,42 +1495,6 @@
           <span id="syncText">synkar…</span>
         </span>
       </div>
-    </div>
-
-    <div id="ekonomiSubview" style="display:none;">
-
-      <div class="eko-section">
-        <h3>SIE-filer från bokföringen</h3>
-        <p class="eko-sub">Ladda upp en SIE-fil per räkenskapsår. Intäkter och kostnader läses av automatiskt och summeras ihop till ett ackumulerat utfall sedan projektstart.</p>
-        <div class="eko-upload-row">
-          <input type="file" id="sieFileInput" accept=".se,.si,.sie,.txt" style="display:none;" multiple>
-          <button class="eko-upload-btn" id="sieUploadBtn">⇧ Ladda upp SIE-fil</button>
-          <span class="eko-upload-hint" id="sieUploadStatus"></span>
-        </div>
-        <div class="eko-file-list" id="sieFileList"></div>
-      </div>
-
-      <div class="eko-section">
-        <h3>Budget</h3>
-        <p class="eko-sub">Totalt budgeterade intäkter och kostnader för hela projektet.</p>
-        <div class="eko-budget-grid">
-          <div class="eko-field">
-            <label for="budgetIntakterInput">Budget intäkter (kr)</label>
-            <input type="text" id="budgetIntakterInput" placeholder="t.ex. 1650000">
-          </div>
-          <div class="eko-field">
-            <label for="budgetKostnaderInput">Budget kostnader (kr)</label>
-            <input type="text" id="budgetKostnaderInput" placeholder="t.ex. 1550000">
-          </div>
-        </div>
-      </div>
-
-      <div class="eko-section">
-        <h3>Utfall vs budget</h3>
-        <p class="eko-sub">Ackumulerat sedan projektstart.</p>
-        <div id="ekoCompareWrap"></div>
-      </div>
-
     </div>
 
     <div id="medlemsinfoSubview" style="display:none;">
@@ -1532,6 +1520,28 @@
       </div>
     </div>
 
+    <div id="inflyttningsinfoSubview" style="display:none;">
+      <div class="eko-section">
+        <h3>Inflyttningsinformation</h3>
+        <p class="eko-sub">Klicka på Besiktning eller Inflyttningsdatum för att fylla i detaljer - datumen följer sedan med till Checklistan automatiskt.</p>
+        <div class="table-scroll">
+          <table id="inflyttningsinfoTable">
+            <thead>
+              <tr>
+                <th style="text-align:left;">LGH</th>
+                <th style="text-align:left;">Adress</th>
+                <th style="text-align:left;">Projektnummer</th>
+                <th style="text-align:left;">Besiktning</th>
+                <th style="text-align:left;">Inflyttningsdatum</th>
+              </tr>
+            </thead>
+            <tbody id="inflyttningsinfoBody"></tbody>
+          </table>
+          <div id="inflyttningsinfoEmptyState" class="empty-state" style="display:none;">Inga lägenheter i det här projektet än.</div>
+        </div>
+      </div>
+    </div>
+
     <div id="intressenterSubview" style="display:none;">
       <div class="intr-toolbar">
         <input type="text" id="intrSearchP" placeholder="Sök namn, e-post, telefon, objekt…">
@@ -1546,56 +1556,11 @@
       <div class="intr-list" id="intrListP"></div>
     </div>
 
-    <div id="materialSubview" style="display:none;">
-      <div class="material-toolbar">
-        <input type="text" id="newRoomInput" placeholder="Nytt rum, t.ex. Kök" maxlength="40">
-        <button id="addRoomBtn">+ Lägg till rum</button>
-        <select id="materialUnitTypeFilter"><option value="">Välj lägenhetstyp (kvm)…</option></select>
-        <button id="bofaktabladUploadBtn">📄 Läs in rum från bofaktablad (PDF)</button>
-        <input type="file" id="bofaktabladFileInput" accept="application/pdf" style="display:none;">
-        <button id="createRumsbeskrivningBtn" class="material-pdf-btn">📄 Skapa rumsbeskrivning (PDF)</button>
-      </div>
-      <div id="bofaktabladUploadStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
-
-      <div class="sub-tabs" style="margin-bottom:16px;">
-        <button class="material-view-tab active" data-material-view="rum">Rum</button>
-        <button class="material-view-tab" data-material-view="bestallningslista">Beställningslista</button>
-        <button class="material-view-tab" data-material-view="leveransschema">Leveransschema</button>
-      </div>
-
-      <div id="materialRoomsView">
-        <div id="materialNoTypeState" class="empty-state" style="display:none;">Välj en lägenhetstyp (kvm) ovan för att se eller lägga till rum för den typen.</div>
-        <div id="materialRooms"></div>
-        <div id="materialEmptyState" class="empty-state" style="display:none;">Inga rum tillagda än för den här lägenhetstypen. Lägg till ett rum ovan, eller läs in från ett bofaktablad.</div>
-      </div>
-      <div id="materialOrderView" style="display:none;">
-        <div class="table-scroll">
-          <table>
-            <thead><tr>
-              <th>Produkt</th><th>Rum</th><th>Leverantör</th><th>Hustyp</th>
-              <th class="center">Mängd/enhet</th><th class="center">Antal enheter</th><th class="center">Totalt</th>
-              <th class="center">à-pris exkl</th><th class="center">à-pris inkl</th>
-              <th class="center">Summa exkl</th><th class="center">Summa inkl</th><th class="center">Beställd</th>
-            </tr></thead>
-            <tbody id="materialOrderBody"></tbody>
-          </table>
-        </div>
-        <div id="materialOrderEmptyState" class="empty-state" style="display:none;">Inga produkter tillagda än.</div>
-        <div id="materialOrderTotals" class="material-order-totals"></div>
-      </div>
-
-      <div id="materialDeliveryScheduleView" style="display:none;">
-        <div class="tidsplan-grid-wrap">
-          <div id="materialDeliveryScheduleGrid" class="tidsplan-grid"></div>
-        </div>
-        <div id="materialDeliveryScheduleEmptyState" class="empty-state" style="display:none;">Inga leveranser inlagda än. Sätt leveransdatum via "Leveranser"-knappen på en produkt i Rum-vyn.</div>
-      </div>
-    </div>
-
     <div id="entreprenadSubview" style="display:none;">
       <div class="sub-tabs" style="margin-bottom:16px;">
         <button class="entreprenad-sub-tab active" data-entreprenad-view="tidsplan">Tidsplan</button>
         <button class="entreprenad-sub-tab" data-entreprenad-view="byggmoten">Byggmöten</button>
+        <button class="entreprenad-sub-tab" data-entreprenad-view="material">Material</button>
       </div>
 
       <div id="tidsplanSubview" style="display:none;">
@@ -1606,10 +1571,12 @@
           <button id="tidsplanImportBtn">📄 Importera från Excel (.xlsx)</button>
           <input type="file" id="tidsplanImportInput" accept=".xlsx" style="display:none;">
           <button id="tidsplanStamBtn" class="material-pdf-btn" style="margin-left:0;">📍 Stäm av</button>
+          <button id="tidsplanApproveStamBtn" style="display:none;">✓ Godkänn avstämning</button>
           <button id="tidsplanRemoveStamBtn" style="display:none;">Ta bort avstämningslinje</button>
+          <button id="tidsplanPdfBtn" class="material-pdf-btn">📄 Skriv ut PDF</button>
         </div>
         <div id="tidsplanImportStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
-        <p id="tidsplanStamHint" class="eko-sub" style="display:none; color:var(--danger); font-weight:600;">Klicka på en veckorubrik i schemat nedan för att placera avstämningslinjen där.</p>
+        <p class="eko-sub" style="margin:0 0 10px;">"Stäm av" lägger en ny avstämning vid dagens datum. Dra i linjen vid en enskild rad för att visa var just den uppgiften faktiskt låg. Klicka "Godkänn avstämning" för att frysa den - då kan du lägga nästa avstämning senare.</p>
 
         <div class="material-room" style="margin-bottom:16px;">
           <div class="material-room-header">
@@ -1689,6 +1656,52 @@
           <button id="byggmoteDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort mötet</button>
         </div>
       </div>
+
+      <div id="materialSubview" style="display:none;">
+        <div class="material-toolbar">
+          <input type="text" id="newRoomInput" placeholder="Nytt rum, t.ex. Kök" maxlength="40">
+          <button id="addRoomBtn">+ Lägg till rum</button>
+          <select id="materialUnitTypeFilter"><option value="">Välj lägenhetstyp (kvm)…</option></select>
+          <button id="bofaktabladUploadBtn">📄 Läs in rum från bofaktablad (PDF)</button>
+          <input type="file" id="bofaktabladFileInput" accept="application/pdf" style="display:none;">
+          <button id="createRumsbeskrivningBtn" class="material-pdf-btn">📄 Skapa rumsbeskrivning (PDF)</button>
+        </div>
+        <div id="bofaktabladUploadStatus" class="contract-upload-status" style="margin-bottom:12px;"></div>
+
+        <div class="sub-tabs" style="margin-bottom:16px;">
+          <button class="material-view-tab active" data-material-view="rum">Rum</button>
+          <button class="material-view-tab" data-material-view="bestallningslista">Beställningslista</button>
+          <button class="material-view-tab" data-material-view="leveransschema">Leveransschema</button>
+        </div>
+
+        <div id="materialRoomsView">
+          <div id="materialNoTypeState" class="empty-state" style="display:none;">Välj en lägenhetstyp (kvm) ovan för att se eller lägga till rum för den typen.</div>
+          <div id="materialRooms"></div>
+          <div id="materialEmptyState" class="empty-state" style="display:none;">Inga rum tillagda än för den här lägenhetstypen. Lägg till ett rum ovan, eller läs in från ett bofaktablad.</div>
+        </div>
+        <div id="materialOrderView" style="display:none;">
+          <div class="table-scroll">
+            <table>
+              <thead><tr>
+                <th>Produkt</th><th>Rum</th><th>Leverantör</th><th>Hustyp</th>
+                <th class="center">Mängd/enhet</th><th class="center">Antal enheter</th><th class="center">Totalt</th>
+                <th class="center">à-pris exkl</th><th class="center">à-pris inkl</th>
+                <th class="center">Summa exkl</th><th class="center">Summa inkl</th><th class="center">Beställd</th>
+              </tr></thead>
+              <tbody id="materialOrderBody"></tbody>
+            </table>
+          </div>
+          <div id="materialOrderEmptyState" class="empty-state" style="display:none;">Inga produkter tillagda än.</div>
+          <div id="materialOrderTotals" class="material-order-totals"></div>
+        </div>
+
+        <div id="materialDeliveryScheduleView" style="display:none;">
+          <div class="tidsplan-grid-wrap">
+            <div id="materialDeliveryScheduleGrid" class="tidsplan-grid"></div>
+          </div>
+          <div id="materialDeliveryScheduleEmptyState" class="empty-state" style="display:none;">Inga leveranser inlagda än. Sätt leveransdatum via "Leveranser"-knappen på en produkt i Rum-vyn.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1748,6 +1761,70 @@
     <div class="modal-actions">
       <button id="tillvalCancelBtn">Avbryt</button>
       <button id="tillvalSaveBtn">Spara</button>
+    </div>
+  </div>
+</div>
+
+<div id="kommentarModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h3>Kommentar</h3>
+    <p class="modal-sub" id="kommentarModalSub">LGH —</p>
+    <textarea id="kommentarInput" rows="6" placeholder="Skriv en kommentar…"></textarea>
+    <div class="modal-actions">
+      <button id="kommentarCancelBtn">Avbryt</button>
+      <button id="kommentarSaveBtn">Spara</button>
+    </div>
+  </div>
+</div>
+
+<div id="besiktningModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h3>Besiktning</h3>
+    <p class="modal-sub" id="besiktningModalSub">LGH —</p>
+
+    <label class="field-label" for="besiktningDatumInput">Datum</label>
+    <input type="date" id="besiktningDatumInput">
+
+    <label class="field-label" style="margin-top:10px;">Att göra</label>
+    <div class="modal-checks">
+      <label><input type="checkbox" id="besiktningKontaktatKund"> Kontaktat kund</label>
+      <label><input type="checkbox" id="besiktningBokatBesiktningsman"> Bokat besiktning med besiktningsman</label>
+      <label><input type="checkbox" id="besiktningMeddelatEntreprenor"> Meddelat entreprenör</label>
+      <label><input type="checkbox" id="besiktningBokatStad"> Bokat städ</label>
+    </div>
+
+    <div class="modal-actions">
+      <button id="besiktningCancelBtn">Avbryt</button>
+      <button id="besiktningSaveBtn">Spara</button>
+    </div>
+  </div>
+</div>
+
+<div id="inflyttningPlanModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h3>Inflyttningsdatum</h3>
+    <p class="modal-sub" id="inflyttningPlanModalSub">LGH —</p>
+
+    <label class="field-label" for="inflyttningOnskatInput">Önskat datum från kund</label>
+    <input type="date" id="inflyttningOnskatInput">
+
+    <label class="field-label" for="inflyttningByggdatumInput" style="margin-top:10px;">Byggdatum</label>
+    <input type="date" id="inflyttningByggdatumInput">
+
+    <label class="field-label" for="inflyttningBekraftatInput" style="margin-top:10px;">Bekräftat byggdatum till kund</label>
+    <input type="date" id="inflyttningBekraftatInput">
+
+    <div class="contract-upload-row" style="margin-top:12px;">
+      <button type="button" id="upplatelseUploadBtn">📄 Läs in upplåtelse/överlåtelse (PDF)</button>
+      <input type="file" id="upplatelseFileInput" accept="application/pdf" style="display:none;">
+      <span id="upplatelseUploadStatus" class="contract-upload-status"></span>
+    </div>
+    <p class="eko-sub" id="upplatelseInfoText" style="display:none; margin:6px 0 0;"></p>
+    <button id="upplatelseClearBtn" style="display:none; margin-top:6px;">Ta bort inläst datum</button>
+
+    <div class="modal-actions">
+      <button id="inflyttningPlanCancelBtn">Avbryt</button>
+      <button id="inflyttningPlanSaveBtn">Spara</button>
     </div>
   </div>
 </div>

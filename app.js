@@ -272,7 +272,11 @@ function newApartment(fields){
     fiber: emptyCheck(),
     brevlada: emptyCheck(),
     tillval: emptyNote(),
-    upplatenKoncern: emptyCheck()
+    upplatenKoncern: emptyCheck(),
+    kommentar: fields.kommentar || '',
+    projektnummer: fields.projektnummer || '',
+    inflyttningPlan: { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' },
+    upplatelse: { date: '', by: '', at: '', typ: '' }
   };
 }
 
@@ -313,6 +317,21 @@ function normalizeApartment(apt){
   ['besiktning','inflyttning'].forEach(f => {
     if(!apt[f] || typeof apt[f] !== 'object') apt[f] = emptyDate();
   });
+  if(typeof apt.besiktning.kontaktatKund !== 'boolean') apt.besiktning.kontaktatKund = false;
+  if(typeof apt.besiktning.bokatBesiktningsman !== 'boolean') apt.besiktning.bokatBesiktningsman = false;
+  if(typeof apt.besiktning.meddelatEntreprenor !== 'boolean') apt.besiktning.meddelatEntreprenor = false;
+  if(typeof apt.besiktning.bokatStad !== 'boolean') apt.besiktning.bokatStad = false;
+  if(typeof apt.kommentar !== 'string') apt.kommentar = '';
+  if(typeof apt.projektnummer !== 'string') apt.projektnummer = '';
+  if(!apt.inflyttningPlan || typeof apt.inflyttningPlan !== 'object'){
+    apt.inflyttningPlan = { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' };
+  }
+  ['onskatDatumKund', 'byggdatum', 'bekraftatDatumKund'].forEach(f => {
+    if(typeof apt.inflyttningPlan[f] !== 'string') apt.inflyttningPlan[f] = '';
+  });
+  if(!apt.upplatelse || typeof apt.upplatelse !== 'object') apt.upplatelse = { date: '', by: '', at: '', typ: '' };
+  if(typeof apt.upplatelse.date !== 'string') apt.upplatelse.date = '';
+  if(typeof apt.upplatelse.typ !== 'string') apt.upplatelse.typ = '';
   if(!apt.tillval || typeof apt.tillval !== 'object') apt.tillval = emptyNote();
   if(typeof apt.tillval.note !== 'string') apt.tillval.note = '';
   if(typeof apt.tillval.invoicedCustomer !== 'boolean') apt.tillval.invoicedCustomer = false;
@@ -320,6 +339,21 @@ function normalizeApartment(apt){
   if(typeof apt.tillval.amount !== 'string') apt.tillval.amount = '';
   if(!apt.upplatenKoncern || typeof apt.upplatenKoncern !== 'object') apt.upplatenKoncern = emptyCheck();
   return apt;
+}
+
+// Vilket datum som ska gälla som "riktigt" inflyttningsdatum (apt.inflyttning.date,
+// samma fält som Checklistan/Kalendern redan läser): en inläst upplåtelse/
+// överlåtelse går alltid före allt annat, annars bekräftat datum till kund,
+// annars byggdatum, annars önskat datum från kund.
+function effectiveInflyttningDate(apt){
+  if(apt.upplatelse && apt.upplatelse.date) return apt.upplatelse.date;
+  const plan = apt.inflyttningPlan;
+  if(plan){
+    if(plan.bekraftatDatumKund) return plan.bekraftatDatumKund;
+    if(plan.byggdatum) return plan.byggdatum;
+    if(plan.onskatDatumKund) return plan.onskatDatumKund;
+  }
+  return (apt.inflyttning && apt.inflyttning.date) || '';
 }
 
 // ---------- Name ----------
@@ -434,37 +468,29 @@ async function loadProjectSummary(p){
   return summary;
 }
 
+// Ordning och rubriker för statusgrupperna i den delade Projektöversikten.
+const HOME_STATUS_GROUPS = [
+  { status: 'Pågående', heading: 'Pågående projekt' },
+  { status: 'Bygglov/projektering', heading: 'Bygg/projektering' },
+  { status: 'Kommande', heading: 'Kommande' },
+  { status: 'Avslutat', heading: 'Avslutat' }
+];
+
 async function renderHomeGrid(){
-  const grid = document.getElementById('homeGrid');
-  grid.innerHTML = '';
-
-  // Projekt i tidiga skeden (Kommande / Bygglov/projektering, satt via Ekonomi)
-  // är inte redo att visas för hela teamet än - bara Pågående/Avslutat syns i
-  // den delade Projektöversikten.
-  const visibleProjects = projects.filter(p => ['Pågående', 'Avslutat'].includes(p.status || 'Pågående'));
-
-  visibleProjects.forEach(p => {
-    const card = document.createElement('div');
-    card.className = 'home-card';
-    card.innerHTML =
-      '<div class="home-card-title">' + escapeHtml(p.name) + '</div>' +
-      '<div class="home-card-sub" id="sub-' + p.id + '">Laddar…</div>' +
-      '<div class="home-card-figures" id="fig-' + p.id + '"></div>';
-    card.onclick = () => openProject(p);
-    grid.appendChild(card);
-  });
+  const topGrid = document.getElementById('homeTopGrid');
+  topGrid.innerHTML = '';
 
   const calCard = document.createElement('div');
   calCard.className = 'home-card calendar-card';
   calCard.innerHTML = '<div class="home-card-icon">📅</div><div class="home-card-title">Kalender</div><div class="home-card-sub">Besiktningar &amp; inflyttningar, alla projekt</div>';
   calCard.onclick = () => openCalendarScreen();
-  grid.appendChild(calCard);
+  topGrid.appendChild(calCard);
 
   const intrCard = document.createElement('div');
   intrCard.className = 'home-card calendar-card';
   intrCard.innerHTML = '<div class="home-card-icon">📋</div><div class="home-card-title">Intresseanmälningar</div><div class="home-card-sub" id="intrHomeCardSub">Laddar…</div>';
   intrCard.onclick = () => openIntressenScreen();
-  grid.appendChild(intrCard);
+  topGrid.appendChild(intrCard);
 
   loadInterests().then(() => {
     const el = document.getElementById('intrHomeCardSub');
@@ -474,8 +500,37 @@ async function renderHomeGrid(){
     }
   });
 
+  const sectionsWrap = document.getElementById('homeStatusSections');
+  sectionsWrap.innerHTML = '';
+  const allVisibleProjects = [];
+
+  HOME_STATUS_GROUPS.forEach(({ status, heading }) => {
+    const group = projects.filter(p => (p.status || 'Pågående') === status);
+    if(!group.length) return;
+
+    const headingEl = document.createElement('h3');
+    headingEl.className = 'home-section-title';
+    headingEl.textContent = heading;
+    sectionsWrap.appendChild(headingEl);
+
+    const grid = document.createElement('div');
+    grid.className = 'home-grid';
+    group.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'home-card';
+      card.innerHTML =
+        '<div class="home-card-title">' + escapeHtml(p.name) + '</div>' +
+        '<div class="home-card-sub" id="sub-' + p.id + '">Laddar…</div>' +
+        '<div class="home-card-figures" id="fig-' + p.id + '"></div>';
+      card.onclick = () => openProject(p);
+      grid.appendChild(card);
+      allVisibleProjects.push(p);
+    });
+    sectionsWrap.appendChild(grid);
+  });
+
   // Fyll i sammanfattning per projekt asynkront utan att blockera renderingen
-  visibleProjects.forEach(async p => {
+  allVisibleProjects.forEach(async p => {
     const summary = await loadProjectSummary(p);
     const subEl = document.getElementById('sub-' + p.id);
     if(subEl) subEl.textContent = summary.lghText;
@@ -2377,15 +2432,13 @@ function setProjectSubView(view){
   projectSubView = view;
   document.querySelectorAll('.sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.view === view));
   document.getElementById('checklistaSubview').style.display = view === 'checklista' ? 'block' : 'none';
-  document.getElementById('ekonomiSubview').style.display = view === 'ekonomi' ? 'block' : 'none';
   document.getElementById('medlemsinfoSubview').style.display = view === 'medlemsinfo' ? 'block' : 'none';
+  document.getElementById('inflyttningsinfoSubview').style.display = view === 'inflyttningsinfo' ? 'block' : 'none';
   document.getElementById('intressenterSubview').style.display = view === 'intressenter' ? 'block' : 'none';
-  document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
   document.getElementById('entreprenadSubview').style.display = view === 'entreprenad' ? 'block' : 'none';
-  if(view === 'ekonomi') loadEkonomi(activeProjectId);
   if(view === 'medlemsinfo') renderMedlemsinfo();
+  if(view === 'inflyttningsinfo') renderInflyttningsinfo();
   if(view === 'intressenter') loadInterests().then(renderIntressenterTab);
-  if(view === 'material') loadMaterial(activeProjectId);
   if(view === 'entreprenad') setEntreprenadSubView(entreprenadSubView || 'tidsplan');
 }
 
@@ -2395,8 +2448,10 @@ function setEntreprenadSubView(view){
   document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
   document.getElementById('byggmoteListSubview').style.display = view === 'byggmoten' ? 'block' : 'none';
   document.getElementById('byggmoteFormSubview').style.display = 'none';
+  document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
   if(view === 'tidsplan') loadTidsplan(activeProjectId);
   if(view === 'byggmoten') loadByggmoten(activeProjectId);
+  if(view === 'material') loadMaterial(activeProjectId);
 }
 
 function openCalendarScreen(){
@@ -2666,6 +2721,60 @@ function renderMedlemsinfo(){
   });
 }
 
+function renderInflyttningsinfo(){
+  const body = document.getElementById('inflyttningsinfoBody');
+  const table = document.getElementById('inflyttningsinfoTable');
+  const empty = document.getElementById('inflyttningsinfoEmptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+
+    const lghTd = document.createElement('td');
+    lghTd.style.cssText = "text-align:left; font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--blue);";
+    lghTd.textContent = apt.lgh || '—';
+    tr.appendChild(lghTd);
+
+    const addressTd = document.createElement('td');
+    addressTd.style.textAlign = 'left';
+    addressTd.textContent = apt.address || '—';
+    tr.appendChild(addressTd);
+
+    tr.appendChild(makeEditableTextCell(apt, 'projektnummer', 'Projektnummer…'));
+
+    const besiktningTd = document.createElement('td');
+    besiktningTd.style.textAlign = 'left';
+    const besiktningSpan = document.createElement('span');
+    besiktningSpan.className = 'editable';
+    besiktningSpan.style.cursor = 'pointer';
+    besiktningSpan.textContent = apt.besiktning.date || '—';
+    besiktningSpan.onclick = () => openBesiktningModal(apt);
+    besiktningTd.appendChild(besiktningSpan);
+    tr.appendChild(besiktningTd);
+
+    const inflyttningTd = document.createElement('td');
+    inflyttningTd.style.textAlign = 'left';
+    const inflyttningSpan = document.createElement('span');
+    inflyttningSpan.className = 'editable';
+    inflyttningSpan.style.cursor = 'pointer';
+    const effDate = effectiveInflyttningDate(apt);
+    inflyttningSpan.textContent = effDate ? (effDate + (apt.upplatelse.date ? ' (upplåtelse/överlåtelse)' : '')) : '—';
+    inflyttningSpan.onclick = () => openInflyttningPlanModal(apt);
+    inflyttningTd.appendChild(inflyttningSpan);
+    tr.appendChild(inflyttningTd);
+
+    body.appendChild(tr);
+  });
+}
+
 function renderTable(){
   const table = document.getElementById('aptTable');
   const body = document.getElementById('aptBody');
@@ -2699,6 +2808,7 @@ function renderTable(){
     tr.appendChild(makeCheckCell(apt, 'fiber'));
     tr.appendChild(makeCheckCell(apt, 'brevlada'));
     tr.appendChild(makeTillvalCell(apt));
+    tr.appendChild(makeKommentarCell(apt));
 
     const actionsTd = document.createElement('td');
     actionsTd.className = 'row-actions';
@@ -2830,6 +2940,46 @@ function makeEditableTextCell(apt, field, placeholder){
   td.appendChild(span);
   return td;
 }
+
+// Kommentar visas alltid förkortad (ellipsis) i Checklistan - klick öppnar en
+// popup för att läsa hela texten eller ändra den, istället för att redigeras
+// inline som övriga fält.
+function makeKommentarCell(apt){
+  const td = document.createElement('td');
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.style.cursor = 'pointer';
+  span.style.color = apt.kommentar ? 'inherit' : 'var(--ink-soft)';
+  span.textContent = apt.kommentar ? apt.kommentar : 'Anteckning…';
+  span.onclick = () => openKommentarModal(apt);
+  td.appendChild(span);
+  return td;
+}
+
+let currentKommentarAptId = null;
+function openKommentarModal(apt){
+  currentKommentarAptId = apt.id;
+  document.getElementById('kommentarModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('kommentarInput').value = apt.kommentar || '';
+  document.getElementById('kommentarModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('kommentarInput').focus(), 0);
+}
+function closeKommentarModal(){
+  document.getElementById('kommentarModalOverlay').classList.remove('open');
+  currentKommentarAptId = null;
+}
+document.getElementById('kommentarCancelBtn').onclick = closeKommentarModal;
+document.getElementById('kommentarModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'kommentarModalOverlay') closeKommentarModal();
+});
+document.getElementById('kommentarSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentKommentarAptId);
+  if(!apt){ closeKommentarModal(); return; }
+  apt.kommentar = document.getElementById('kommentarInput').value.trim();
+  closeKommentarModal();
+  renderTable();
+  await persistApartments();
+};
 
 function makeEditableCell(apt, field, unit){
   const td = document.createElement('td');
@@ -3211,6 +3361,158 @@ document.getElementById('tillvalSaveBtn').onclick = async () => {
   await persistApartments();
 };
 
+// ---------- Besiktning (modal med checklista, öppnas från Inflyttningsinformation) ----------
+let currentBesiktningAptId = null;
+
+function openBesiktningModal(apt){
+  currentBesiktningAptId = apt.id;
+  document.getElementById('besiktningModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('besiktningDatumInput').value = apt.besiktning.date || '';
+  document.getElementById('besiktningKontaktatKund').checked = !!apt.besiktning.kontaktatKund;
+  document.getElementById('besiktningBokatBesiktningsman').checked = !!apt.besiktning.bokatBesiktningsman;
+  document.getElementById('besiktningMeddelatEntreprenor').checked = !!apt.besiktning.meddelatEntreprenor;
+  document.getElementById('besiktningBokatStad').checked = !!apt.besiktning.bokatStad;
+  document.getElementById('besiktningModalOverlay').classList.add('open');
+}
+function closeBesiktningModal(){
+  document.getElementById('besiktningModalOverlay').classList.remove('open');
+  currentBesiktningAptId = null;
+}
+document.getElementById('besiktningCancelBtn').onclick = closeBesiktningModal;
+document.getElementById('besiktningModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'besiktningModalOverlay') closeBesiktningModal();
+});
+document.getElementById('besiktningSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentBesiktningAptId);
+  if(!apt){ closeBesiktningModal(); return; }
+  const date = document.getElementById('besiktningDatumInput').value;
+  if(date && date !== apt.besiktning.date){
+    apt.besiktning.by = myName || '';
+    apt.besiktning.at = new Date().toISOString();
+  }
+  apt.besiktning.date = date;
+  apt.besiktning.kontaktatKund = document.getElementById('besiktningKontaktatKund').checked;
+  apt.besiktning.bokatBesiktningsman = document.getElementById('besiktningBokatBesiktningsman').checked;
+  apt.besiktning.meddelatEntreprenor = document.getElementById('besiktningMeddelatEntreprenor').checked;
+  apt.besiktning.bokatStad = document.getElementById('besiktningBokatStad').checked;
+  closeBesiktningModal();
+  renderTable();
+  if(document.getElementById('inflyttningsinfoSubview').style.display !== 'none') renderInflyttningsinfo();
+  await persistApartments();
+};
+
+// ---------- Inflyttningsdatum (modal med önskat/bygg/bekräftat datum + upplåtelse/överlåtelse) ----------
+let currentInflyttningAptId = null;
+
+function updateUpplatelseInfoDisplay(apt){
+  const infoEl = document.getElementById('upplatelseInfoText');
+  const clearBtn = document.getElementById('upplatelseClearBtn');
+  if(apt.upplatelse && apt.upplatelse.date){
+    infoEl.textContent = 'Datum enligt ' + (apt.upplatelse.typ || 'upplåtelse/överlåtelse') + ': ' + apt.upplatelse.date + ' - detta går före allt annat i checklistan.';
+    infoEl.style.display = 'block';
+    clearBtn.style.display = 'inline-block';
+  } else {
+    infoEl.style.display = 'none';
+    clearBtn.style.display = 'none';
+  }
+}
+
+function openInflyttningPlanModal(apt){
+  currentInflyttningAptId = apt.id;
+  document.getElementById('inflyttningPlanModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('inflyttningOnskatInput').value = apt.inflyttningPlan.onskatDatumKund || '';
+  document.getElementById('inflyttningByggdatumInput').value = apt.inflyttningPlan.byggdatum || '';
+  document.getElementById('inflyttningBekraftatInput').value = apt.inflyttningPlan.bekraftatDatumKund || '';
+  setUpplatelseStatus('', '');
+  updateUpplatelseInfoDisplay(apt);
+  document.getElementById('inflyttningPlanModalOverlay').classList.add('open');
+}
+function closeInflyttningPlanModal(){
+  document.getElementById('inflyttningPlanModalOverlay').classList.remove('open');
+  currentInflyttningAptId = null;
+}
+document.getElementById('inflyttningPlanCancelBtn').onclick = closeInflyttningPlanModal;
+document.getElementById('inflyttningPlanModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'inflyttningPlanModalOverlay') closeInflyttningPlanModal();
+});
+document.getElementById('upplatelseClearBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt) return;
+  apt.upplatelse = { date: '', by: '', at: '', typ: '' };
+  const newDate = effectiveInflyttningDate(apt);
+  if(newDate !== apt.inflyttning.date){
+    apt.inflyttning.date = newDate;
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+  }
+  updateUpplatelseInfoDisplay(apt);
+  renderTable();
+  renderInflyttningsinfo();
+  await persistApartments();
+};
+document.getElementById('inflyttningPlanSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt){ closeInflyttningPlanModal(); return; }
+  apt.inflyttningPlan.onskatDatumKund = document.getElementById('inflyttningOnskatInput').value;
+  apt.inflyttningPlan.byggdatum = document.getElementById('inflyttningByggdatumInput').value;
+  apt.inflyttningPlan.bekraftatDatumKund = document.getElementById('inflyttningBekraftatInput').value;
+  const newDate = effectiveInflyttningDate(apt);
+  if(newDate && newDate !== apt.inflyttning.date){
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+  }
+  apt.inflyttning.date = newDate;
+  closeInflyttningPlanModal();
+  renderTable();
+  renderInflyttningsinfo();
+  await persistApartments();
+};
+
+function setUpplatelseStatus(msg, kind){
+  const el = document.getElementById('upplatelseUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('upplatelseUploadBtn').onclick = () => {
+  document.getElementById('upplatelseFileInput').click();
+};
+document.getElementById('upplatelseFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setUpplatelseStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('upplatelseUploadBtn');
+  btn.disabled = true;
+  setUpplatelseStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-upplatelse', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.datum) throw new Error('Kunde inte hitta ett datum i dokumentet.');
+    apt.upplatelse = { date: data.datum, by: myName || '', at: new Date().toISOString(), typ: data.dokumenttyp || '' };
+    const newDate = effectiveInflyttningDate(apt);
+    apt.inflyttning.date = newDate;
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+    setUpplatelseStatus('Datum inläst: ' + data.datum, 'ok');
+    updateUpplatelseInfoDisplay(apt);
+    renderTable();
+    renderInflyttningsinfo();
+    await persistApartments();
+  }catch(err){
+    setUpplatelseStatus('Kunde inte läsa dokumentet: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function isMovedIn(apt){ return !!(apt.inflyttning && apt.inflyttning.date && apt.inflyttning.date <= todayStr()); }
@@ -3252,306 +3554,7 @@ function ensureAddRow(){
 }
 
 
-// ---------- Ekonomi ----------
-function ekonomiKey(projectId){ return 'ekonomi:' + projectId; }
-
-function emptyEkonomi(){
-  return { budget: { intakter: '', kostnader: '' }, sieFiles: [] };
-}
-
-let ekonomiData = emptyEkonomi();
-let ekonomiSaving = false;
-
-async function loadEkonomi(projectId){
-  if(!projectId) return;
-  try{
-    const res = await window.storage.get(ekonomiKey(projectId), true);
-    ekonomiData = (res && res.value) ? JSON.parse(res.value) : emptyEkonomi();
-  }catch(e){
-    ekonomiData = emptyEkonomi();
-  }
-  if(!ekonomiData.budget) ekonomiData.budget = { intakter: '', kostnader: '' };
-  if(!Array.isArray(ekonomiData.sieFiles)) ekonomiData.sieFiles = [];
-  renderEkonomi();
-}
-
-async function persistEkonomi(){
-  ekonomiSaving = true;
-  try{
-    await withRetry(() => window.storage.set(ekonomiKey(activeProjectId), JSON.stringify(ekonomiData), true));
-    clearDebugError();
-  }catch(e){
-    showDebugError('Kunde inte spara ekonomidata', e, () => persistEkonomi());
-    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
-  }
-  ekonomiSaving = false;
-}
-
-// Enkel SIE4-tolkning: läser #RES-rader och summerar intäkter (konto 3xxx) och
-// kostnader (konto 4xxx-8xxx) för innevarande räkenskapsår (årsnummer 0).
-// Filen avkodas som PC8/CP437 enligt SIE-standarden (se decodeCp437 ovan).
-function parseSieText(text){
-  const lines = text.split(/\r\n|\r|\n/);
-  let companyName = '';
-  let periodLabel = '';
-  let intakter = 0;
-  let kostnader = 0;
-  let foundViaRes = false;
-  let ubIntakter = 0;
-  let ubKostnader = 0;
-  let foundViaUb = false;
-
-  function tokenize(line){
-    const tokens = [];
-    const re = /"([^"]*)"|(\S+)/g;
-    let m;
-    while((m = re.exec(line)) !== null){
-      tokens.push(m[1] !== undefined ? m[1] : m[2]);
-    }
-    return tokens;
-  }
-
-  lines.forEach(line => {
-    const trimmed = line.trim();
-    if(!trimmed) return;
-
-    if(trimmed.startsWith('#FNAMN')){
-      const tokens = tokenize(trimmed);
-      companyName = tokens[1] || '';
-    } else if(trimmed.startsWith('#RAR')){
-      const tokens = tokenize(trimmed);
-      if(tokens[1] === '0'){
-        const start = tokens[2] || '';
-        const end = tokens[3] || '';
-        periodLabel = (start.slice(0,4)) + (end && end.slice(0,4) !== start.slice(0,4) ? '–' + end.slice(0,4) : '');
-      }
-    } else if(trimmed.startsWith('#RES')){
-      const tokens = tokenize(trimmed);
-      const yearNr = tokens[1];
-      const konto = tokens[2];
-      const belopp = parseFloat((tokens[3] || '0').replace(',', '.'));
-      if(yearNr === '0' && konto && !isNaN(belopp)){
-        const firstDigit = konto.charAt(0);
-        if(firstDigit === '3'){
-          intakter += -belopp; // intäktskonton är normalt kreditsaldo (negativt i SIE)
-          foundViaRes = true;
-        } else if(['4','5','6','7','8'].includes(firstDigit)){
-          kostnader += belopp;
-          foundViaRes = true;
-        }
-      }
-    } else if(trimmed.startsWith('#UB')){
-      // Reserv om filen saknar #RES: använd saldot på resultatkonton (3xxx-8xxx) istället.
-      const tokens = tokenize(trimmed);
-      const yearNr = tokens[1];
-      const konto = tokens[2];
-      const belopp = parseFloat((tokens[3] || '0').replace(',', '.'));
-      if(yearNr === '0' && konto && !isNaN(belopp)){
-        const firstDigit = konto.charAt(0);
-        if(firstDigit === '3'){
-          ubIntakter += -belopp;
-          foundViaUb = true;
-        } else if(['4','5','6','7','8'].includes(firstDigit)){
-          ubKostnader += belopp;
-          foundViaUb = true;
-        }
-      }
-    }
-  });
-
-  if(!foundViaRes && foundViaUb){
-    intakter = ubIntakter;
-    kostnader = ubKostnader;
-  }
-
-  if(!foundViaRes && !foundViaUb){
-    throw new Error(
-      'Hittade inga resultatposter (varken #RES eller #UB på konto 3xxx–8xxx) för innevarande år i filen. ' +
-      'Om projektet fortfarande är under uppförande kan det bero på att alla kostnader hittills ligger kapitaliserade ' +
-      'på balanskonton (t.ex. "Pågående nyanläggningar") istället för bokförda som resultatposter — det är i så fall ' +
-      'korrekt att inget utfall finns att visa ännu.'
-    );
-  }
-
-  return { companyName, periodLabel, intakter, kostnader };
-}
-
-// SIE-standarden anger PC8 (CP437, den gamla DOS-kodningen) som teckenkodning.
-// Webbläsare saknar inbyggt stöd för CP437 i TextDecoder, så vi avkodar själva.
-// Tabellen nedan täcker byte 128–255 (0x80–0xFF) i CP437-ordning.
-const CP437_HIGH = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00A0';
-
-function decodeCp437(arrayBuffer){
-  const bytes = new Uint8Array(arrayBuffer);
-  let out = '';
-  for(let i = 0; i < bytes.length; i++){
-    const b = bytes[i];
-    out += b < 128 ? String.fromCharCode(b) : CP437_HIGH[b - 128];
-  }
-  return out;
-}
-
-function readFileWithEncoding(file){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try{
-        resolve(decodeCp437(reader.result));
-      }catch(e){ reject(e); }
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-document.getElementById('sieUploadBtn').onclick = () => {
-  document.getElementById('sieFileInput').click();
-};
-
-document.getElementById('sieFileInput').addEventListener('change', async (e) => {
-  const files = Array.from(e.target.files || []);
-  if(!files.length) return;
-  if(!myName){ showToast('Ange ditt namn först'); e.target.value = ''; return; }
-
-  const statusEl = document.getElementById('sieUploadStatus');
-  let okCount = 0, failCount = 0;
-
-  for(const file of files){
-    statusEl.textContent = 'Läser ' + file.name + '…';
-    try{
-      const text = await readFileWithEncoding(file);
-      const parsed = parseSieText(text);
-      ekonomiData.sieFiles.push({
-        id: uid(),
-        filename: file.name,
-        companyName: parsed.companyName,
-        periodLabel: parsed.periodLabel,
-        intakter: parsed.intakter,
-        kostnader: parsed.kostnader,
-        uploadedBy: myName,
-        uploadedAt: new Date().toISOString()
-      });
-      okCount++;
-    }catch(err){
-      failCount++;
-      showDebugError('Kunde inte läsa SIE-filen "' + file.name + '"', err);
-    }
-  }
-
-  statusEl.textContent = okCount ? okCount + ' fil(er) inlästa' + (failCount ? ', ' + failCount + ' misslyckades' : '') : 'Inläsning misslyckades';
-  e.target.value = '';
-  renderEkonomi();
-  await persistEkonomi();
-});
-
-async function removeSieFile(id){
-  ekonomiData.sieFiles = ekonomiData.sieFiles.filter(f => f.id !== id);
-  renderEkonomi();
-  await persistEkonomi();
-}
-
-document.getElementById('budgetIntakterInput').addEventListener('blur', async (e) => {
-  ekonomiData.budget.intakter = e.target.value.replace(/[^0-9]/g, '').trim();
-  renderEkonomi();
-  await persistEkonomi();
-});
-document.getElementById('budgetKostnaderInput').addEventListener('blur', async (e) => {
-  ekonomiData.budget.kostnader = e.target.value.replace(/[^0-9]/g, '').trim();
-  renderEkonomi();
-  await persistEkonomi();
-});
-
-function renderEkonomi(){
-  // Filist
-  const listEl = document.getElementById('sieFileList');
-  listEl.innerHTML = '';
-  if(ekonomiData.sieFiles.length === 0){
-    listEl.innerHTML = '<div class="eko-empty">Inga SIE-filer uppladdade ännu.</div>';
-  } else {
-    ekonomiData.sieFiles.forEach(f => {
-      const row = document.createElement('div');
-      row.className = 'eko-file-row';
-      row.innerHTML =
-        '<div class="eko-file-info">' +
-          '<span class="eko-file-name">' + escapeHtml(f.filename) + (f.periodLabel ? ' · ' + escapeHtml(f.periodLabel) : '') + '</span>' +
-          '<span class="eko-file-meta">Uppladdad av ' + escapeHtml(f.uploadedBy || '—') + ' · ' + timeAgo(f.uploadedAt) + '</span>' +
-        '</div>' +
-        '<div class="eko-file-figures">' +
-          '<span>Int. <strong>' + formatNumberSv(Math.round(f.intakter)) + ' kr</strong></span>' +
-          '<span>Kostn. <strong>' + formatNumberSv(Math.round(f.kostnader)) + ' kr</strong></span>' +
-        '</div>';
-      const rmBtn = document.createElement('button');
-      rmBtn.className = 'eko-remove-file';
-      rmBtn.textContent = '✕';
-      rmBtn.title = 'Ta bort fil';
-      rmBtn.onclick = () => removeSieFile(f.id);
-      row.appendChild(rmBtn);
-      listEl.appendChild(row);
-    });
-  }
-
-  // Budgetfält (fyll bara i om användaren inte just nu skriver i dem)
-  const intakterInput = document.getElementById('budgetIntakterInput');
-  const kostnaderInput = document.getElementById('budgetKostnaderInput');
-  if(document.activeElement !== intakterInput) intakterInput.value = ekonomiData.budget.intakter || '';
-  if(document.activeElement !== kostnaderInput) kostnaderInput.value = ekonomiData.budget.kostnader || '';
-
-  // Jämförelse
-  const utfallIntakter = ekonomiData.sieFiles.reduce((s, f) => s + (f.intakter || 0), 0);
-  const utfallKostnader = ekonomiData.sieFiles.reduce((s, f) => s + (f.kostnader || 0), 0);
-  const utfallResultat = utfallIntakter - utfallKostnader;
-
-  const budgetIntakter = parseInt(ekonomiData.budget.intakter || '0', 10) || 0;
-  const budgetKostnader = parseInt(ekonomiData.budget.kostnader || '0', 10) || 0;
-  const budgetResultat = budgetIntakter - budgetKostnader;
-
-  function diffCell(utfall, budget, higherIsBetter){
-    const diff = utfall - budget;
-    const good = higherIsBetter ? diff >= 0 : diff <= 0;
-    const sign = diff > 0 ? '+' : '';
-    return '<span class="' + (diff === 0 ? '' : (good ? 'eko-diff-positive' : 'eko-diff-negative')) + '">' +
-      sign + formatNumberSv(Math.round(diff)) + ' kr</span>';
-  }
-
-  function progressBar(utfall, budget){
-    if(!budget) return '';
-    const pct = Math.min(100, Math.max(0, Math.round((utfall / budget) * 100)));
-    return '<div class="eko-progress-track"><div class="eko-progress-fill" style="width:' + pct + '%"></div></div>' +
-      '<div style="font-size:10.5px; color:var(--ink-soft); font-family:\'JetBrains Mono\',monospace; margin-top:2px;">' + pct + '% av budget</div>';
-  }
-
-  const wrap = document.getElementById('ekoCompareWrap');
-  if(ekonomiData.sieFiles.length === 0 && !budgetIntakter && !budgetKostnader){
-    wrap.innerHTML = '<div class="eko-empty">Ladda upp minst en SIE-fil och/eller fyll i en budget för att se jämförelsen.</div>';
-    return;
-  }
-
-  wrap.innerHTML =
-    '<table class="eko-compare-table">' +
-      '<thead><tr><th>Post</th><th>Utfall</th><th>Budget</th><th>Avvikelse</th></tr></thead>' +
-      '<tbody>' +
-        '<tr>' +
-          '<td>Intäkter</td>' +
-          '<td>' + formatNumberSv(Math.round(utfallIntakter)) + ' kr' + progressBar(utfallIntakter, budgetIntakter) + '</td>' +
-          '<td>' + (budgetIntakter ? formatNumberSv(budgetIntakter) + ' kr' : '—') + '</td>' +
-          '<td>' + (budgetIntakter ? diffCell(utfallIntakter, budgetIntakter, true) : '—') + '</td>' +
-        '</tr>' +
-        '<tr>' +
-          '<td>Kostnader</td>' +
-          '<td>' + formatNumberSv(Math.round(utfallKostnader)) + ' kr' + progressBar(utfallKostnader, budgetKostnader) + '</td>' +
-          '<td>' + (budgetKostnader ? formatNumberSv(budgetKostnader) + ' kr' : '—') + '</td>' +
-          '<td>' + (budgetKostnader ? diffCell(utfallKostnader, budgetKostnader, false) : '—') + '</td>' +
-        '</tr>' +
-        '<tr class="eko-row-resultat">' +
-          '<td>Resultat</td>' +
-          '<td>' + formatNumberSv(Math.round(utfallResultat)) + ' kr</td>' +
-          '<td>' + ((budgetIntakter || budgetKostnader) ? formatNumberSv(budgetResultat) + ' kr' : '—') + '</td>' +
-          '<td>' + ((budgetIntakter || budgetKostnader) ? diffCell(utfallResultat, budgetResultat, true) : '—') + '</td>' +
-        '</tr>' +
-      '</tbody>' +
-    '</table>';
-}
-
+// (Projekt-nivans Ekonomi-flik, SIE-import/budgetjamforelse mot budget, borttagen.)
 // ---------- Intresseanmälningar ----------
 const INTR_STORAGE_KEY = 'intresseanmalningar-v1';
 const STATUS_KEYS = ['Ny','Kontaktad','Ingen kontakt','Visning bokad','Visning genomförd','Tackat ja','Tackat nej'];
@@ -4859,11 +4862,32 @@ document.getElementById('createRumsbeskrivningBtn').onclick = () => {
   doc.save('Rumsbeskrivning' + fileNamePart + '.pdf');
 };
 
-// ---------- Tidsplan (Gantt-schema) ----------
+// ---------- Tidsplan (Gantt-schema, dagnivå) ----------
 function tidsplanKey(projectId){ return 'tidsplan:' + projectId; }
+const TIDSPLAN_WEEKDAY_LABELS = ['Mån', 'Tis', 'Ons', 'Tors', 'Fre', 'Lör', 'Sön'];
+function mondayOfDate(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayNr = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dayNr);
+  return dateToLocalIso(d);
+}
+function addDaysIso(dateStr, days){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return dateToLocalIso(d);
+}
+function isoWeekMonday(year, week){
+  const jan4 = new Date(year, 0, 4);
+  const dayNr = (jan4.getDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setDate(jan4.getDate() - dayNr);
+  const target = new Date(week1Monday);
+  target.setDate(week1Monday.getDate() + (week - 1) * 7);
+  return dateToLocalIso(target);
+}
 function emptyTidsplan(){
   return {
-    weeks: [],
+    weeks: [], // ISO-datum (måndagen) för varje vecka som visas
     houses: [],
     legend: [
       { task: 'VVS – grovinstallation', ansvarig: 'VVS', color: '#5B9BD5' },
@@ -4875,7 +4899,7 @@ function emptyTidsplan(){
       { task: 'Gipsning tak / inklädnader', ansvarig: 'Snickare', color: '#F4B183' },
       { task: 'Kontroll före nästa skede', ansvarig: 'PL', color: '#8064A2' }
     ],
-    avstamningslinje: { weekIndex: null }
+    avstamningar: [] // { id, baseDayIndex, approved, rowOverrides: { [rowId]: dayIndex } }
   };
 }
 function emptyTidsplanRow(){
@@ -4883,7 +4907,7 @@ function emptyTidsplanRow(){
 }
 
 let tidsplanData = emptyTidsplan();
-let tidsplanStamMode = false;
+let tidsplanTaskRowRefs = [];
 
 async function loadTidsplan(projectId){
   if(!projectId) return;
@@ -4896,7 +4920,37 @@ async function loadTidsplan(projectId){
   if(!Array.isArray(tidsplanData.weeks)) tidsplanData.weeks = [];
   if(!Array.isArray(tidsplanData.houses)) tidsplanData.houses = [];
   if(!Array.isArray(tidsplanData.legend)) tidsplanData.legend = emptyTidsplan().legend;
-  if(!tidsplanData.avstamningslinje || typeof tidsplanData.avstamningslinje !== 'object') tidsplanData.avstamningslinje = { weekIndex: null };
+
+  // Migrering: äldre data hade veckor som fri text ("v.3") och stapelindex på
+  // veckonivå. Nu är varje vecka ett riktigt datum (måndagen) och index räknas
+  // per dag, så gamla veckor/staplar "expanderas" till att fylla hela veckan -
+  // användaren kan sedan själv justera datumen till vad de faktiskt var.
+  const looksLikeDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  let weeksMigrated = false;
+  if(tidsplanData.weeks.length && !tidsplanData.weeks.every(looksLikeDate)){
+    const startMonday = mondayOfDate(dateToLocalIso(new Date()));
+    tidsplanData.weeks = tidsplanData.weeks.map((_, i) => addDaysIso(startMonday, i * 7));
+    weeksMigrated = true;
+  }
+
+  if(!Array.isArray(tidsplanData.avstamningar)) tidsplanData.avstamningar = [];
+  // Migrering: äldre data hade en enda global avstämningslinje (vecko- eller
+  // dagbaserad), inte flera avstämningar med egna radavvikelser.
+  if(tidsplanData.avstamningslinje){
+    const oldDayIndex = tidsplanData.avstamningslinje.dayIndex;
+    const oldWeekIndex = tidsplanData.avstamningslinje.weekIndex;
+    const migratedDayIndex = (typeof oldDayIndex === 'number') ? oldDayIndex : (typeof oldWeekIndex === 'number' ? oldWeekIndex * 7 : null);
+    if(migratedDayIndex !== null){
+      tidsplanData.avstamningar.push({ id: uid(), baseDayIndex: migratedDayIndex, approved: false, rowOverrides: {} });
+    }
+    delete tidsplanData.avstamningslinje;
+  }
+  tidsplanData.avstamningar.forEach(cp => {
+    if(typeof cp.baseDayIndex !== 'number') cp.baseDayIndex = 0;
+    if(typeof cp.approved !== 'boolean') cp.approved = false;
+    if(!cp.rowOverrides || typeof cp.rowOverrides !== 'object') cp.rowOverrides = {};
+  });
+
   tidsplanData.houses.forEach(h => {
     if(!Array.isArray(h.rows)) h.rows = [];
     h.rows.forEach(r => {
@@ -4906,9 +4960,12 @@ async function loadTidsplan(projectId){
       if(typeof r.comment !== 'string') r.comment = '';
       if(typeof r.startIndex !== 'number') r.startIndex = null;
       if(typeof r.endIndex !== 'number') r.endIndex = null;
+      if(weeksMigrated && r.startIndex !== null && r.endIndex !== null){
+        r.startIndex = r.startIndex * 7;
+        r.endIndex = r.endIndex * 7 + 6;
+      }
     });
   });
-  tidsplanStamMode = false;
   renderTidsplan();
 }
 
@@ -4982,15 +5039,8 @@ document.getElementById('newHouseInput').addEventListener('keydown', e => {
 
 document.getElementById('addWeekBtn').onclick = async () => {
   const last = tidsplanData.weeks[tidsplanData.weeks.length - 1];
-  let nextLabel = 'v.1';
-  if(last){
-    const m = last.match(/^v\.(\d+)$/i);
-    if(m){
-      const n = parseInt(m[1], 10);
-      nextLabel = 'v.' + (n >= 52 ? 1 : n + 1);
-    }
-  }
-  tidsplanData.weeks.push(nextLabel);
+  const nextMonday = last ? addDaysIso(last, 7) : mondayOfDate(dateToLocalIso(new Date()));
+  tidsplanData.weeks.push(nextMonday);
   renderTidsplan();
   await persistTidsplan();
 };
@@ -5018,25 +5068,37 @@ async function addTidsplanRow(house){
   await persistTidsplan();
 }
 
-// ---------- Avstämningslinje ----------
-document.getElementById('tidsplanStamBtn').onclick = () => {
-  tidsplanStamMode = !tidsplanStamMode;
-  document.getElementById('tidsplanStamHint').style.display = tidsplanStamMode ? 'block' : 'none';
+// ---------- Avstämningslinje (dras fritt bland raderna, precis som staplarna) ----------
+document.getElementById('tidsplanStamBtn').onclick = async () => {
+  if(!tidsplanData.weeks.length){ showToast('Lägg till minst en vecka först'); return; }
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(activeStam && !activeStam.approved){
+    showToast('Godkänn eller ta bort den aktiva avstämningen innan du lägger en ny.');
+    return;
+  }
+  const firstMonday = tidsplanData.weeks[0];
+  const todayIso = dateToLocalIso(new Date());
+  const diffDays = Math.round((new Date(todayIso + 'T00:00:00') - new Date(firstMonday + 'T00:00:00')) / 86400000);
+  const N = tidsplanData.weeks.length * 7;
+  const baseDayIndex = Math.max(0, Math.min(N - 1, diffDays));
+  tidsplanData.avstamningar.push({ id: uid(), baseDayIndex, approved: false, rowOverrides: {} });
   renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('tidsplanApproveStamBtn').onclick = async () => {
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(!activeStam || activeStam.approved) return;
+  activeStam.approved = true;
+  renderTidsplan();
+  await persistTidsplan();
 };
 document.getElementById('tidsplanRemoveStamBtn').onclick = async () => {
-  tidsplanData.avstamningslinje.weekIndex = null;
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(!activeStam || activeStam.approved) return;
+  tidsplanData.avstamningar.pop();
   renderTidsplan();
   await persistTidsplan();
 };
-
-async function placeTidsplanStamline(weekIndex){
-  tidsplanData.avstamningslinje.weekIndex = weekIndex;
-  tidsplanStamMode = false;
-  document.getElementById('tidsplanStamHint').style.display = 'none';
-  renderTidsplan();
-  await persistTidsplan();
-}
 
 // ---------- Rad-redigering (modal) ----------
 let tidsplanEditingHouseId = null;
@@ -5100,13 +5162,16 @@ function renderTidsplan(){
   if(tidsplanData.houses.length === 0){
     wrap.style.display = 'none';
     empty.style.display = 'block';
+    document.getElementById('tidsplanApproveStamBtn').style.display = 'none';
+    document.getElementById('tidsplanRemoveStamBtn').style.display = 'none';
     return;
   }
   wrap.style.display = 'block';
   empty.style.display = 'none';
+  tidsplanTaskRowRefs = [];
 
-  const N = tidsplanData.weeks.length;
-  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(34px, 1fr))';
+  const N = tidsplanData.weeks.length * 7;
+  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(28px, 1fr))';
 
   let rowCounter = 1;
 
@@ -5116,29 +5181,57 @@ function renderTidsplan(){
     grid.appendChild(el);
   }
 
-  // Header-rad: hörncell + veckor
+  // Header-rad 1+2: hörncell (spänner båda) + vecka (v.NN + datum) + veckodag/datum per dag
   const corner = document.createElement('div');
   corner.className = 'tidsplan-corner';
   place(corner, 1, rowCounter);
-  tidsplanData.weeks.forEach((w, i) => {
+  corner.style.gridRow = '1 / 3';
+
+  tidsplanData.weeks.forEach((monday, wi) => {
+    const info = isoWeekInfo(monday);
     const wh = document.createElement('div');
-    wh.className = 'tidsplan-week-header' + (tidsplanStamMode ? ' stam-pickable' : '');
-    wh.textContent = w;
-    if(tidsplanStamMode){
-      wh.title = 'Klicka för att placera avstämningslinjen här';
-      wh.onclick = () => placeTidsplanStamline(i);
+    wh.className = 'tidsplan-week-header';
+    const label = document.createElement('span');
+    label.textContent = 'v.' + info.week;
+    wh.appendChild(label);
+    const dateInput = document.createElement('input');
+    dateInput.type = 'date';
+    dateInput.className = 'tidsplan-week-date-input';
+    dateInput.value = monday;
+    dateInput.title = 'Måndagen den här veckan börjar på';
+    dateInput.onchange = async () => {
+      tidsplanData.weeks[wi] = mondayOfDate(dateInput.value || monday);
+      renderTidsplan();
+      await persistTidsplan();
+    };
+    wh.appendChild(dateInput);
+    place(wh, wi * 7 + 2, 1, 7);
+
+    for(let d = 0; d < 7; d++){
+      const dateStr = addDaysIso(monday, d);
+      const dh = document.createElement('div');
+      dh.className = 'tidsplan-day-header';
+      dh.innerHTML =
+        '<span class="tidsplan-day-name">' + TIDSPLAN_WEEKDAY_LABELS[d] + '</span>' +
+        '<span class="tidsplan-day-num">' + parseInt(dateStr.slice(8, 10), 10) + '</span>';
+      place(dh, wi * 7 + d + 2, 2);
     }
-    place(wh, i + 2, rowCounter);
   });
-  rowCounter++;
+  rowCounter = 3;
 
   tidsplanData.houses.forEach((house, houseIdx) => {
     const houseRow = document.createElement('div');
     houseRow.className = 'tidsplan-house-row';
-    const nameSpan = document.createElement('span');
-    nameSpan.style.flex = '1';
-    nameSpan.textContent = house.name;
-    houseRow.appendChild(nameSpan);
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'tidsplan-house-name-input';
+    nameInput.value = house.name;
+    nameInput.onchange = async () => {
+      house.name = nameInput.value.trim() || house.name;
+      renderTidsplan();
+      await persistTidsplan();
+    };
+    houseRow.appendChild(nameInput);
     const upBtn = document.createElement('button');
     upBtn.textContent = '▲';
     upBtn.title = 'Flytta upp';
@@ -5172,6 +5265,7 @@ function renderTidsplan(){
         (row.ansvarig ? '<span class="task-ansvarig">' + escapeHtml(row.ansvarig) + '</span>' : '');
       label.onclick = () => openTidsplanRowModal(house, row);
       place(label, 1, thisRowNum);
+      tidsplanTaskRowRefs.push({ rowId: row.id, gridRow: thisRowNum, labelEl: label, hasBar: row.startIndex !== null && row.endIndex !== null });
 
       if(row.startIndex === null || row.endIndex === null){
         for(let i = 0; i < N; i++){
@@ -5204,23 +5298,106 @@ function renderTidsplan(){
     });
   });
 
-  // Avstämningslinje
-  if(tidsplanData.avstamningslinje.weekIndex !== null && N > 0){
-    const line = document.createElement('div');
-    line.className = 'tidsplan-stamline';
-    place(line, tidsplanData.avstamningslinje.weekIndex + 2, 1, 1);
-    line.style.gridRow = '1 / ' + rowCounter;
-    document.getElementById('tidsplanRemoveStamBtn').style.display = 'inline-block';
-  } else {
-    document.getElementById('tidsplanRemoveStamBtn').style.display = 'none';
+  // Avstämningar - varje aktiv (ej godkänd) avstämning kan dras per rad för att
+  // visa var arbetet faktiskt låg vid avstämningstillfället. Godkända
+  // avstämningar fryses och ritas kvar som historik (streckad).
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  const hasActiveStam = !!(activeStam && !activeStam.approved);
+  document.getElementById('tidsplanApproveStamBtn').style.display = hasActiveStam ? 'inline-block' : 'none';
+  document.getElementById('tidsplanRemoveStamBtn').style.display = hasActiveStam ? 'inline-block' : 'none';
+
+  if(hasActiveStam){
+    tidsplanTaskRowRefs.filter(r => r.hasBar).forEach(ref => {
+      const dayIdx = activeStam.rowOverrides[ref.rowId] != null ? activeStam.rowOverrides[ref.rowId] : activeStam.baseDayIndex;
+      const handle = document.createElement('div');
+      handle.className = 'tidsplan-stamline-handle';
+      handle.title = 'Dra för att visa var det här arbetet faktiskt låg vid avstämningen';
+      place(handle, dayIdx + 2, ref.gridRow, 1);
+      wireTidsplanStamHandleDrag(handle, activeStam, ref.rowId);
+    });
   }
+
+  drawTidsplanStamSvg();
+}
+
+function drawTidsplanStamSvg(){
+  const grid = document.getElementById('tidsplanGrid');
+  const old = document.getElementById('tidsplanStamSvg');
+  if(old) old.remove();
+  if(!tidsplanData.avstamningar.length) return;
+  const barRows = tidsplanTaskRowRefs.filter(r => r.hasBar);
+  if(!barRows.length) return;
+
+  const gridRect = grid.getBoundingClientRect();
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'tidsplanStamSvg';
+  svg.setAttribute('class', 'tidsplan-stam-svg');
+  svg.setAttribute('viewBox', '0 0 ' + gridRect.width + ' ' + gridRect.height);
+
+  const colWidth = getTidsplanColWidth();
+  const xFor = (dayIndex) => 210 + dayIndex * colWidth;
+
+  tidsplanData.avstamningar.forEach(cp => {
+    const rowPoints = barRows.map(ref => {
+      const r = ref.labelEl.getBoundingClientRect();
+      const midY = (r.top - gridRect.top) + r.height / 2;
+      const dayIdx = cp.rowOverrides[ref.rowId] != null ? cp.rowOverrides[ref.rowId] : cp.baseDayIndex;
+      return [xFor(dayIdx), midY];
+    });
+    const topPoint = [xFor(cp.baseDayIndex), 0];
+    const bottomPoint = [rowPoints[rowPoints.length - 1][0], gridRect.height];
+    const allPoints = [topPoint, ...rowPoints, bottomPoint];
+    const d = allPoints.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'tidsplan-stam-path' + (cp.approved ? ' approved' : ' active'));
+    svg.appendChild(path);
+  });
+
+  grid.appendChild(svg);
+}
+
+function wireTidsplanStamHandleDrag(handle, checkpoint, rowId){
+  let dragState = null;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const current = checkpoint.rowOverrides[rowId] != null ? checkpoint.rowOverrides[rowId] : checkpoint.baseDayIndex;
+    dragState = { startX: e.clientX, orig: current };
+  });
+
+  function onMove(e){
+    if(!dragState) return;
+    const colWidth = getTidsplanColWidth();
+    const deltaPx = e.clientX - dragState.startX;
+    const deltaDays = Math.round(deltaPx / colWidth);
+    const N = tidsplanData.weeks.length * 7;
+    const newIndex = Math.max(0, Math.min(N - 1, dragState.orig + deltaDays));
+    handle.style.gridColumn = String(newIndex + 2);
+    handle._pendingIndex = newIndex;
+    checkpoint.rowOverrides[rowId] = newIndex;
+    drawTidsplanStamSvg();
+  }
+
+  async function onUp(){
+    if(!dragState) return;
+    dragState = null;
+    if(typeof handle._pendingIndex === 'number'){
+      checkpoint.rowOverrides[rowId] = handle._pendingIndex;
+    }
+    renderTidsplan();
+    await persistTidsplan();
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
 }
 
 // ---------- Dra i stapel: flytta / förläng ----------
 function getTidsplanColWidth(){
   const grid = document.getElementById('tidsplanGrid');
   const totalWidth = grid.getBoundingClientRect().width;
-  const N = Math.max(tidsplanData.weeks.length, 1);
+  const N = Math.max(tidsplanData.weeks.length * 7, 1);
   return (totalWidth - 210) / N;
 }
 
@@ -5243,19 +5420,19 @@ function wireTidsplanBarDrag(bar, handle, house, row){
     const colWidth = getTidsplanColWidth();
     const deltaPx = e.clientX - dragState.startX;
     dragState.moved = Math.abs(deltaPx);
-    const deltaWeeks = Math.round(deltaPx / colWidth);
-    const N = tidsplanData.weeks.length;
+    const deltaDays = Math.round(deltaPx / colWidth);
+    const N = tidsplanData.weeks.length * 7;
 
     if(dragState.mode === 'move'){
       const length = dragState.origEnd - dragState.origStart;
-      let newStart = dragState.origStart + deltaWeeks;
+      let newStart = dragState.origStart + deltaDays;
       newStart = Math.max(0, Math.min(newStart, N - 1 - length));
       const newEnd = newStart + length;
       bar.style.gridColumn = (newStart + 2) + ' / span ' + (newEnd - newStart + 1);
       bar._pendingStart = newStart;
       bar._pendingEnd = newEnd;
     } else {
-      let newEnd = dragState.origEnd + deltaWeeks;
+      let newEnd = dragState.origEnd + deltaDays;
       newEnd = Math.max(dragState.origStart, Math.min(newEnd, N - 1));
       bar.style.gridColumn = (dragState.origStart + 2) + ' / span ' + (newEnd - dragState.origStart + 1);
       bar._pendingStart = dragState.origStart;
@@ -5354,7 +5531,13 @@ document.getElementById('tidsplanImportInput').addEventListener('change', async 
     }
 
     const firstHeader = headerRows[0];
-    const weeks = firstHeader.cols.map(c => cellText(firstHeader.r, c));
+    // Excel har bara veckonummer ("v.35"), inte år - antar innevarande år.
+    // Användaren kan sedan justera varje veckas datum för hand om det behövs.
+    const importYear = new Date().getFullYear();
+    const weeks = firstHeader.cols.map(c => {
+      const m = cellText(firstHeader.r, c).match(/\d+/);
+      return isoWeekMonday(importYear, m ? parseInt(m[0], 10) : 1);
+    });
     if(tidsplanData.weeks.length === 0) tidsplanData.weeks = weeks;
     const colToWeekIndex = {};
     firstHeader.cols.forEach((c, i) => { colToWeekIndex[c] = i; });
@@ -5400,8 +5583,8 @@ document.getElementById('tidsplanImportInput').addEventListener('change', async 
             task: text,
             ansvarig: legendMatch ? legendMatch.ansvarig : '',
             color: legendMatch ? legendMatch.color : '#5B9BD5',
-            startIndex: colToWeekIndex[sCol] !== undefined ? colToWeekIndex[sCol] : 0,
-            endIndex: colToWeekIndex[eCol] !== undefined ? colToWeekIndex[eCol] : 0,
+            startIndex: (colToWeekIndex[sCol] !== undefined ? colToWeekIndex[sCol] : 0) * 7,
+            endIndex: (colToWeekIndex[eCol] !== undefined ? colToWeekIndex[eCol] : 0) * 7 + 6,
             comment: ''
           });
           rowsAdded++;
@@ -5421,6 +5604,57 @@ document.getElementById('tidsplanImportInput').addEventListener('change', async 
     document.getElementById('tidsplanImportInput').value = '';
   }
 });
+
+document.getElementById('tidsplanPdfBtn').onclick = () => {
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+
+  doc.setFontSize(16);
+  doc.text('Tidsplan' + (proj ? ' – ' + proj.name : ''), 14, 16);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Skapad ' + new Date().toLocaleDateString('sv-SE'), 14, 22);
+
+  const dayIndexToDate = (idx) => {
+    const weekIdx = Math.floor(idx / 7);
+    const dayOffset = idx % 7;
+    return tidsplanData.weeks[weekIdx] ? addDaysIso(tidsplanData.weeks[weekIdx], dayOffset) : '—';
+  };
+
+  let y = 30;
+  const housesWithRows = tidsplanData.houses.filter(h => h.rows.length);
+  housesWithRows.forEach(house => {
+    doc.setFontSize(12);
+    doc.setTextColor(20);
+    doc.text(house.name, 14, y);
+    const rows = house.rows.map(r => [
+      r.task || 'Namnlös uppgift',
+      r.ansvarig || '—',
+      r.startIndex !== null ? dayIndexToDate(r.startIndex) : '—',
+      r.endIndex !== null ? dayIndexToDate(r.endIndex) : '—',
+      r.comment || ''
+    ]);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Arbetsmoment', 'Ansvarig', 'Start', 'Slut', 'Kommentar']],
+      body: rows,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 10;
+  });
+
+  if(housesWithRows.length === 0){
+    doc.setFontSize(11);
+    doc.setTextColor(120);
+    doc.text('Inga uppgifter tillagda än.', 14, y);
+  }
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Tidsplan' + fileNamePart + '.pdf');
+};
 
 // ---------- Byggmöten (protokoll, en flik under Entreprenad) ----------
 function byggmoteKey(projectId){ return 'byggmoten:' + projectId; }
@@ -5778,11 +6012,6 @@ function wireRemoteSync(){
       if(pid === activeProjectId && screen === 'project' && projectSubView === 'checklista') loadApartments(false);
       if(screen === 'calendar') loadAllEvents().then(renderCalendar);
       if(screen === 'home') loadProjects();
-    } else if(key.indexOf('ekonomi:') === 0){
-      const pid = key.slice('ekonomi:'.length);
-      if(pid === activeProjectId && screen === 'project' && projectSubView === 'ekonomi'){
-        loadEkonomi(activeProjectId).then(renderEkonomi);
-      }
     } else if(key === INTR_STORAGE_KEY){
       loadInterests().then(() => {
         if(screen === 'intressen') renderIntressenScreen();
