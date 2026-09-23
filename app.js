@@ -2819,7 +2819,7 @@ function renderTable(){
   if(apartments.length === 0){
     table.style.display = 'none';
     empty.style.display = 'block';
-    empty.textContent = 'Inga lägenheter tillagda i det här projektet än.';
+    document.getElementById('emptyStateText').textContent = 'Inga lägenheter tillagda i det här projektet än.';
   } else {
     table.style.display = 'table';
     empty.style.display = 'none';
@@ -2871,6 +2871,60 @@ function renderTable(){
     ? apartments.length + ' lägenheter · ' + doneChecks + '/' + totalChecks + ' punkter klara'
     : '';
 }
+
+// ---------- Läs in lägenhetsförteckning från ekonomisk plan/kostnadskalkyl (PDF) ----------
+// Visas bara i tomläget (inga lägenheter tillagda än) - skriver aldrig över en
+// redan ifylld lista. Föreningslånet skrivs bara ut som info, sparas inte
+// automatiskt (det hör hemma i Ekonomi → Budget, som bara Mikael har tillgång till).
+function setKostnadskalkylStatus(msg, kind){
+  const el = document.getElementById('kostnadskalkylUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('kostnadskalkylUploadBtn').onclick = () => {
+  document.getElementById('kostnadskalkylFileInput').click();
+};
+document.getElementById('kostnadskalkylFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!activeProjectId){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setKostnadskalkylStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('kostnadskalkylUploadBtn');
+  btn.disabled = true;
+  setKostnadskalkylStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kostnadskalkyl', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const rows = (data && data.apartments) || [];
+    if(!rows.length) throw new Error('Kunde inte hitta någon lägenhetsförteckning i dokumentet.');
+    apartments = rows.map(r => newApartment({
+      lgh: r.lgh != null ? String(r.lgh) : '',
+      address: r.address || '',
+      totalyta: r.area != null ? String(r.area) : '',
+      avgift: r.avgift != null ? String(r.avgift) : '',
+      totalpris: r.totalpris != null ? String(r.totalpris) : ''
+    }));
+    await persistApartmentsNow();
+    renderTable();
+    let msg = rows.length + ' lägenheter inlästa.';
+    if(data && data.foreningslan){
+      msg += ' Beräknat föreningslån enligt dokumentet: ' + Math.round(data.foreningslan).toLocaleString('sv-SE') + ' kr (fyll i manuellt under Ekonomi → Budget).';
+    }
+    setKostnadskalkylStatus(msg, 'ok');
+  }catch(err){
+    setKostnadskalkylStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
 
 function makeCell(text, cls){
   const td = document.createElement('td');

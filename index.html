@@ -1482,7 +1482,14 @@
           </thead>
           <tbody id="aptBody"></tbody>
         </table>
-        <div id="emptyState" class="empty-state" style="display:none;"></div>
+        <div id="emptyState" class="empty-state" style="display:none;">
+          <p id="emptyStateText"></p>
+          <div class="contract-upload-row" style="justify-content:center;">
+            <button type="button" id="kostnadskalkylUploadBtn" class="upload-btn">📄 Läs in ekonomisk plan/kostnadskalkyl (PDF)</button>
+            <input type="file" id="kostnadskalkylFileInput" accept="application/pdf" style="display:none;">
+            <span id="kostnadskalkylUploadStatus" class="contract-upload-status"></span>
+          </div>
+        </div>
       </div>
 
       <div class="legend">
