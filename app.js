@@ -679,7 +679,6 @@ function liggarenResetForm(){
   document.getElementById('liggarenDeadlineInput').value = '';
   document.getElementById('liggarenDeadlineInput').disabled = false;
   document.getElementById('liggarenPriorityInput').value = '3';
-  document.getElementById('liggarenEkonomiInput').value = '';
   document.getElementById('liggarenRecurringCheck').checked = false;
   document.getElementById('liggarenRecurringFields').style.display = 'none';
   document.getElementById('liggarenRecurringDayInput').value = '1';
@@ -699,8 +698,7 @@ async function liggarenSaveTask(){
   const projects = selectedProjects.length ? selectedProjects : [null];
   const deadline = document.getElementById('liggarenDeadlineInput').value || null;
   const priority = parseInt(document.getElementById('liggarenPriorityInput').value, 10) || 3;
-  const ekonomiVal = document.getElementById('liggarenEkonomiInput').value;
-  const ekonomi = ekonomiVal !== '' ? parseFloat(ekonomiVal) : null;
+  const ekonomi = null;
   const isRecurring = document.getElementById('liggarenRecurringCheck').checked;
   const recurringDay = parseInt(document.getElementById('liggarenRecurringDayInput').value, 10) || 1;
   const notifyEmail = document.getElementById('liggarenNotifyCheck').checked;
@@ -903,12 +901,25 @@ function renderArenden(){
   list.innerHTML = '';
   empty.style.display = visible.length ? 'none' : 'block';
 
-  visible.forEach(t => {
-    if(liggarenViewMode === 'compact' && liggarenExpandedCompactId !== t.id){
-      list.appendChild(buildLiggarenCompactRow(t));
-      return;
-    }
-    list.appendChild(buildLiggarenCard(t));
+  const LIGGAREN_GROUPS = [
+    { label: 'Mina ärenden', filter: t => t.createdBy === myPersonId && t.assignedTo === myPersonId },
+    { label: 'Tilldelat till mig', filter: t => t.assignedTo === myPersonId && t.createdBy !== myPersonId },
+    { label: 'Skickat till andra', filter: t => t.createdBy === myPersonId && t.assignedTo !== myPersonId }
+  ];
+  LIGGAREN_GROUPS.forEach(({ label, filter }) => {
+    const group = visible.filter(filter);
+    if(!group.length) return;
+    const heading = document.createElement('h3');
+    heading.className = 'home-section-title';
+    heading.textContent = label + ' (' + group.length + ')';
+    list.appendChild(heading);
+    group.forEach(t => {
+      if(liggarenViewMode === 'compact' && liggarenExpandedCompactId !== t.id){
+        list.appendChild(buildLiggarenCompactRow(t));
+        return;
+      }
+      list.appendChild(buildLiggarenCard(t));
+    });
   });
 
   renderLiggarenRecurringList();
