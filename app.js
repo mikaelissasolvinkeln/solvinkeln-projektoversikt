@@ -2493,6 +2493,16 @@ function kundinfoText(apt){
   return names.length ? names.join(' & ') : '—';
 }
 
+// Samma uppslag som köparcellerna i Medlemsinformation (namn/telefon/mejl) -
+// visas i besiktningsprotokollets detaljvy istället för bara namnet.
+function kundinfoHtml(apt){
+  if(!apt.sald.done) return '<span style="color:var(--ink-soft); font-size:12.5px;">Ej sålt</span>';
+  const parts = [buyerSummaryHtml(apt.sald.buyer1)];
+  const buyer2 = apt.sald.buyer2;
+  if(buyer2 && (buyer2.name || buyer2.phone || buyer2.email)) parts.push(buyerSummaryHtml(buyer2));
+  return '<div style="display:flex; gap:32px; flex-wrap:wrap;">' + parts.join('') + '</div>';
+}
+
 function besiktningsprotokollSummary(apt){
   const all = apt.besiktningsprotokoll.flatMap(p => p.items);
   if(!all.length) return '—';
@@ -2570,7 +2580,8 @@ function renderBesiktningsprotokollDetail(){
 
   document.getElementById('besiktningsprotokollDetailTitle').textContent = 'LGH ' + (apt.lgh || '—');
   document.getElementById('besiktningsprotokollDetailSub').textContent =
-    (apt.address || '—') + (apt.projektnummer ? ' · Projektnr ' + apt.projektnummer : '') + ' · ' + kundinfoText(apt);
+    (apt.address || '—') + (apt.projektnummer ? ' · Projektnr ' + apt.projektnummer : '');
+  document.getElementById('besiktningsprotokollKundinfo').innerHTML = kundinfoHtml(apt);
 
   const list = document.getElementById('besiktningsprotokollList');
   const empty = document.getElementById('besiktningsprotokollDetailEmptyState');
