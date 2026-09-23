@@ -274,6 +274,7 @@ function newApartment(fields){
     tillval: emptyNote(),
     upplatenKoncern: emptyCheck(),
     kommentar: fields.kommentar || '',
+    kommentarInflyttning: fields.kommentarInflyttning || '',
     projektnummer: fields.projektnummer || '',
     inflyttningPlan: { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' },
     upplatelse: { date: '', by: '', at: '', typ: '' }
@@ -322,6 +323,7 @@ function normalizeApartment(apt){
   if(typeof apt.besiktning.meddelatEntreprenor !== 'boolean') apt.besiktning.meddelatEntreprenor = false;
   if(typeof apt.besiktning.bokatStad !== 'boolean') apt.besiktning.bokatStad = false;
   if(typeof apt.kommentar !== 'string') apt.kommentar = '';
+  if(typeof apt.kommentarInflyttning !== 'string') apt.kommentarInflyttning = '';
   if(typeof apt.projektnummer !== 'string') apt.projektnummer = '';
   if(!apt.inflyttningPlan || typeof apt.inflyttningPlan !== 'object'){
     apt.inflyttningPlan = { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' };
@@ -2802,6 +2804,8 @@ function renderInflyttningsinfo(){
     inflyttningTd.appendChild(inflyttningSpan);
     tr.appendChild(inflyttningTd);
 
+    tr.appendChild(makeKommentarCell(apt, 'kommentarInflyttning'));
+
     body.appendChild(tr);
   });
 }
@@ -2839,7 +2843,7 @@ function renderTable(){
     tr.appendChild(makeCheckCell(apt, 'fiber'));
     tr.appendChild(makeCheckCell(apt, 'brevlada'));
     tr.appendChild(makeTillvalCell(apt));
-    tr.appendChild(makeKommentarCell(apt));
+    tr.appendChild(makeKommentarCell(apt, 'kommentar'));
 
     const actionsTd = document.createElement('td');
     actionsTd.className = 'row-actions';
@@ -2972,26 +2976,29 @@ function makeEditableTextCell(apt, field, placeholder){
   return td;
 }
 
-// Kommentar visas alltid förkortad (ellipsis) i Checklistan - klick öppnar en
+// Kommentar visas alltid förkortad (ellipsis) i tabellen - klick öppnar en
 // popup för att läsa hela texten eller ändra den, istället för att redigeras
-// inline som övriga fält.
-function makeKommentarCell(apt){
+// inline som övriga fält. Fältnamnet skickas in så samma cell/popup kan
+// användas för olika kommentarfält (Checklistan resp. Inflyttningsinformation).
+function makeKommentarCell(apt, field){
   const td = document.createElement('td');
   const span = document.createElement('span');
   span.className = 'editable';
   span.style.cursor = 'pointer';
-  span.style.color = apt.kommentar ? 'inherit' : 'var(--ink-soft)';
-  span.textContent = apt.kommentar ? apt.kommentar : 'Anteckning…';
-  span.onclick = () => openKommentarModal(apt);
+  span.style.color = apt[field] ? 'inherit' : 'var(--ink-soft)';
+  span.textContent = apt[field] ? apt[field] : 'Anteckning…';
+  span.onclick = () => openKommentarModal(apt, field);
   td.appendChild(span);
   return td;
 }
 
 let currentKommentarAptId = null;
-function openKommentarModal(apt){
+let currentKommentarField = 'kommentar';
+function openKommentarModal(apt, field){
   currentKommentarAptId = apt.id;
+  currentKommentarField = field;
   document.getElementById('kommentarModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
-  document.getElementById('kommentarInput').value = apt.kommentar || '';
+  document.getElementById('kommentarInput').value = apt[field] || '';
   document.getElementById('kommentarModalOverlay').classList.add('open');
   setTimeout(() => document.getElementById('kommentarInput').focus(), 0);
 }
@@ -3006,9 +3013,10 @@ document.getElementById('kommentarModalOverlay').addEventListener('click', e => 
 document.getElementById('kommentarSaveBtn').onclick = async () => {
   const apt = apartments.find(a => a.id === currentKommentarAptId);
   if(!apt){ closeKommentarModal(); return; }
-  apt.kommentar = document.getElementById('kommentarInput').value.trim();
+  apt[currentKommentarField] = document.getElementById('kommentarInput').value.trim();
   closeKommentarModal();
   renderTable();
+  renderInflyttningsinfo();
   await persistApartments();
 };
 
