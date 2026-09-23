@@ -1570,6 +1570,7 @@
       <div class="sub-tabs" style="margin-bottom:16px;">
         <button class="entreprenad-sub-tab active" data-entreprenad-view="tidsplan">Tidsplan</button>
         <button class="entreprenad-sub-tab" data-entreprenad-view="byggmoten">Byggmöten</button>
+        <button class="entreprenad-sub-tab" data-entreprenad-view="besiktningsprotokoll">Besiktningsprotokoll</button>
         <button class="entreprenad-sub-tab" data-entreprenad-view="material">Material</button>
       </div>
 
@@ -1665,6 +1666,37 @@
           <button id="byggmotePdfBtn" class="material-pdf-btn">📄 Skriv ut PDF</button>
           <button id="byggmoteDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort mötet</button>
         </div>
+      </div>
+
+      <div id="besiktningsprotokollListSubview" style="display:none;">
+        <table id="besiktningsprotokollTable">
+          <thead>
+            <tr>
+              <th style="text-align:left;">LGH</th>
+              <th style="text-align:left;">Projektnummer</th>
+              <th style="text-align:left;">Adress</th>
+              <th style="text-align:left;">Kund</th>
+              <th style="text-align:left;">Besiktningsprotokoll</th>
+            </tr>
+          </thead>
+          <tbody id="besiktningsprotokollBody"></tbody>
+        </table>
+        <div id="besiktningsprotokollEmptyState" class="empty-state" style="display:none;">Inga lägenheter i det här projektet än.</div>
+      </div>
+
+      <div id="besiktningsprotokollDetailSubview" style="display:none;">
+        <button id="backToBesiktningsprotokollListBtn" class="back-btn" style="margin-bottom:14px;">← Besiktningsprotokoll</button>
+        <h3 id="besiktningsprotokollDetailTitle" style="margin:0 0 4px;"></h3>
+        <p class="eko-sub" id="besiktningsprotokollDetailSub" style="margin:0 0 14px;"></p>
+
+        <div class="contract-upload-row">
+          <button type="button" id="besiktningsprotokollUploadBtn" class="upload-btn">📄 Läs in besiktningsprotokoll (PDF)</button>
+          <input type="file" id="besiktningsprotokollFileInput" accept="application/pdf" style="display:none;">
+          <span id="besiktningsprotokollUploadStatus" class="contract-upload-status"></span>
+        </div>
+
+        <div id="besiktningsprotokollList"></div>
+        <div id="besiktningsprotokollDetailEmptyState" class="empty-state" style="display:none;">Inget protokoll inläst än för den här lägenheten.</div>
       </div>
 
       <div id="materialSubview" style="display:none;">

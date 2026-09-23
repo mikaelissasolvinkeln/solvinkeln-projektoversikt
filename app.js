@@ -277,7 +277,8 @@ function newApartment(fields){
     kommentarInflyttning: fields.kommentarInflyttning || '',
     projektnummer: fields.projektnummer || '',
     inflyttningPlan: { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' },
-    upplatelse: { date: '', by: '', at: '', typ: '' }
+    upplatelse: { date: '', by: '', at: '', typ: '' },
+    besiktningsprotokoll: []
   };
 }
 
@@ -324,6 +325,7 @@ function normalizeApartment(apt){
   if(typeof apt.besiktning.bokatStad !== 'boolean') apt.besiktning.bokatStad = false;
   if(typeof apt.kommentar !== 'string') apt.kommentar = '';
   if(typeof apt.kommentarInflyttning !== 'string') apt.kommentarInflyttning = '';
+  if(!Array.isArray(apt.besiktningsprotokoll)) apt.besiktningsprotokoll = [];
   if(typeof apt.projektnummer !== 'string') apt.projektnummer = '';
   if(!apt.inflyttningPlan || typeof apt.inflyttningPlan !== 'object'){
     apt.inflyttningPlan = { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' };
@@ -2463,11 +2465,244 @@ function setEntreprenadSubView(view){
   document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
   document.getElementById('byggmoteListSubview').style.display = view === 'byggmoten' ? 'block' : 'none';
   document.getElementById('byggmoteFormSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollListSubview').style.display = view === 'besiktningsprotokoll' ? 'block' : 'none';
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'none';
   document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
   if(view === 'tidsplan') loadTidsplan(activeProjectId);
   if(view === 'byggmoten') loadByggmoten(activeProjectId);
+  if(view === 'besiktningsprotokoll') renderBesiktningsprotokollList();
   if(view === 'material') loadMaterial(activeProjectId);
 }
+
+// ---------- Besiktningsprotokoll (per lägenhet, uppladdning + AI-inläsning av felförteckning) ----------
+let currentBesiktningsprotokollAptId = null;
+
+function kundinfoText(apt){
+  const names = [apt.sald.buyer1.name, apt.sald.buyer2.name].filter(Boolean);
+  return names.length ? names.join(' & ') : '—';
+}
+
+function besiktningsprotokollSummary(apt){
+  const all = apt.besiktningsprotokoll.flatMap(p => p.items);
+  if(!all.length) return '—';
+  const open = all.filter(i => !i.avhjalpt).length;
+  return all.length + ' punkter · ' + open + ' kvar att åtgärda';
+}
+
+function renderBesiktningsprotokollList(){
+  const body = document.getElementById('besiktningsprotokollBody');
+  const table = document.getElementById('besiktningsprotokollTable');
+  const empty = document.getElementById('besiktningsprotokollEmptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.onclick = () => openBesiktningsprotokollDetail(apt);
+
+    const lghTd = document.createElement('td');
+    lghTd.style.cssText = "text-align:left; font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--blue);";
+    lghTd.textContent = apt.lgh || '—';
+    tr.appendChild(lghTd);
+
+    const projTd = document.createElement('td');
+    projTd.style.textAlign = 'left';
+    projTd.textContent = apt.projektnummer || '—';
+    tr.appendChild(projTd);
+
+    const addressTd = document.createElement('td');
+    addressTd.style.textAlign = 'left';
+    addressTd.textContent = apt.address || '—';
+    tr.appendChild(addressTd);
+
+    const kundTd = document.createElement('td');
+    kundTd.style.textAlign = 'left';
+    kundTd.textContent = kundinfoText(apt);
+    tr.appendChild(kundTd);
+
+    const summaryTd = document.createElement('td');
+    summaryTd.style.textAlign = 'left';
+    summaryTd.textContent = besiktningsprotokollSummary(apt);
+    tr.appendChild(summaryTd);
+
+    body.appendChild(tr);
+  });
+}
+
+function closeBesiktningsprotokollDetail(){
+  currentBesiktningsprotokollAptId = null;
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollListSubview').style.display = 'block';
+}
+document.getElementById('backToBesiktningsprotokollListBtn').onclick = closeBesiktningsprotokollDetail;
+
+function openBesiktningsprotokollDetail(apt){
+  currentBesiktningsprotokollAptId = apt.id;
+  document.getElementById('besiktningsprotokollListSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'block';
+  document.getElementById('besiktningsprotokollUploadStatus').textContent = '';
+  document.getElementById('besiktningsprotokollUploadStatus').className = 'contract-upload-status';
+  renderBesiktningsprotokollDetail();
+}
+
+function renderBesiktningsprotokollDetail(){
+  const apt = apartments.find(a => a.id === currentBesiktningsprotokollAptId);
+  if(!apt){ closeBesiktningsprotokollDetail(); return; }
+
+  document.getElementById('besiktningsprotokollDetailTitle').textContent = 'LGH ' + (apt.lgh || '—');
+  document.getElementById('besiktningsprotokollDetailSub').textContent =
+    (apt.address || '—') + (apt.projektnummer ? ' · Projektnr ' + apt.projektnummer : '') + ' · ' + kundinfoText(apt);
+
+  const list = document.getElementById('besiktningsprotokollList');
+  const empty = document.getElementById('besiktningsprotokollDetailEmptyState');
+  list.innerHTML = '';
+
+  if(apt.besiktningsprotokoll.length === 0){
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  apt.besiktningsprotokoll.forEach(protokoll => {
+    const room = document.createElement('div');
+    room.className = 'material-room';
+
+    const header = document.createElement('div');
+    header.className = 'material-room-header';
+    const h3 = document.createElement('h3');
+    h3.textContent = (protokoll.typ || 'Besiktning') + (protokoll.datum ? ' · ' + protokoll.datum : '');
+    header.appendChild(h3);
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.title = 'Ta bort protokollet';
+    del.onclick = async () => {
+      apt.besiktningsprotokoll = apt.besiktningsprotokoll.filter(p => p.id !== protokoll.id);
+      renderBesiktningsprotokollDetail();
+      renderBesiktningsprotokollList();
+      await persistApartments();
+    };
+    header.appendChild(del);
+    room.appendChild(header);
+
+    const table = document.createElement('table');
+    table.innerHTML =
+      '<thead><tr>' +
+      '<th style="text-align:left; width:8%;">Nr</th>' +
+      '<th style="text-align:left; width:20%;">Del/Rum</th>' +
+      '<th style="text-align:left;">Fel</th>' +
+      '<th class="center" style="width:12%;">Avhjälpt</th>' +
+      '</tr></thead>';
+    const tbody = document.createElement('tbody');
+    protokoll.items.forEach(item => {
+      const tr = document.createElement('tr');
+
+      const nrTd = document.createElement('td');
+      nrTd.style.textAlign = 'left';
+      nrTd.textContent = item.nr != null ? item.nr : '—';
+      tr.appendChild(nrTd);
+
+      const delRumTd = document.createElement('td');
+      delRumTd.style.textAlign = 'left';
+      delRumTd.textContent = item.delRum || '—';
+      tr.appendChild(delRumTd);
+
+      const felTd = document.createElement('td');
+      felTd.style.textAlign = 'left';
+      felTd.textContent = item.fel || '—';
+      if(item.avhjalpt) felTd.style.textDecoration = 'line-through';
+      tr.appendChild(felTd);
+
+      const checkTd = document.createElement('td');
+      checkTd.className = 'center';
+      const box = document.createElement('div');
+      box.className = 'check' + (item.avhjalpt ? ' checked' : '');
+      box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      box.title = item.avhjalpt ? ('Avhjälpt av ' + (item.avhjalptBy || '') + ' ' + (item.avhjalptAt ? new Date(item.avhjalptAt).toLocaleDateString('sv-SE') : '')) : 'Markera som avhjälpt';
+      box.onclick = async () => {
+        if(!myName){ showToast('Ange ditt namn först'); return; }
+        item.avhjalpt = !item.avhjalpt;
+        item.avhjalptBy = item.avhjalpt ? myName : '';
+        item.avhjalptAt = item.avhjalpt ? new Date().toISOString() : '';
+        renderBesiktningsprotokollDetail();
+        renderBesiktningsprotokollList();
+        await persistApartments();
+      };
+      checkTd.appendChild(box);
+      tr.appendChild(checkTd);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    room.appendChild(table);
+
+    list.appendChild(room);
+  });
+}
+
+function setBesiktningsprotokollStatus(msg, kind){
+  const el = document.getElementById('besiktningsprotokollUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('besiktningsprotokollUploadBtn').onclick = () => {
+  document.getElementById('besiktningsprotokollFileInput').click();
+};
+document.getElementById('besiktningsprotokollFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const apt = apartments.find(a => a.id === currentBesiktningsprotokollAptId);
+  if(!apt){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setBesiktningsprotokollStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('besiktningsprotokollUploadBtn');
+  btn.disabled = true;
+  setBesiktningsprotokollStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-besiktningsprotokoll', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const items = (data && data.items) || [];
+    if(!items.length) throw new Error('Kunde inte hitta någon felförteckning i dokumentet.');
+    apt.besiktningsprotokoll.push({
+      id: uid(),
+      typ: (data && data.typ) || '',
+      datum: (data && data.datum) || '',
+      uppladdadAv: myName || '',
+      uppladdadAt: new Date().toISOString(),
+      items: items.map(it => ({
+        nr: it.nr != null ? it.nr : null,
+        delRum: it.delRum || '',
+        bet: it.bet || '',
+        fel: it.fel || '',
+        avhjalpt: false,
+        avhjalptBy: '',
+        avhjalptAt: ''
+      }))
+    });
+    setBesiktningsprotokollStatus(items.length + ' punkter inlästa.', 'ok');
+    renderBesiktningsprotokollDetail();
+    renderBesiktningsprotokollList();
+    await persistApartments();
+  }catch(err){
+    setBesiktningsprotokollStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
 
 function openCalendarScreen(){
   showScreen('calendar');
