@@ -1993,15 +1993,27 @@ function ekonomiVinstSolvinkeln(meta){
   return entreprenadsvinst + (agarandel / 100) * forvantadVinst;
 }
 
+const EKO_PROJEKT_STATUS_LABELS = [
+  { status: 'Pågående', label: 'aktiva' },
+  { status: 'Bygglov/projektering', label: 'bygg/projektering' },
+  { status: 'Kommande', label: 'kommande' },
+  { status: 'Avslutat', label: 'avslutade' }
+];
+
 function renderEkonomiOversikt(){
-  const aktiva = projects.filter(p => (p.status || 'Pågående') === 'Pågående').length;
   const sumField = (key, field) => projects.reduce((s, p) => {
     const rec = (companyEkonomiData[key] && companyEkonomiData[key][p.id]) || {};
     return s + (rec[field] || 0);
   }, 0);
   const vinstSolvinkelnTotal = projects.reduce((s, p) => s + ekonomiVinstSolvinkeln(companyEkonomiData.meta[p.id]), 0);
 
-  document.getElementById('ekoKpiAktivaProjekt').textContent = aktiva;
+  const breakdown = EKO_PROJEKT_STATUS_LABELS.map(({ status, label }) => {
+    const count = projects.filter(p => (p.status || 'Pågående') === status).length;
+    return { label, count };
+  });
+  document.getElementById('ekoKpiAktivaProjekt').textContent = projects.length;
+  document.getElementById('ekoKpiProjektBreakdown').textContent =
+    breakdown.map(b => b.count + ' ' + b.label).join(' · ');
   document.getElementById('ekoKpiLikviditet').textContent = formatMSEK(sumField('likviditet', 'belopp'));
   document.getElementById('ekoKpiLanevolym').textContent = formatMSEK(sumField('lan', 'externtLan'));
   document.getElementById('ekoKpiLanSolvinkeln').textContent = formatMSEK(sumField('lan', 'lanSolvinkeln'));
@@ -2721,6 +2733,23 @@ function renderMedlemsinfo(){
   });
 }
 
+// Gul = datum ifyllt men inte klart, grön = klart/bekräftat. Ingen färg = inget ifyllt än.
+function besiktningStatusColor(apt){
+  const b = apt.besiktning;
+  if(!b || !b.date) return '';
+  const allBooked = b.kontaktatKund && b.bokatBesiktningsman && b.meddelatEntreprenor && b.bokatStad;
+  return allBooked ? '#EEF6F0' : 'var(--amber-soft)';
+}
+
+function inflyttningsplanStatusColor(apt){
+  if(apt.upplatelse && apt.upplatelse.date) return '#EEF6F0';
+  const plan = apt.inflyttningPlan;
+  if(!plan) return '';
+  if(plan.bekraftatDatumKund) return '#EEF6F0';
+  if(plan.byggdatum || plan.onskatDatumKund) return 'var(--amber-soft)';
+  return '';
+}
+
 function renderInflyttningsinfo(){
   const body = document.getElementById('inflyttningsinfoBody');
   const table = document.getElementById('inflyttningsinfoTable');
@@ -2752,6 +2781,7 @@ function renderInflyttningsinfo(){
 
     const besiktningTd = document.createElement('td');
     besiktningTd.style.textAlign = 'left';
+    besiktningTd.style.backgroundColor = besiktningStatusColor(apt);
     const besiktningSpan = document.createElement('span');
     besiktningSpan.className = 'editable';
     besiktningSpan.style.cursor = 'pointer';
@@ -2762,6 +2792,7 @@ function renderInflyttningsinfo(){
 
     const inflyttningTd = document.createElement('td');
     inflyttningTd.style.textAlign = 'left';
+    inflyttningTd.style.backgroundColor = inflyttningsplanStatusColor(apt);
     const inflyttningSpan = document.createElement('span');
     inflyttningSpan.className = 'editable';
     inflyttningSpan.style.cursor = 'pointer';
