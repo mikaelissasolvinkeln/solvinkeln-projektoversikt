@@ -454,7 +454,8 @@ function formatKrFull(value){
 }
 
 async function loadProjectSummary(p){
-  const summary = { lghText: 'Inga lägenheter ännu', omsattning: null, lan: PROJECT_LOAN_BY_NAME[p.name] || null };
+  const budgetForeningslan = companyEkonomiData.budgetDetalj[p.id] && companyEkonomiData.budgetDetalj[p.id].foreningslan;
+  const summary = { lghText: 'Inga lägenheter ännu', omsattning: null, lan: budgetForeningslan || PROJECT_LOAN_BY_NAME[p.name] || null };
   try{
     const raw = await fetchApartmentsRaw(p.id);
     if(raw.apartments.length > 0){
@@ -6055,6 +6056,7 @@ async function init(){
   myEmail = (info.email || '').toLowerCase();
   isEkonomiAdmin = myEmail === EKONOMI_ADMIN_EMAIL;
   document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
+  if(isEkonomiAdmin) await loadEkonomiData();
   myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
   myPersonId = info.id;
   renderNameUI();
