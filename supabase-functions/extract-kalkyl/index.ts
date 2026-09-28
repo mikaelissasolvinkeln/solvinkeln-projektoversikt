@@ -1,11 +1,11 @@
 // Supabase Edge Function: extract-kalkyl
 //
-// Läser en uppladdad projektkalkyl (Excel, lästs in och omvandlad till text
+// Läser en uppladdad projektkalkyl (Excel, läst in och omvandlad till text
 // per kalkylblad på klientsidan - INTE PDF, alla kalkyler har olika layout
-// från blad till blad) och ber Claude tolka ut nyckeltalen samt
-// kostnadsfördelningen till ett fast, förutsägbart format. Sparar
-// ingenting själv - texten och resultatet finns bara i det här anropet,
-// sedan är de borta.
+// från blad till blad) och ber Claude tolka ut nyckeltalen, intäkterna,
+// kostnaderna (grupperade) och ett förslag till finansieringsplan till ett
+// förutsägbart format. Sparar ingenting själv - texten och resultatet finns
+// bara i det här anropet, sedan är de borta.
 //
 // DEPLOY: Supabase Dashboard -> Edge Functions -> "Deploy a new function" -> "Via Editor"
 // -> klistra in hela den här filen -> Deploy. Stäng AV "Verify JWT" för funktionen
@@ -25,56 +25,66 @@ const CORS_HEADERS = {
 const TOOL = {
   name: 'extract_kalkyl',
   description:
-    'Nyckeltalen och kostnadsfördelningen ur en projektkalkyl (Excel) för ett bostadsprojekt under utvärdering. ' +
-    'Kalkylbladens layout varierar mellan projekt (radantal, hustypnamn, etc) - leta efter etiketter som ' +
-    '"Intäkter", "Utgifter"/"Total kostnad", "Resultat", "Projektmarginal", "Avkastning eget kapital", ' +
-    '"BOA"/"BOA total", "Bostäder"/"Antal bostäder", samt fördelningen mellan Mark, Entreprenad, Projektering, ' +
-    'Finansiering och Aktier. Gissa aldrig ett belopp du är osäker på - lämna fältet tomt istället.',
+    'Nyckeltalen, intäkterna, de grupperade kostnaderna och ett förslag till finansieringsplan ur en ' +
+    'projektkalkyl (Excel) för ett bostadsprojekt under utvärdering. Kalkylbladens layout varierar mellan ' +
+    'projekt (radantal, hustypnamn, etc). Gruppera kostnaderna under rubriker som normalt förekommer i den här ' +
+    'sortens kalkyl, t.ex. "Anskaffningskostnad mark", "Byggherrekostnader", "Entreprenad" och "Finansiering" - ' +
+    'använd samma gruppnamn när du känner igen dem, annars gruppens egen rubrik i kalkylen. Hoppa ALLTID över ' +
+    'en rad som heter "Buffert aktier" under Entreprenad-gruppen - ta aldrig med den. Hoppa även över rena ' +
+    'summerings-/delsummeringsrader (de räknas ut automatiskt av mottagaren). Gissa aldrig ett belopp du är ' +
+    'osäker på - hoppa över raden istället.',
   input_schema: {
     type: 'object',
     properties: {
       projektnamn: { type: 'string', description: 'Projektets/föreningens namn, t.ex. "Brf Glömstahöjden" eller "glömsta 22 lgh"' },
       antalBostader: { type: 'number', description: 'Antal bostäder/lägenheter totalt' },
-      antalParkering: { type: 'number', description: 'Antal parkeringsplatser, om angivet' },
       boaTotal: { type: 'number', description: 'Total boarea (BOA) i kvadratmeter' },
-      intakter: { type: 'number', description: 'Totala intäkter i kr' },
-      utgifter: { type: 'number', description: 'Totala utgifter/total kostnad i kr' },
-      resultat: { type: 'number', description: 'Beräknat resultat (intäkter minus utgifter) i kr' },
-      projektmarginal: { type: 'number', description: 'Projektmarginal som andel, t.ex. 0.21 för 21% - inte i procentenheter' },
-      avkastningEgetKapital: { type: 'number', description: 'Beräknad avkastning på eget kapital per år som andel, om ett giltigt numeriskt värde finns (hoppa över om t.ex. "#VALUE!" eller liknande felvärde)' },
-      fordelning: {
-        type: 'object',
-        description: 'Förslag till fördelning av totalkostnaden mellan de stora posterna, i kr',
-        properties: {
-          mark: { type: 'number' },
-          entreprenad: { type: 'number' },
-          projektering: { type: 'number' },
-          finansiering: { type: 'number' },
-          aktier: { type: 'number' },
-          totalt: { type: 'number' },
+      avkastningEgetKapital: { type: 'number', description: 'Beräknad avkastning på eget kapital per år som andel (t.ex. 0.15 för 15%), om ett giltigt numeriskt värde finns (hoppa över om t.ex. "#VALUE!" eller liknande felvärde)' },
+      intakter: {
+        type: 'array',
+        description: 'En rad per intäktspost (t.ex. Insatser, BRF-lån/Föreningslån), i kr.',
+        items: {
+          type: 'object',
+          properties: {
+            namn: { type: 'string' },
+            belopp: { type: 'number' },
+          },
+          required: ['namn', 'belopp'],
         },
       },
       kostnadsgrupper: {
         type: 'array',
-        description: 'Grupperad detaljerad kostnadsuppställning (t.ex. Byggherrekostnader, Entreprenad, Förvärvsrelaterade kostnader) med enskilda poster och deras belopp, för den som vill se detaljerna.',
+        description: 'Kostnaderna grupperade under rubriker (se beskrivningen ovan för vilka gruppnamn som ska användas när de finns).',
         items: {
           type: 'object',
           properties: {
             grupp: { type: 'string', description: 'Rubriken på kostnadsgruppen' },
-            summa: { type: 'number', description: 'Gruppens totalsumma i kr, om angiven' },
             poster: {
               type: 'array',
+              description: 'Enskilda kostnadsposter i gruppen, i kr.',
               items: {
                 type: 'object',
                 properties: {
                   namn: { type: 'string' },
                   belopp: { type: 'number' },
                 },
-                required: ['namn'],
+                required: ['namn', 'belopp'],
               },
             },
           },
-          required: ['grupp'],
+          required: ['grupp', 'poster'],
+        },
+      },
+      finansieringsforslag: {
+        type: 'array',
+        description: 'Förslag till finansieringsplan om kalkylen innehåller ett avsnitt om finansiering/byggkreditiv/insats/eget kapital, i kr. Får lämnas tom.',
+        items: {
+          type: 'object',
+          properties: {
+            namn: { type: 'string' },
+            belopp: { type: 'number' },
+          },
+          required: ['namn', 'belopp'],
         },
       },
     },
@@ -143,7 +153,8 @@ Deno.serve(async (req) => {
               'Det här är innehållet i en projektkalkyl (Excel), filnamn "' +
               (filename || 'okänd') +
               '", ett kalkylblad i taget separerat med "=== Blad: <namn> ===" och varje rad som "radnummer | cell1<TAB>cell2<TAB>...". ' +
-              'Extrahera nyckeltalen och kostnadsfördelningen med verktyget extract_kalkyl.\n\n' +
+              'Extrahera nyckeltalen, intäkterna, de grupperade kostnaderna och ett ev. förslag till ' +
+              'finansieringsplan med verktyget extract_kalkyl.\n\n' +
               gridText,
           },
         ],
