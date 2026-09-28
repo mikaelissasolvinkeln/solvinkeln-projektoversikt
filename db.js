@@ -140,6 +140,56 @@
     if(error) throw error;
   }
 
+  // ---------- Nya projekt: projektkalkyler under utvärdering (egen tabell,
+  // egen RLS - se schema-nya-projekt.sql). En rad kan göras publikt läsbar
+  // (utan inloggning) via getPublicNyaProjekt när den delas som
+  // investeringspropå. ----------
+  async function listNyaProjekt(){
+    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]');
+    const { data, error } = await withCacheRetry(() => sb.from('nya_projekt')
+      .select('*').order('created_at', { ascending: false }));
+    if(error) throw error;
+    return data || [];
+  }
+  async function insertNyaProjekt(row){
+    if(!hasSupabase){
+      const list = JSON.parse(localGet('nya-projekt')?.value || '[]');
+      const withId = { ...row, id: 'local-' + Date.now(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      list.unshift(withId);
+      localSet('nya-projekt', JSON.stringify(list));
+      return withId;
+    }
+    const { data, error } = await withCacheRetry(() => sb.from('nya_projekt').insert(row).select().single());
+    if(error) throw error;
+    return data;
+  }
+  async function updateNyaProjekt(id, patch){
+    if(!hasSupabase){
+      const list = JSON.parse(localGet('nya-projekt')?.value || '[]');
+      const next = list.map(p => p.id === id ? { ...p, ...patch } : p);
+      localSet('nya-projekt', JSON.stringify(next));
+      return;
+    }
+    const row = { ...patch, updated_at: new Date().toISOString() };
+    const { error } = await withCacheRetry(() => sb.from('nya_projekt').update(row).eq('id', id));
+    if(error) throw error;
+  }
+  async function deleteNyaProjekt(id){
+    if(!hasSupabase){
+      const list = JSON.parse(localGet('nya-projekt')?.value || '[]');
+      localSet('nya-projekt', JSON.stringify(list.filter(p => p.id !== id)));
+      return;
+    }
+    const { error } = await withCacheRetry(() => sb.from('nya_projekt').delete().eq('id', id));
+    if(error) throw error;
+  }
+  async function getPublicNyaProjekt(shareId){
+    if(!hasSupabase) return null;
+    const { data, error } = await sb.from('nya_projekt').select('*').eq('share_id', shareId).eq('is_public', true).maybeSingle();
+    if(error) throw error;
+    return data || null;
+  }
+
   // ---------- Lokalt lager (personlig data + testläge utan Supabase) ----------
   function localGet(key){
     const raw = localStorage.getItem(LOCAL_PREFIX + key);
@@ -211,6 +261,11 @@
     insertLiggarenTask,
     updateLiggarenTask,
     deleteLiggarenTask,
+    listNyaProjekt,
+    insertNyaProjekt,
+    updateNyaProjekt,
+    deleteNyaProjekt,
+    getPublicNyaProjekt,
     onRemoteChange(cb){ listeners.push(cb); },
     hasSupabase
   };

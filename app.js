@@ -155,6 +155,8 @@ let ekonomiSoldCounts = {};
 let ekonomiSubView = 'oversikt';
 let currentEkonomiProjektId = null;
 let ekonomiNumberModalCtx = null;
+let nyaProjektList = [];
+let currentNyaProjektId = null;
 let projectSubView = 'checklista'; // 'checklista' | 'ekonomi'
 let entreprenadSubView = 'tidsplan'; // 'tidsplan' | 'byggmoten'
 let apartments = [];
@@ -1322,11 +1324,14 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiLikviditetView').style.display = view === 'likviditet' ? 'block' : 'none';
   document.getElementById('ekonomiLanView').style.display = view === 'lan' ? 'block' : 'none';
   document.getElementById('ekonomiVinstSolvinkelnView').style.display = view === 'vinstsolvinkeln' ? 'block' : 'none';
+  document.getElementById('ekonomiNyaProjektListView').style.display = view === 'nyaprojekt' ? 'block' : 'none';
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
   if(view === 'oversikt') renderEkonomiOversikt();
   else if(view === 'projekt') renderEkonomiProjekt();
   else if(view === 'budget') renderEkonomiBudgetList();
   else if(view === 'mark') renderEkonomiMarkList();
   else if(view === 'vinstsolvinkeln') renderEkonomiVinstSolvinkeln();
+  else if(view === 'nyaprojekt') loadNyaProjektList();
   else renderEkonomiNumberTab(view);
 }
 
@@ -2076,6 +2081,380 @@ function renderEkonomiVinstSolvinkeln(){
   totalRow.className = 'eko-row-resultat';
   totalRow.innerHTML = '<td>Totalt</td><td>' + formatMSEK(total) + '</td>';
   tbody.appendChild(totalRow);
+}
+
+// ---------- Nya projekt: projektkalkyler under utvärdering ----------
+// Ligger i en egen delad tabell (nya_projekt, se schema-nya-projekt.sql) - inte
+// personal_data som resten av Ekonomi - eftersom en rad kan göras publikt
+// läsbar (utan inloggning) när den delas som investeringspropå.
+const NYA_PROJEKT_NYCKELTAL_FIELDS = [
+  { key: 'antalBostader', label: 'Bostäder', type: 'int' },
+  { key: 'antalParkering', label: 'Parkeringsplatser', type: 'int' },
+  { key: 'boaTotal', label: 'BOA totalt (m²)', type: 'int' },
+  { key: 'intakter', label: 'Intäkter', type: 'kr' },
+  { key: 'utgifter', label: 'Kostnad', type: 'kr' },
+  { key: 'resultat', label: 'Resultat', type: 'kr' },
+  { key: 'projektmarginal', label: 'Projektmarginal', type: 'pct' },
+  { key: 'avkastningEgetKapital', label: 'Avkastning eget kapital', type: 'pct' }
+];
+const NYA_PROJEKT_FORDELNING_FIELDS = [
+  { key: 'mark', label: 'Mark' },
+  { key: 'entreprenad', label: 'Entreprenad' },
+  { key: 'projektering', label: 'Projektering' },
+  { key: 'finansiering', label: 'Finansiering' },
+  { key: 'aktier', label: 'Aktier' },
+  { key: 'totalt', label: 'Totalt' }
+];
+
+function nyaProjektFormatValue(type, value){
+  if(value === null || value === undefined || value === '') return '—';
+  if(type === 'kr') return formatKrFull(value);
+  if(type === 'pct') return (value * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %';
+  if(type === 'int') return Math.round(value).toLocaleString('sv-SE');
+  return value;
+}
+
+async function loadNyaProjektList(){
+  try{
+    nyaProjektList = await DB.listNyaProjekt();
+  }catch(e){
+    nyaProjektList = [];
+    showDebugError('Kunde inte läsa nya projekt', e);
+  }
+  renderNyaProjektList();
+}
+
+function renderNyaProjektList(){
+  const tbody = document.getElementById('ekonomiNyaProjektBody');
+  const empty = document.getElementById('ekonomiNyaProjektEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = nyaProjektList.length ? 'none' : 'block';
+  nyaProjektList.forEach(candidate => {
+    const d = candidate.data || {};
+    const tr = document.createElement('tr');
+    tr.onclick = () => openNyaProjektDetail(candidate.id);
+    const statusLabel = (candidate.status === 'promoted' ? 'Omvandlat till projekt' : 'Kandidat') + (candidate.is_public ? ' · Delad' : '');
+    tr.innerHTML =
+      '<td style="text-align:left;">' + escapeHtml(candidate.name) + '</td>' +
+      '<td style="text-align:left;">' + statusLabel + '</td>' +
+      '<td>' + nyaProjektFormatValue('int', d.antalBostader) + '</td>' +
+      '<td>' + nyaProjektFormatValue('kr', d.resultat) + '</td>' +
+      '<td>' + nyaProjektFormatValue('pct', d.projektmarginal) + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function closeNyaProjektDetail(){
+  currentNyaProjektId = null;
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('ekonomiNyaProjektListView').style.display = 'block';
+}
+document.getElementById('backToNyaProjektListBtn').onclick = closeNyaProjektDetail;
+
+function openNyaProjektDetail(id){
+  currentNyaProjektId = id;
+  document.getElementById('ekonomiNyaProjektListView').style.display = 'none';
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'block';
+  renderNyaProjektDetail();
+}
+
+function buildNyaProjektNyckeltalCard(candidate, field){
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.style.cursor = 'pointer';
+  const value = candidate.data[field.key];
+  title.textContent = nyaProjektFormatValue(field.type, value);
+  title.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    const current = candidate.data[field.key];
+    input.value = current != null ? (field.type === 'pct' ? current * 100 : current) : '';
+    input.style.cssText = "width:100%; box-sizing:border-box; font-size:20px; font-family:'Fraunces',serif; font-weight:700; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px;";
+    title.replaceWith(input);
+    input.focus(); input.select();
+    const save = async () => {
+      const raw = input.value.trim();
+      const num = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      candidate.data[field.key] = (num === null || isNaN(num)) ? null : (field.type === 'pct' ? num / 100 : num);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = field.label;
+  card.appendChild(title);
+  card.appendChild(sub);
+  return card;
+}
+
+function renderNyaProjektDetail(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate){ closeNyaProjektDetail(); return; }
+  if(!candidate.data) candidate.data = {};
+  if(!candidate.data.fordelning) candidate.data.fordelning = {};
+
+  document.getElementById('nyaProjektDetailTitle').textContent = candidate.name;
+  document.getElementById('nyaProjektDetailStatus').textContent =
+    candidate.status === 'promoted' ? '✓ Omvandlat till projekt' : 'Kandidat under utvärdering';
+  document.getElementById('nyaProjektPromoteBtn').style.display = candidate.status === 'promoted' ? 'none' : 'inline-block';
+
+  const grid = document.getElementById('nyaProjektNyckeltalGrid');
+  grid.innerHTML = '';
+  NYA_PROJEKT_NYCKELTAL_FIELDS.forEach(field => grid.appendChild(buildNyaProjektNyckeltalCard(candidate, field)));
+
+  const fordelningBody = document.getElementById('nyaProjektFordelningBody');
+  fordelningBody.innerHTML = '';
+  const fordelning = candidate.data.fordelning;
+  NYA_PROJEKT_FORDELNING_FIELDS.forEach(f => {
+    const tr = document.createElement('tr');
+    const labelTd = document.createElement('td');
+    labelTd.style.textAlign = 'left';
+    labelTd.textContent = f.label;
+    tr.appendChild(labelTd);
+
+    const valTd = document.createElement('td');
+    const span = document.createElement('span');
+    span.className = 'editable';
+    span.style.cursor = 'pointer';
+    span.textContent = fordelning[f.key] != null ? formatKrFull(fordelning[f.key]) : '—';
+    span.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = fordelning[f.key] != null ? fordelning[f.key] : '';
+      input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      valTd.innerHTML = '';
+      valTd.appendChild(input);
+      input.focus(); input.select();
+      const save = async () => {
+        const raw = input.value.trim();
+        fordelning[f.key] = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      };
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+    };
+    valTd.appendChild(span);
+    tr.appendChild(valTd);
+    fordelningBody.appendChild(tr);
+  });
+
+  const groupsEl = document.getElementById('nyaProjektKostnadsgrupper');
+  groupsEl.innerHTML = '';
+  const groups = candidate.data.kostnadsgrupper || [];
+  if(!groups.length){
+    groupsEl.innerHTML = '<p class="eko-sub">Ingen detaljerad kostnadsuppställning inläst.</p>';
+  } else {
+    groups.forEach(group => {
+      const room = document.createElement('div');
+      room.className = 'material-room';
+      const header = document.createElement('div');
+      header.className = 'material-room-header';
+      const h3 = document.createElement('h3');
+      h3.textContent = group.grupp + (group.summa != null ? ' · ' + formatKrFull(group.summa) : '');
+      header.appendChild(h3);
+      room.appendChild(header);
+      (group.poster || []).forEach(p => {
+        const row = document.createElement('div');
+        row.style.cssText = "display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-bottom:1px solid var(--line-soft);";
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = p.namn || '';
+        const amountSpan = document.createElement('span');
+        amountSpan.style.fontFamily = "'JetBrains Mono', monospace";
+        amountSpan.textContent = p.belopp != null ? formatKrFull(p.belopp) : '—';
+        row.appendChild(nameSpan);
+        row.appendChild(amountSpan);
+        room.appendChild(row);
+      });
+      groupsEl.appendChild(room);
+    });
+  }
+
+  const shareBox = document.getElementById('nyaProjektShareBox');
+  shareBox.style.display = candidate.is_public ? 'block' : 'none';
+  document.getElementById('nyaProjektShareBtn').style.display = candidate.is_public ? 'none' : 'inline-block';
+  if(candidate.is_public){
+    document.getElementById('nyaProjektShareLinkInput').value = location.origin + location.pathname + '?propa=' + candidate.share_id;
+  }
+}
+
+document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate || candidate.status === 'promoted') return;
+  const name = candidate.name;
+  if(!name){ showToast('Projektet saknar namn'); return; }
+  if(projects.some(p => p.name.toLowerCase() === name.toLowerCase())){
+    showToast('Det finns redan ett projekt med det namnet');
+    return;
+  }
+  const newProject = { id: slugId(name), name, status: 'Kommande' };
+  projects.push(newProject);
+  await persistProjects();
+  candidate.status = 'promoted';
+  candidate.promoted_project_id = newProject.id;
+  try{
+    await DB.updateNyaProjekt(candidate.id, { status: 'promoted', promoted_project_id: newProject.id });
+  }catch(e){
+    showDebugError('Kunde inte spara att projektet omvandlats', e);
+  }
+  showToast('Skapat som projekt: ' + name);
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+document.getElementById('nyaProjektShareBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.is_public = true;
+  await DB.updateNyaProjekt(candidate.id, { is_public: true });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektUnshareBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.is_public = false;
+  await DB.updateNyaProjekt(candidate.id, { is_public: false });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektCopyLinkBtn').onclick = () => {
+  const input = document.getElementById('nyaProjektShareLinkInput');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => showToast('Länk kopierad')).catch(() => {});
+};
+document.getElementById('nyaProjektDeleteBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  await DB.deleteNyaProjekt(candidate.id);
+  nyaProjektList = nyaProjektList.filter(c => c.id !== candidate.id);
+  closeNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+function xlsxWorkbookToGridText(wb){
+  const parts = [];
+  wb.SheetNames.forEach(name => {
+    const sheet = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+    parts.push('=== Blad: ' + name + ' ===');
+    rows.forEach((row, i) => {
+      const hasContent = row.some(c => c !== undefined && c !== null && String(c).trim() !== '');
+      if(!hasContent) return;
+      const cells = row.map(c => c === undefined || c === null ? '' : String(c)).join('\t');
+      parts.push((i + 1) + ' | ' + cells);
+    });
+  });
+  return parts.join('\n');
+}
+
+function setNyaProjektUploadStatus(msg, kind){
+  const el = document.getElementById('nyaProjektUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('nyaProjektUploadBtn').onclick = () => {
+  document.getElementById('nyaProjektFileInput').click();
+};
+document.getElementById('nyaProjektFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const btn = document.getElementById('nyaProjektUploadBtn');
+  btn.disabled = true;
+  setNyaProjektUploadStatus('Läser kalkylen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kalkyl', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.projektnamn) throw new Error('Kunde inte tolka kalkylen.');
+    const row = {
+      id: uid(),
+      share_id: uid() + uid() + uid(),
+      name: data.projektnamn,
+      data,
+      is_public: false,
+      status: 'candidate',
+      created_by: myPersonId,
+      created_by_name: myName
+    };
+    const saved = await DB.insertNyaProjekt(row);
+    nyaProjektList.unshift(saved);
+    renderNyaProjektList();
+    setNyaProjektUploadStatus('Kalkylen inläst: ' + data.projektnamn, 'ok');
+    openNyaProjektDetail(saved.id);
+  }catch(err){
+    setNyaProjektUploadStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+// ---------- Publik investeringspropå (oinloggad, delbar länk) ----------
+function buildPropaHtml(candidate){
+  const d = candidate.data || {};
+  const kr = v => v != null ? formatKrFull(v) : '—';
+  const pct = v => v != null ? (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %' : '—';
+  const fordelning = d.fordelning || {};
+  const fordelningLabels = { mark: 'Mark', entreprenad: 'Entreprenad', projektering: 'Projektering', finansiering: 'Finansiering' };
+  const fordelningRows = Object.keys(fordelningLabels).filter(key => fordelning[key] != null).map(key =>
+    '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + fordelningLabels[key] + '</td>' +
+    '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(fordelning[key]) + '</td></tr>'
+  ).join('');
+
+  return '<div style="max-width:820px; margin:0 auto; padding:56px 24px 80px;">' +
+    '<div style="text-align:center; margin-bottom:44px;">' +
+      '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; letter-spacing:1.5px; color:var(--ink-soft); text-transform:uppercase;">Solvinkeln Fastigheter · Investeringspropå</div>' +
+      '<h1 style="font-family:\'Fraunces\',serif; font-size:34px; margin:10px 0 0;">' + escapeHtml(candidate.name) + '</h1>' +
+    '</div>' +
+    '<div class="home-grid" style="margin-bottom:36px;">' +
+      '<div class="home-card"><div class="home-card-title">' + (d.antalBostader != null ? d.antalBostader : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + (d.boaTotal != null ? d.boaTotal.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(d.intakter) + '</div><div class="home-card-sub">Intäkter</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(d.utgifter) + '</div><div class="home-card-sub">Kostnad</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(d.resultat) + '</div><div class="home-card-sub">Resultat</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + pct(d.projektmarginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + pct(d.avkastningEgetKapital) + '</div><div class="home-card-sub">Avkastning eget kapital</div></div>' +
+    '</div>' +
+    (fordelningRows ?
+      '<h3 style="font-family:\'Fraunces\',serif; margin-bottom:12px;">Kostnadsfördelning</h3>' +
+      '<table style="width:100%; border-collapse:collapse; margin-bottom:40px;"><tbody>' + fordelningRows + '</tbody></table>'
+      : '') +
+    '<p style="text-align:center; font-size:11px; color:var(--ink-soft);">Solvinkeln Fastigheter AB · uppdaterad ' + new Date(candidate.updated_at || candidate.created_at).toLocaleDateString('sv-SE') + '</p>' +
+  '</div>';
+}
+
+function showPublicPropaOnly(){
+  [...document.body.children].forEach(el => {
+    if(el.id !== 'publicPropaView') el.style.display = 'none';
+  });
+  const root = document.getElementById('publicPropaView');
+  root.style.display = 'block';
+  return root;
+}
+
+async function renderPublicNyaProjektView(shareId){
+  const root = showPublicPropaOnly();
+  root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Läser in…</div>';
+  try{
+    const candidate = await DB.getPublicNyaProjekt(shareId);
+    if(!candidate){
+      root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Den här länken är inte längre giltig.</div>';
+      return;
+    }
+    root.innerHTML = buildPropaHtml(candidate);
+  }catch(e){
+    root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Kunde inte läsa in sidan.</div>';
+  }
 }
 
 function updateEkonomiProjektVinstPreview(){
@@ -6379,6 +6758,11 @@ async function startApp(){
 }
 
 (async function boot(){
+  const propaShareId = new URLSearchParams(location.search).get('propa');
+  if(propaShareId){
+    await renderPublicNyaProjektView(propaShareId);
+    return;
+  }
   if(await DB.isAuthenticated()){
     document.getElementById('codeGateOverlay').classList.remove('open');
     await startApp();

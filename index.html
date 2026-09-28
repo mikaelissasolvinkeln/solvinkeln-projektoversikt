@@ -859,6 +859,7 @@
 </style>
 </head>
 <body>
+<div id="publicPropaView" style="display:none;"></div>
 <div id="codeGateOverlay" class="modal-overlay open">
   <div class="modal-box">
     <h3 style="font-family:'Fraunces',serif;font-weight:700;font-size:19px;margin:0 0 6px;">Solvinkeln Fastigheter</h3>
@@ -1004,6 +1005,7 @@
       <button class="ekonomi-sub-tab" data-ekonomi-view="likviditet">Likviditet</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="lan">Lån</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="vinstsolvinkeln">Förväntad vinst Solvinkeln</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="nyaprojekt">Nya projekt</button>
     </div>
 
     <div id="ekonomiOversiktView">
@@ -1155,6 +1157,66 @@
           <tbody id="ekonomiVinstSolvinkelnBody"></tbody>
         </table>
       </div>
+    </div>
+
+    <div id="ekonomiNyaProjektListView" style="display:none;">
+      <p class="eko-sub" style="margin:0 0 14px;">Projektkalkyler under utvärdering - laddas upp här, redigeras och kan skickas som investeringspropå innan man bestämmer sig. Blir inget "riktigt" projekt i Projektöversikt förrän man klickar "Gör till projekt".</p>
+      <div class="contract-upload-row">
+        <button type="button" id="nyaProjektUploadBtn" class="upload-btn">📄 Läs in projektkalkyl (Excel)</button>
+        <input type="file" id="nyaProjektFileInput" accept=".xlsx,.xls" style="display:none;">
+        <span id="nyaProjektUploadStatus" class="contract-upload-status"></span>
+      </div>
+      <div class="table-scroll">
+        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Projekt</th>
+              <th style="text-align:left;">Status</th>
+              <th>Bostäder</th>
+              <th>Resultat</th>
+              <th>Marginal</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiNyaProjektBody"></tbody>
+        </table>
+        <div id="ekonomiNyaProjektEmptyState" class="empty-state" style="display:none;">Inga projektkalkyler inlästa än.</div>
+      </div>
+    </div>
+
+    <div id="ekonomiNyaProjektDetailView" style="display:none;">
+      <div class="project-header">
+        <button id="backToNyaProjektListBtn" class="back-btn">← Nya projekt</button>
+        <h2 id="nyaProjektDetailTitle" class="project-header-name"></h2>
+      </div>
+      <p class="eko-sub" id="nyaProjektDetailStatus" style="margin:0 0 16px;"></p>
+
+      <div class="material-toolbar" style="margin-bottom:20px;">
+        <button id="nyaProjektPromoteBtn" class="material-pdf-btn">✓ Gör till projekt</button>
+        <button id="nyaProjektShareBtn">Dela med investerare</button>
+        <button id="nyaProjektDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort</button>
+      </div>
+      <div id="nyaProjektShareBox" style="display:none; margin-bottom:20px; padding:12px 14px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px;">
+        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:6px;">Länk till investeringspropå (kräver ingen inloggning):</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input type="text" id="nyaProjektShareLinkInput" readonly style="flex:1; min-width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:12.5px; font-family:'JetBrains Mono',monospace;">
+          <button id="nyaProjektCopyLinkBtn" style="white-space:nowrap;">Kopiera länk</button>
+          <button id="nyaProjektUnshareBtn" style="white-space:nowrap; background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Sluta dela</button>
+        </div>
+      </div>
+
+      <h3 style="margin-bottom:10px;">Nyckeltal</h3>
+      <div class="home-grid" id="nyaProjektNyckeltalGrid" style="margin-bottom:24px;"></div>
+
+      <h3 style="margin-bottom:10px;">Kostnadsfördelning</h3>
+      <div class="table-scroll" style="margin-bottom:24px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th></tr></thead>
+          <tbody id="nyaProjektFordelningBody"></tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-bottom:10px;">Detaljerad kostnadsuppställning (från inläst kalkyl)</h3>
+      <div id="nyaProjektKostnadsgrupper"></div>
     </div>
 
     <div id="ekonomiProjektBudgetView" style="display:none;">
