@@ -1207,16 +1207,45 @@
       <h3 style="margin-bottom:10px;">Nyckeltal</h3>
       <div class="home-grid" id="nyaProjektNyckeltalGrid" style="margin-bottom:24px;"></div>
 
-      <h3 style="margin-bottom:10px;">Kostnadsfördelning</h3>
-      <div class="table-scroll" style="margin-bottom:24px;">
+      <h3 style="margin-bottom:10px;">Intäkter</h3>
+      <div class="table-scroll" style="margin-bottom:10px;">
         <table class="eko-compare-table" style="width:100%;">
-          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th></tr></thead>
-          <tbody id="nyaProjektFordelningBody"></tbody>
+          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th><th>Kr/kvm</th><th></th></tr></thead>
+          <tbody id="nyaProjektIntakterBody"></tbody>
         </table>
       </div>
+      <button id="nyaProjektAddIntaktBtn" class="add-inline-btn" style="margin-bottom:24px;">+ Lägg till intäkt</button>
 
-      <h3 style="margin-bottom:10px;">Detaljerad kostnadsuppställning (från inläst kalkyl)</h3>
-      <div id="nyaProjektKostnadsgrupper"></div>
+      <h3 style="margin-bottom:10px;">Kostnader</h3>
+      <div id="nyaProjektKostnadsgrupper" style="margin-bottom:10px;"></div>
+      <button id="nyaProjektAddGruppBtn" class="add-inline-btn" style="margin-bottom:24px;">+ Lägg till kostnadsgrupp</button>
+
+      <h3 style="margin-bottom:10px;">Finansieringsplan</h3>
+      <p class="eko-sub" id="nyaProjektLikviditetsbehovText" style="margin:0 0 10px;"></p>
+      <div class="table-scroll" style="margin-bottom:10px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th><th></th></tr></thead>
+          <tbody id="nyaProjektFinansieringBody"></tbody>
+        </table>
+      </div>
+      <button id="nyaProjektAddFinansieringBtn" class="add-inline-btn">+ Lägg till post</button>
+    </div>
+
+    <div id="nyaProjektBostaderModalOverlay" class="modal-overlay">
+      <div class="modal-box" style="max-width:560px;">
+        <h3>Bostäder</h3>
+        <p class="modal-sub" id="nyaProjektBostaderModalSub">Prisdifferentiera mellan de enskilda bostäderna.</p>
+        <div class="table-scroll" style="max-height:360px; overflow-y:auto;">
+          <table class="eko-compare-table" style="width:100%;">
+            <thead><tr><th style="text-align:left;">Namn</th><th>Kvm</th><th>Pris (kr)</th><th></th></tr></thead>
+            <tbody id="nyaProjektBostaderBody"></tbody>
+          </table>
+        </div>
+        <button id="nyaProjektAddBostadBtn" class="add-inline-btn" style="margin-top:10px;">+ Lägg till bostad</button>
+        <div class="modal-actions">
+          <button id="nyaProjektBostaderCloseBtn">Stäng</button>
+        </div>
+      </div>
     </div>
 
     <div id="ekonomiProjektBudgetView" style="display:none;">

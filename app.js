@@ -2087,25 +2087,6 @@ function renderEkonomiVinstSolvinkeln(){
 // Ligger i en egen delad tabell (nya_projekt, se schema-nya-projekt.sql) - inte
 // personal_data som resten av Ekonomi - eftersom en rad kan göras publikt
 // läsbar (utan inloggning) när den delas som investeringspropå.
-const NYA_PROJEKT_NYCKELTAL_FIELDS = [
-  { key: 'antalBostader', label: 'Bostäder', type: 'int' },
-  { key: 'antalParkering', label: 'Parkeringsplatser', type: 'int' },
-  { key: 'boaTotal', label: 'BOA totalt (m²)', type: 'int' },
-  { key: 'intakter', label: 'Intäkter', type: 'kr' },
-  { key: 'utgifter', label: 'Kostnad', type: 'kr' },
-  { key: 'resultat', label: 'Resultat', type: 'kr' },
-  { key: 'projektmarginal', label: 'Projektmarginal', type: 'pct' },
-  { key: 'avkastningEgetKapital', label: 'Avkastning eget kapital', type: 'pct' }
-];
-const NYA_PROJEKT_FORDELNING_FIELDS = [
-  { key: 'mark', label: 'Mark' },
-  { key: 'entreprenad', label: 'Entreprenad' },
-  { key: 'projektering', label: 'Projektering' },
-  { key: 'finansiering', label: 'Finansiering' },
-  { key: 'aktier', label: 'Aktier' },
-  { key: 'totalt', label: 'Totalt' }
-];
-
 function nyaProjektFormatValue(type, value){
   if(value === null || value === undefined || value === '') return '—';
   if(type === 'kr') return formatKrFull(value);
@@ -2113,10 +2094,82 @@ function nyaProjektFormatValue(type, value){
   if(type === 'int') return Math.round(value).toLocaleString('sv-SE');
   return value;
 }
+function nyaProjektPerKvm(total, kvm){
+  return (total != null && kvm) ? formatKrPerKvm(total, kvm) : null;
+}
+
+// Normaliserar en kandidats data till den aktuella formen (id:n på alla rader,
+// listor istället för äldre fasta fält) - körs varje gång en kandidat öppnas,
+// så äldre inlästa kalkyler (från innan omläggningen till fritt redigerbara
+// listor) fortsätter fungera utan att tappa data.
+function migrateNyaProjektData(data){
+  data = data || {};
+  delete data.antalParkering;
+
+  if(!Array.isArray(data.kostnadsgrupper)) data.kostnadsgrupper = [];
+  data.kostnadsgrupper.forEach(g => {
+    if(!g.id) g.id = uid();
+    if(!Array.isArray(g.poster)) g.poster = [];
+    g.poster.forEach(p => { if(!p.id) p.id = uid(); });
+    delete g.summa;
+  });
+  if(data.fordelning){
+    // "fordelning" var en ALTERNATIV, grövre vy av SAMMA totalkostnad som
+    // kostnadsgrupper (inte en tillkommande post) - fälls bara in som en egen
+    // grupp om det inte redan finns en detaljerad uppställning, annars
+    // skulle kostnaden räknas dubbelt.
+    if(data.kostnadsgrupper.length === 0){
+      const labels = { mark: 'Mark', entreprenad: 'Entreprenad', projektering: 'Projektering', finansiering: 'Finansiering', aktier: 'Aktier' };
+      const poster = Object.keys(labels)
+        .filter(k => data.fordelning[k] != null)
+        .map(k => ({ id: uid(), namn: labels[k], belopp: data.fordelning[k] }));
+      if(poster.length) data.kostnadsgrupper.unshift({ id: uid(), grupp: 'Övrigt', poster });
+    }
+    delete data.fordelning;
+  }
+
+  if(!Array.isArray(data.intakter)){
+    const val = typeof data.intakter === 'number' ? data.intakter : null;
+    data.intakter = val != null ? [{ id: uid(), namn: 'Intäkter', belopp: val }] : [];
+  }
+  data.intakter.forEach(i => { if(!i.id) i.id = uid(); });
+
+  if(!Array.isArray(data.finansiering)) data.finansiering = [];
+  data.finansiering.forEach(f => { if(!f.id) f.id = uid(); });
+
+  if(!Array.isArray(data.bostader)) data.bostader = [];
+  data.bostader.forEach(b => { if(!b.id) b.id = uid(); });
+
+  delete data.utgifter;
+  delete data.resultat;
+  delete data.projektmarginal;
+  return data;
+}
+
+function nyaProjektGroupTotal(group){
+  return (group.poster || []).reduce((s, p) => s + (p.belopp || 0), 0);
+}
+function nyaProjektTotals(data){
+  const totalIntakter = (data.intakter || []).reduce((s, i) => s + (i.belopp || 0), 0);
+  const totalKostnader = (data.kostnadsgrupper || []).reduce((s, g) => s + nyaProjektGroupTotal(g), 0);
+  const totalFinansiering = (data.finansiering || []).reduce((s, f) => s + (f.belopp || 0), 0);
+  const resultat = totalIntakter - totalKostnader;
+  const marginal = totalIntakter ? resultat / totalIntakter : null;
+  return { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal };
+}
+function nyaProjektBostaderCounts(data){
+  const rows = data.bostader || [];
+  const withKvm = rows.filter(r => r.kvm != null);
+  return {
+    antal: rows.length ? rows.length : (data.antalBostader != null ? data.antalBostader : null),
+    boa: withKvm.length ? withKvm.reduce((s, r) => s + r.kvm, 0) : (data.boaTotal != null ? data.boaTotal : null)
+  };
+}
 
 async function loadNyaProjektList(){
   try{
     nyaProjektList = await DB.listNyaProjekt();
+    nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); });
   }catch(e){
     nyaProjektList = [];
     showDebugError('Kunde inte läsa nya projekt', e);
@@ -2131,15 +2184,17 @@ function renderNyaProjektList(){
   empty.style.display = nyaProjektList.length ? 'none' : 'block';
   nyaProjektList.forEach(candidate => {
     const d = candidate.data || {};
+    const { antal } = nyaProjektBostaderCounts(d);
+    const { totalKostnader, resultat, marginal } = nyaProjektTotals(d);
     const tr = document.createElement('tr');
     tr.onclick = () => openNyaProjektDetail(candidate.id);
     const statusLabel = (candidate.status === 'promoted' ? 'Omvandlat till projekt' : 'Kandidat') + (candidate.is_public ? ' · Delad' : '');
     tr.innerHTML =
       '<td style="text-align:left;">' + escapeHtml(candidate.name) + '</td>' +
       '<td style="text-align:left;">' + statusLabel + '</td>' +
-      '<td>' + nyaProjektFormatValue('int', d.antalBostader) + '</td>' +
-      '<td>' + nyaProjektFormatValue('kr', d.resultat) + '</td>' +
-      '<td>' + nyaProjektFormatValue('pct', d.projektmarginal) + '</td>';
+      '<td>' + nyaProjektFormatValue('int', antal) + '</td>' +
+      '<td>' + (totalKostnader ? nyaProjektFormatValue('kr', resultat) : '—') + '</td>' +
+      '<td>' + (totalKostnader ? nyaProjektFormatValue('pct', marginal) : '—') + '</td>';
     tbody.appendChild(tr);
   });
 }
@@ -2158,27 +2213,27 @@ function openNyaProjektDetail(id){
   renderNyaProjektDetail();
 }
 
-function buildNyaProjektNyckeltalCard(candidate, field){
+function buildNyaProjektEditableCard(candidate, key, label, type){
   const card = document.createElement('div');
   card.className = 'home-card';
   const title = document.createElement('div');
   title.className = 'home-card-title';
   title.style.cursor = 'pointer';
-  const value = candidate.data[field.key];
-  title.textContent = nyaProjektFormatValue(field.type, value);
+  const value = candidate.data[key];
+  title.textContent = nyaProjektFormatValue(type, value);
   title.onclick = () => {
     const input = document.createElement('input');
     input.type = 'number';
     input.step = 'any';
-    const current = candidate.data[field.key];
-    input.value = current != null ? (field.type === 'pct' ? current * 100 : current) : '';
+    const current = candidate.data[key];
+    input.value = current != null ? (type === 'pct' ? current * 100 : current) : '';
     input.style.cssText = "width:100%; box-sizing:border-box; font-size:20px; font-family:'Fraunces',serif; font-weight:700; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px;";
     title.replaceWith(input);
     input.focus(); input.select();
     const save = async () => {
       const raw = input.value.trim();
       const num = raw === '' ? null : parseFloat(raw.replace(',', '.'));
-      candidate.data[field.key] = (num === null || isNaN(num)) ? null : (field.type === 'pct' ? num / 100 : num);
+      candidate.data[key] = (num === null || isNaN(num)) ? null : (type === 'pct' ? num / 100 : num);
       await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
       renderNyaProjektDetail();
       renderNyaProjektList();
@@ -2188,17 +2243,141 @@ function buildNyaProjektNyckeltalCard(candidate, field){
   };
   const sub = document.createElement('div');
   sub.className = 'home-card-sub';
-  sub.textContent = field.label;
+  sub.textContent = label;
   card.appendChild(title);
   card.appendChild(sub);
   return card;
 }
 
+function buildNyaProjektComputedCard(label, value, type, perKvmText){
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.textContent = nyaProjektFormatValue(type, value);
+  card.appendChild(title);
+  if(perKvmText){
+    const kvmLine = document.createElement('div');
+    kvmLine.style.cssText = "font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;";
+    kvmLine.textContent = perKvmText;
+    card.appendChild(kvmLine);
+  }
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = label;
+  card.appendChild(sub);
+  return card;
+}
+
+function buildNyaProjektBostaderCard(candidate){
+  const { antal } = nyaProjektBostaderCounts(candidate.data);
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.style.cursor = 'pointer';
+  title.textContent = nyaProjektFormatValue('int', antal);
+  title.onclick = () => openNyaProjektBostaderModal(candidate.id);
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = 'Bostäder (klicka för lista)';
+  card.appendChild(title);
+  card.appendChild(sub);
+  return card;
+}
+
+// Bygger en rad-tabell (namn/belopp, båda redigerbara, ta bort-knapp) som
+// återanvänds för Intäkter och för posterna inuti varje kostnadsgrupp.
+function renderNyaProjektRowList(tbody, rows, candidate, opts){
+  tbody.innerHTML = '';
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.style.textAlign = 'left';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'editable';
+    nameSpan.style.cursor = 'pointer';
+    nameSpan.textContent = row.namn || 'Namnlös post';
+    nameSpan.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = row.namn || '';
+      input.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      nameTd.innerHTML = '';
+      nameTd.appendChild(input);
+      input.focus(); input.select();
+      const save = async () => {
+        row.namn = input.value.trim();
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      };
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+    };
+    nameTd.appendChild(nameSpan);
+    tr.appendChild(nameTd);
+
+    const amountTd = document.createElement('td');
+    const amountSpan = document.createElement('span');
+    amountSpan.className = 'editable';
+    amountSpan.style.cursor = 'pointer';
+    amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+    amountSpan.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = row.belopp != null ? row.belopp : '';
+      input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      amountTd.innerHTML = '';
+      amountTd.appendChild(input);
+      input.focus(); input.select();
+      const save = async () => {
+        const raw = input.value.trim();
+        row.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      };
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+    };
+    amountTd.appendChild(amountSpan);
+    tr.appendChild(amountTd);
+
+    if(opts && opts.perKvm){
+      const kvmTd = document.createElement('td');
+      kvmTd.style.fontFamily = "'JetBrains Mono', monospace";
+      kvmTd.style.fontSize = '11px';
+      kvmTd.style.color = 'var(--ink-soft)';
+      kvmTd.textContent = nyaProjektPerKvm(row.belopp, opts.boaTotal) || '—';
+      tr.appendChild(kvmTd);
+    }
+
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.onclick = async () => {
+      const idx = rows.indexOf(row);
+      if(idx > -1) rows.splice(idx, 1);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    };
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
 function renderNyaProjektDetail(){
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate){ closeNyaProjektDetail(); return; }
-  if(!candidate.data) candidate.data = {};
-  if(!candidate.data.fordelning) candidate.data.fordelning = {};
+  candidate.data = migrateNyaProjektData(candidate.data);
+  const data = candidate.data;
+  const { antal, boa } = nyaProjektBostaderCounts(data);
+  const { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal } = nyaProjektTotals(data);
 
   document.getElementById('nyaProjektDetailTitle').textContent = candidate.name;
   document.getElementById('nyaProjektDetailStatus').textContent =
@@ -2207,75 +2386,87 @@ function renderNyaProjektDetail(){
 
   const grid = document.getElementById('nyaProjektNyckeltalGrid');
   grid.innerHTML = '';
-  NYA_PROJEKT_NYCKELTAL_FIELDS.forEach(field => grid.appendChild(buildNyaProjektNyckeltalCard(candidate, field)));
+  grid.appendChild(buildNyaProjektBostaderCard(candidate));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'boaTotal', 'BOA totalt (m²)', 'int'));
+  grid.appendChild(buildNyaProjektComputedCard('Intäkter', totalIntakter || null, 'kr', nyaProjektPerKvm(totalIntakter, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Kostnad', totalKostnader || null, 'kr', nyaProjektPerKvm(totalKostnader, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Resultat', (totalIntakter || totalKostnader) ? resultat : null, 'kr', nyaProjektPerKvm(resultat, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Projektmarginal', marginal, 'pct', null));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'avkastningEgetKapital', 'Avkastning eget kapital', 'pct'));
 
-  const fordelningBody = document.getElementById('nyaProjektFordelningBody');
-  fordelningBody.innerHTML = '';
-  const fordelning = candidate.data.fordelning;
-  NYA_PROJEKT_FORDELNING_FIELDS.forEach(f => {
-    const tr = document.createElement('tr');
-    const labelTd = document.createElement('td');
-    labelTd.style.textAlign = 'left';
-    labelTd.textContent = f.label;
-    tr.appendChild(labelTd);
-
-    const valTd = document.createElement('td');
-    const span = document.createElement('span');
-    span.className = 'editable';
-    span.style.cursor = 'pointer';
-    span.textContent = fordelning[f.key] != null ? formatKrFull(fordelning[f.key]) : '—';
-    span.onclick = () => {
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.value = fordelning[f.key] != null ? fordelning[f.key] : '';
-      input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
-      valTd.innerHTML = '';
-      valTd.appendChild(input);
-      input.focus(); input.select();
-      const save = async () => {
-        const raw = input.value.trim();
-        fordelning[f.key] = raw === '' ? null : parseFloat(raw.replace(',', '.'));
-        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-        renderNyaProjektDetail();
-      };
-      input.addEventListener('blur', save);
-      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
-    };
-    valTd.appendChild(span);
-    tr.appendChild(valTd);
-    fordelningBody.appendChild(tr);
-  });
+  renderNyaProjektRowList(document.getElementById('nyaProjektIntakterBody'), data.intakter, candidate, { perKvm: true, boaTotal: boa });
 
   const groupsEl = document.getElementById('nyaProjektKostnadsgrupper');
   groupsEl.innerHTML = '';
-  const groups = candidate.data.kostnadsgrupper || [];
-  if(!groups.length){
-    groupsEl.innerHTML = '<p class="eko-sub">Ingen detaljerad kostnadsuppställning inläst.</p>';
+  if(!data.kostnadsgrupper.length){
+    groupsEl.innerHTML = '<p class="eko-sub">Inga kostnader inlästa än.</p>';
   } else {
-    groups.forEach(group => {
+    data.kostnadsgrupper.forEach(group => {
       const room = document.createElement('div');
       room.className = 'material-room';
+
       const header = document.createElement('div');
       header.className = 'material-room-header';
-      const h3 = document.createElement('h3');
-      h3.textContent = group.grupp + (group.summa != null ? ' · ' + formatKrFull(group.summa) : '');
-      header.appendChild(h3);
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'editable';
+      nameSpan.style.cssText = "cursor:pointer; font-family:'Fraunces',serif; font-weight:700; font-size:17px; flex:1;";
+      const groupTotal = nyaProjektGroupTotal(group);
+      nameSpan.textContent = group.grupp + ' · ' + formatKrFull(groupTotal) + (nyaProjektPerKvm(groupTotal, boa) ? ' · ' + nyaProjektPerKvm(groupTotal, boa) : '');
+      nameSpan.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = group.grupp || '';
+        input.style.cssText = 'flex:1; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font-size:15px;';
+        nameSpan.replaceWith(input);
+        input.focus(); input.select();
+        const save = async () => {
+          group.grupp = input.value.trim() || 'Namnlös grupp';
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          renderNyaProjektDetail();
+        };
+        input.addEventListener('blur', save);
+        input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+      };
+      header.appendChild(nameSpan);
+      const delGroupBtn = document.createElement('button');
+      delGroupBtn.textContent = '✕';
+      delGroupBtn.title = 'Ta bort gruppen';
+      delGroupBtn.onclick = async () => {
+        data.kostnadsgrupper = data.kostnadsgrupper.filter(g => g.id !== group.id);
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+        renderNyaProjektList();
+      };
+      header.appendChild(delGroupBtn);
       room.appendChild(header);
-      (group.poster || []).forEach(p => {
-        const row = document.createElement('div');
-        row.style.cssText = "display:flex; justify-content:space-between; font-size:12.5px; padding:3px 0; border-bottom:1px solid var(--line-soft);";
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = p.namn || '';
-        const amountSpan = document.createElement('span');
-        amountSpan.style.fontFamily = "'JetBrains Mono', monospace";
-        amountSpan.textContent = p.belopp != null ? formatKrFull(p.belopp) : '—';
-        row.appendChild(nameSpan);
-        row.appendChild(amountSpan);
-        room.appendChild(row);
-      });
+
+      const table = document.createElement('table');
+      table.style.width = '100%';
+      const tbody = document.createElement('tbody');
+      table.appendChild(tbody);
+      room.appendChild(table);
+      renderNyaProjektRowList(tbody, group.poster, candidate, { perKvm: true, boaTotal: boa });
+
+      const addItemBtn = document.createElement('button');
+      addItemBtn.className = 'add-inline-btn';
+      addItemBtn.style.marginTop = '8px';
+      addItemBtn.textContent = '+ Lägg till post';
+      addItemBtn.onclick = async () => {
+        group.poster.push({ id: uid(), namn: '', belopp: null });
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      };
+      room.appendChild(addItemBtn);
+
       groupsEl.appendChild(room);
     });
   }
+
+  document.getElementById('nyaProjektLikviditetsbehovText').textContent =
+    'Likviditetsbehov (= total kostnad): ' + formatKrFull(totalKostnader) +
+    ' · Finansierat: ' + formatKrFull(totalFinansiering) +
+    ' · Kvar att finansiera: ' + formatKrFull(totalKostnader - totalFinansiering);
+  renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, {});
 
   const shareBox = document.getElementById('nyaProjektShareBox');
   shareBox.style.display = candidate.is_public ? 'block' : 'none';
@@ -2284,6 +2475,125 @@ function renderNyaProjektDetail(){
     document.getElementById('nyaProjektShareLinkInput').value = location.origin + location.pathname + '?propa=' + candidate.share_id;
   }
 }
+
+document.getElementById('nyaProjektAddIntaktBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.intakter.push({ id: uid(), namn: '', belopp: null });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddGruppBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.kostnadsgrupper.push({ id: uid(), grupp: 'Ny grupp', poster: [] });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddFinansieringBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.finansiering.push({ id: uid(), namn: '', belopp: null });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+
+// ---------- Bostäder (per kandidat) - prisdifferentiera mellan enskilda bostäder ----------
+let currentNyaProjektBostaderId = null;
+function openNyaProjektBostaderModal(candidateId){
+  currentNyaProjektBostaderId = candidateId;
+  renderNyaProjektBostaderModal();
+  document.getElementById('nyaProjektBostaderModalOverlay').classList.add('open');
+}
+function closeNyaProjektBostaderModal(){
+  document.getElementById('nyaProjektBostaderModalOverlay').classList.remove('open');
+  currentNyaProjektBostaderId = null;
+}
+document.getElementById('nyaProjektBostaderCloseBtn').onclick = closeNyaProjektBostaderModal;
+document.getElementById('nyaProjektBostaderModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'nyaProjektBostaderModalOverlay') closeNyaProjektBostaderModal();
+});
+
+function renderNyaProjektBostaderModal(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate) return;
+  const rows = candidate.data.bostader;
+  document.getElementById('nyaProjektBostaderModalSub').textContent =
+    candidate.name + ' · ' + rows.length + ' bostäder · ' + formatKrFull(rows.reduce((s, r) => s + (r.pris || 0), 0)) + ' totalt';
+
+  const tbody = document.getElementById('nyaProjektBostaderBody');
+  tbody.innerHTML = '';
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.style.textAlign = 'left';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = row.namn || '';
+    nameInput.placeholder = 'T.ex. Lgh 1';
+    nameInput.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    nameInput.addEventListener('change', async () => {
+      row.namn = nameInput.value.trim();
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    });
+    nameTd.appendChild(nameInput);
+    tr.appendChild(nameTd);
+
+    const kvmTd = document.createElement('td');
+    const kvmInput = document.createElement('input');
+    kvmInput.type = 'number';
+    kvmInput.value = row.kvm != null ? row.kvm : '';
+    kvmInput.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    kvmInput.addEventListener('change', async () => {
+      const raw = kvmInput.value.trim();
+      row.kvm = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+    });
+    kvmTd.appendChild(kvmInput);
+    tr.appendChild(kvmTd);
+
+    const prisTd = document.createElement('td');
+    const prisInput = document.createElement('input');
+    prisInput.type = 'number';
+    prisInput.value = row.pris != null ? row.pris : '';
+    prisInput.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    prisInput.addEventListener('change', async () => {
+      const raw = prisInput.value.trim();
+      row.pris = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+    });
+    prisTd.appendChild(prisInput);
+    tr.appendChild(prisTd);
+
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.onclick = async () => {
+      candidate.data.bostader = candidate.data.bostader.filter(b => b.id !== row.id);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    };
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+
+    tbody.appendChild(tr);
+  });
+}
+document.getElementById('nyaProjektAddBostadBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate) return;
+  candidate.data.bostader.push({ id: uid(), namn: '', kvm: null, pris: null });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektBostaderModal();
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
 
 document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
@@ -2376,11 +2686,15 @@ document.getElementById('nyaProjektFileInput').addEventListener('change', async 
     const { data, error } = await sb.functions.invoke('extract-kalkyl', { body: { gridText, filename: file.name } });
     if(error) throw error;
     if(!data || !data.projektnamn) throw new Error('Kunde inte tolka kalkylen.');
+    if(Array.isArray(data.finansieringsforslag)){
+      data.finansiering = data.finansieringsforslag;
+      delete data.finansieringsforslag;
+    }
     const row = {
       id: uid(),
       share_id: uid() + uid() + uid(),
       name: data.projektnamn,
-      data,
+      data: migrateNyaProjektData(data),
       is_public: false,
       status: 'candidate',
       created_by: myPersonId,
@@ -2401,15 +2715,22 @@ document.getElementById('nyaProjektFileInput').addEventListener('change', async 
 
 // ---------- Publik investeringspropå (oinloggad, delbar länk) ----------
 function buildPropaHtml(candidate){
-  const d = candidate.data || {};
+  const d = migrateNyaProjektData(candidate.data);
+  const { antal, boa } = nyaProjektBostaderCounts(d);
+  const { totalIntakter, totalKostnader, resultat, marginal } = nyaProjektTotals(d);
   const kr = v => v != null ? formatKrFull(v) : '—';
   const pct = v => v != null ? (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %' : '—';
-  const fordelning = d.fordelning || {};
-  const fordelningLabels = { mark: 'Mark', entreprenad: 'Entreprenad', projektering: 'Projektering', finansiering: 'Finansiering' };
-  const fordelningRows = Object.keys(fordelningLabels).filter(key => fordelning[key] != null).map(key =>
-    '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + fordelningLabels[key] + '</td>' +
-    '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(fordelning[key]) + '</td></tr>'
-  ).join('');
+  const perKvmLine = v => {
+    const t = nyaProjektPerKvm(v, boa);
+    return t ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;">' + t + '</div>' : '';
+  };
+
+  const groupRows = (d.kostnadsgrupper || []).map(g => {
+    const total = nyaProjektGroupTotal(g);
+    return '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + escapeHtml(g.grupp) + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(total) + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + (nyaProjektPerKvm(total, boa) || '—') + '</td></tr>';
+  }).join('');
 
   return '<div style="max-width:820px; margin:0 auto; padding:56px 24px 80px;">' +
     '<div style="text-align:center; margin-bottom:44px;">' +
@@ -2417,17 +2738,17 @@ function buildPropaHtml(candidate){
       '<h1 style="font-family:\'Fraunces\',serif; font-size:34px; margin:10px 0 0;">' + escapeHtml(candidate.name) + '</h1>' +
     '</div>' +
     '<div class="home-grid" style="margin-bottom:36px;">' +
-      '<div class="home-card"><div class="home-card-title">' + (d.antalBostader != null ? d.antalBostader : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + (d.boaTotal != null ? d.boaTotal.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + kr(d.intakter) + '</div><div class="home-card-sub">Intäkter</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + kr(d.utgifter) + '</div><div class="home-card-sub">Kostnad</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + kr(d.resultat) + '</div><div class="home-card-sub">Resultat</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + pct(d.projektmarginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + (boa != null ? boa.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(totalKostnader) + '</div>' + perKvmLine(totalKostnader) + '<div class="home-card-sub">Kostnad</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(resultat) + '</div>' + perKvmLine(resultat) + '<div class="home-card-sub">Resultat</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + pct(marginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + pct(d.avkastningEgetKapital) + '</div><div class="home-card-sub">Avkastning eget kapital</div></div>' +
     '</div>' +
-    (fordelningRows ?
+    (groupRows ?
       '<h3 style="font-family:\'Fraunces\',serif; margin-bottom:12px;">Kostnadsfördelning</h3>' +
-      '<table style="width:100%; border-collapse:collapse; margin-bottom:40px;"><tbody>' + fordelningRows + '</tbody></table>'
+      '<table style="width:100%; border-collapse:collapse; margin-bottom:40px;"><tbody>' + groupRows + '</tbody></table>'
       : '') +
     '<p style="text-align:center; font-size:11px; color:var(--ink-soft);">Solvinkeln Fastigheter AB · uppdaterad ' + new Date(candidate.updated_at || candidate.created_at).toLocaleDateString('sv-SE') + '</p>' +
   '</div>';
