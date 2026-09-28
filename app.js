@@ -2451,6 +2451,7 @@ async function renderPublicNyaProjektView(shareId){
       root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Den här länken är inte längre giltig.</div>';
       return;
     }
+    document.title = candidate.name + ' · Investeringspropå';
     root.innerHTML = buildPropaHtml(candidate);
   }catch(e){
     root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Kunde inte läsa in sidan.</div>';
