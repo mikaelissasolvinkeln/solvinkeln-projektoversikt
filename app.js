@@ -3366,31 +3366,65 @@ document.getElementById('nyaProjektAllmanInfoInput').addEventListener('input', (
 document.getElementById('nyaProjektBildUploadBtn').onclick = () => {
   document.getElementById('nyaProjektBildFileInput').click();
 };
-document.getElementById('nyaProjektBildFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
+// Bilden kan komma från filväljaren, dras och släppas på rutan, eller
+// klistras in (Ctrl+V) - alla vägar går via samma funktion.
+async function nyaProjektHandleBildFile(file){
   if(!file) return;
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate) return;
   const statusEl = document.getElementById('nyaProjektBildStatus');
+  if(!/^image\//.test(file.type || '')){
+    statusEl.textContent = 'Välj en bildfil (JPG, PNG m.m.).';
+    statusEl.className = 'contract-upload-status err';
+    return;
+  }
   if(file.size > NYA_PROJEKT_FILE_MAX_BYTES){
     statusEl.textContent = 'Bilden är för stor (max 4 MB).';
     statusEl.className = 'contract-upload-status err';
-    e.target.value = '';
     return;
   }
+  statusEl.textContent = 'Laddar upp…';
+  statusEl.className = 'contract-upload-status';
   try{
     const base64 = await fileToBase64(file);
-    candidate.data.bild = { mimetype: file.type || 'image/jpeg', base64, namn: file.name };
+    candidate.data.bild = { mimetype: file.type || 'image/jpeg', base64, namn: file.name || 'bild' };
     await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
     statusEl.textContent = '';
     renderNyaProjektDetail();
   }catch(err){
-    statusEl.textContent = 'Kunde inte ladda upp bilden.';
+    statusEl.textContent = 'Kunde inte ladda upp bilden: ' + (err && err.message ? err.message : err);
     statusEl.className = 'contract-upload-status err';
-  } finally {
-    e.target.value = '';
   }
+}
+document.getElementById('nyaProjektBildFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  await nyaProjektHandleBildFile(file);
 });
+(function wireNyaProjektBildDrop(){
+  const zone = document.getElementById('nyaProjektBildDropZone');
+  if(!zone) return;
+  const baseBorder = zone.style.border;
+  ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault();
+    zone.style.border = '2px dashed var(--blue)';
+    zone.style.background = 'var(--blue-soft)';
+  }));
+  ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault();
+    zone.style.border = baseBorder;
+    zone.style.background = '';
+  }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    nyaProjektHandleBildFile(file);
+  });
+  zone.addEventListener('paste', e => {
+    const items = e.clipboardData ? [...e.clipboardData.items] : [];
+    const img = items.find(i => /^image\//.test(i.type));
+    if(img){ e.preventDefault(); nyaProjektHandleBildFile(img.getAsFile()); }
+  });
+})();
 document.getElementById('nyaProjektBildRemoveBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate) return;

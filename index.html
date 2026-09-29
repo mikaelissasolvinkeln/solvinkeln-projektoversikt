@@ -1241,14 +1241,17 @@
       <h3 style="margin:32px 0 10px;">Allmän information</h3>
       <p class="eko-sub" style="margin:0 0 10px;">Visas som en egen flik i investeringspropån.</p>
       <textarea id="nyaProjektAllmanInfoInput" rows="6" style="width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:8px; padding:10px 12px; font-family:inherit; font-size:14px; margin-bottom:12px;" placeholder="Beskrivning av projektet, läge, tidsplan m.m."></textarea>
-      <div style="margin-bottom:12px;">
-        <button type="button" id="nyaProjektBildUploadBtn" class="upload-btn">🖼️ Ladda upp bild</button>
-        <input type="file" id="nyaProjektBildFileInput" accept="image/*" style="display:none;">
-        <span id="nyaProjektBildStatus" class="contract-upload-status"></span>
-      </div>
-      <div id="nyaProjektBildPreviewWrap" style="display:none; margin-bottom:24px;">
-        <img id="nyaProjektBildPreview" style="max-width:320px; max-height:220px; border-radius:8px; display:block; margin-bottom:8px;">
-        <button id="nyaProjektBildRemoveBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort bild</button>
+      <div id="nyaProjektBildDropZone" tabindex="0" style="margin-bottom:24px; padding:12px 14px; border:2px dashed var(--line-soft); border-radius:8px;">
+        <div class="contract-upload-row">
+          <button type="button" id="nyaProjektBildUploadBtn" class="upload-btn">🖼️ Ladda upp bild</button>
+          <input type="file" id="nyaProjektBildFileInput" accept="image/*" style="display:none;">
+          <span id="nyaProjektBildStatus" class="contract-upload-status"></span>
+        </div>
+        <p class="eko-sub" style="margin:8px 0 0;">Du kan också dra och släppa en bildfil här, eller klicka i rutan och klistra in en bild (Ctrl+V).</p>
+        <div id="nyaProjektBildPreviewWrap" style="display:none; margin-top:12px;">
+          <img id="nyaProjektBildPreview" style="max-width:320px; max-height:220px; border-radius:8px; display:block; margin-bottom:8px;">
+          <button id="nyaProjektBildRemoveBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort bild</button>
+        </div>
       </div>
 
       <h3 style="margin-bottom:10px;">Bilagor</h3>
