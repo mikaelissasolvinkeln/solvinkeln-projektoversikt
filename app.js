@@ -2293,7 +2293,9 @@ function likviditetsbudgetGridToRows(data){
     namn: r.namn || '',
     typ: r.typ === 'intakt' ? 'intakt' : 'kostnad',
     kategori: null,
-    budget: (r.manader || []).reduce((acc, m) => { if(m.manad && m.belopp != null) acc[m.manad] = (acc[m.manad] || 0) + m.belopp; return acc; }, {}),
+    // Kostnadsrader står ofta med minus i budgeten - lagras positiva så att de
+    // går att jämföra rakt av med utfallet (reskontran, alltid positivt).
+    budget: (r.manader || []).reduce((acc, m) => { if(m.manad && m.belopp != null) acc[m.manad] = (acc[m.manad] || 0) + (r.typ === 'kostnad' ? Math.abs(m.belopp) : m.belopp); return acc; }, {}),
     manualUtfall: {}
   }));
 }
