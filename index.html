@@ -1273,6 +1273,16 @@
       <p class="eko-sub" style="margin:0 0 10px;">Visas som en egen flik i investeringspropån.</p>
       <textarea id="nyaProjektRiskerInput" rows="6" style="width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:8px; padding:10px 12px; font-family:inherit; font-size:14px; margin-bottom:24px;" placeholder="Försäljningsrisk, kostnadsrisk, tidsrisk, finansieringsrisk och hur de hanteras."></textarea>
 
+      <h3 style="margin-bottom:10px;">Karta</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Visas som en egen flik i investeringspropån. Sök en adress eller klicka i kartan för att sätta en punkt, t.ex. projektet, skola, pendeltåg eller centrum. Punkterna kan dras för att flyttas.</p>
+      <div class="contract-upload-row" style="margin-bottom:8px;">
+        <input type="text" id="nyaProjektKartaSokInput" placeholder="Sök adress eller plats, t.ex. Glömstavägen 1, Huddinge" style="flex:1; min-width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:13px;">
+        <button type="button" id="nyaProjektKartaSokBtn" class="upload-btn">Sök och sätt punkt</button>
+        <span id="nyaProjektKartaStatus" class="contract-upload-status"></span>
+      </div>
+      <div id="nyaProjektKartaMap" style="height:400px; border-radius:8px; border:1px solid var(--line-soft); margin-bottom:10px; background:#eef0ec;"></div>
+      <div id="nyaProjektKartaPunkter" style="margin-bottom:24px;"></div>
+
       <h3 style="margin-bottom:10px;">Bilagor</h3>
       <p class="eko-sub" style="margin:0 0 10px;">Delas i en egen flik i investeringspropån.</p>
       <div style="margin-bottom:10px;">
@@ -2358,6 +2368,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
 <script src="db.js"></script>
 <script src="app.js"></script>

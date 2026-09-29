@@ -2521,6 +2521,13 @@ function migrateNyaProjektData(data){
   if(typeof data.allmanInfo !== 'string') data.allmanInfo = '';
   if(typeof data.marknadslage !== 'string') data.marknadslage = '';
   if(typeof data.risker !== 'string') data.risker = '';
+  if(!Array.isArray(data.kartpunkter)) data.kartpunkter = [];
+  data.kartpunkter = data.kartpunkter.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number');
+  data.kartpunkter.forEach(p => {
+    if(!p.id) p.id = uid();
+    if(typeof p.namn !== 'string') p.namn = '';
+    if(typeof p.beskrivning !== 'string') p.beskrivning = '';
+  });
   if(!data.bild || typeof data.bild !== 'object') data.bild = null;
   if(!Array.isArray(data.bilagor)) data.bilagor = [];
   data.bilagor.forEach(b => { if(!b.id) b.id = uid(); });
@@ -3403,6 +3410,7 @@ function renderNyaProjektDetail(){
   infoInput.value = data.allmanInfo || '';
   document.getElementById('nyaProjektMarknadslageInput').value = data.marknadslage || '';
   document.getElementById('nyaProjektRiskerInput').value = data.risker || '';
+  renderNyaProjektKarta(candidate);
 
   const bildWrap = document.getElementById('nyaProjektBildPreviewWrap');
   if(data.bild && data.bild.base64){
@@ -4124,6 +4132,205 @@ function buildPropaInfoHtml(candidate){
     : '<p class="eko-sub">Ingen allmän information tillagd än.</p>';
   return bildHtml + textHtml;
 }
+// ---- Karta (Leaflet + OpenStreetMap) ----
+// Punkter sparas som {id, lat, lng, namn, beskrivning} i data.kartpunkter.
+// Kalkylsidan har en redigerbar karta (klick = ny punkt, dra = flytta,
+// adressökning via OpenStreetMaps Nominatim); propån visar samma punkter.
+const NYA_PROJEKT_KARTA_START = { center: [59.33, 18.07], zoom: 9 };
+function nyaProjektKartaTiles(map){
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
+  }).addTo(map);
+}
+function nyaProjektKartaPopup(p, idx){
+  return '<div style="font-family:Inter,sans-serif; font-size:13px; min-width:140px;"><b>' + escapeHtml(p.namn || ('Punkt ' + (idx + 1))) + '</b>' +
+    (p.beskrivning ? '<div style="margin-top:4px; white-space:pre-wrap; color:#555;">' + escapeHtml(p.beskrivning) + '</div>' : '') + '</div>';
+}
+function nyaProjektKartaFit(map, points){
+  if(!points.length){ map.setView(NYA_PROJEKT_KARTA_START.center, NYA_PROJEKT_KARTA_START.zoom); return; }
+  if(points.length === 1){ map.setView([points[0].lat, points[0].lng], 14); return; }
+  map.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [30, 30], maxZoom: 15 });
+}
+let nyaProjektKartaMap = null;
+let nyaProjektKartaLayer = null;
+let nyaProjektKartaCandidateId = null;
+function nyaProjektKartaEnsure(){
+  if(nyaProjektKartaMap) return nyaProjektKartaMap;
+  if(typeof L === 'undefined') return null;
+  const el = document.getElementById('nyaProjektKartaMap');
+  if(!el) return null;
+  nyaProjektKartaMap = L.map(el).setView(NYA_PROJEKT_KARTA_START.center, NYA_PROJEKT_KARTA_START.zoom);
+  nyaProjektKartaTiles(nyaProjektKartaMap);
+  nyaProjektKartaLayer = L.layerGroup().addTo(nyaProjektKartaMap);
+  nyaProjektKartaMap.on('click', async e => {
+    const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+    if(!candidate) return;
+    const p = { id: uid(), lat: +e.latlng.lat.toFixed(6), lng: +e.latlng.lng.toFixed(6), namn: candidate.data.kartpunkter.length ? '' : 'Projektet', beskrivning: '' };
+    candidate.data.kartpunkter.push(p);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektKarta(candidate, { keepView: true, focusId: p.id });
+  });
+  return nyaProjektKartaMap;
+}
+function setNyaProjektKartaStatus(msg, kind){
+  const el = document.getElementById('nyaProjektKartaStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+function renderNyaProjektKarta(candidate, opts){
+  const map = nyaProjektKartaEnsure();
+  const points = candidate.data.kartpunkter;
+  const listEl = document.getElementById('nyaProjektKartaPunkter');
+  if(!map){
+    listEl.innerHTML = '<p class="eko-sub">Kartan kunde inte laddas (kartbiblioteket saknas eller blockeras).</p>';
+    return;
+  }
+  const switched = nyaProjektKartaCandidateId !== candidate.id;
+  nyaProjektKartaCandidateId = candidate.id;
+  nyaProjektKartaLayer.clearLayers();
+  points.forEach((p, idx) => {
+    const m = L.marker([p.lat, p.lng], { draggable: true, title: p.namn || '' }).addTo(nyaProjektKartaLayer);
+    m.bindPopup(nyaProjektKartaPopup(p, idx));
+    m.on('dragend', async () => {
+      const ll = m.getLatLng();
+      p.lat = +ll.lat.toFixed(6);
+      p.lng = +ll.lng.toFixed(6);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektKarta(candidate, { keepView: true });
+    });
+  });
+  if(switched || !(opts && opts.keepView)) nyaProjektKartaFit(map, points);
+  setTimeout(() => map.invalidateSize(), 60);
+
+  // Lista med punkterna: namn och beskrivning redigeras direkt, ✕ tar bort.
+  listEl.innerHTML = '';
+  if(!points.length){
+    listEl.innerHTML = '<p class="eko-sub">Inga punkter än - sök en adress eller klicka i kartan.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.width = '100%';
+  table.innerHTML = '<colgroup><col style="width:30%;"><col><col style="width:110px;"></colgroup>' +
+    '<thead><tr><th style="text-align:left;">Punkt</th><th style="text-align:left;">Beskrivning</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  points.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const mkCell = (key, placeholder) => {
+      const td = document.createElement('td');
+      td.style.textAlign = 'left';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = p[key] || '';
+      input.placeholder = placeholder;
+      input.className = 'eko-inline-input';
+      input.style.textAlign = 'left';
+      input.addEventListener('change', async () => {
+        p[key] = input.value.trim();
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektKarta(candidate, { keepView: true });
+      });
+      if(opts && opts.focusId === p.id && key === 'namn') setTimeout(() => { input.focus(); input.select(); }, 80);
+      td.appendChild(input);
+      return td;
+    };
+    tr.appendChild(mkCell('namn', 'T.ex. Projektet, Pendeltåg, Skola'));
+    tr.appendChild(mkCell('beskrivning', 'Valfri text, t.ex. "8 min promenad"'));
+    const actTd = document.createElement('td');
+    actTd.style.whiteSpace = 'nowrap';
+    actTd.style.textAlign = 'right';
+    const showBtn = document.createElement('button');
+    showBtn.type = 'button';
+    showBtn.textContent = '◎';
+    showBtn.title = 'Visa på kartan';
+    showBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 6px;';
+    showBtn.onclick = () => {
+      map.setView([p.lat, p.lng], Math.max(map.getZoom(), 14));
+      nyaProjektKartaLayer.eachLayer(l => { if(l.getLatLng && l.getLatLng().lat === p.lat && l.getLatLng().lng === p.lng) l.openPopup(); });
+    };
+    actTd.appendChild(showBtn);
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort punkten';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 6px;';
+    delBtn.onclick = async () => {
+      candidate.data.kartpunkter = candidate.data.kartpunkter.filter(x => x.id !== p.id);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektKarta(candidate, { keepView: true });
+    };
+    actTd.appendChild(delBtn);
+    tr.appendChild(actTd);
+    tbody.appendChild(tr);
+  });
+  listEl.appendChild(table);
+}
+// Adressökning via Nominatim (OpenStreetMap) - gratis, ingen nyckel.
+async function nyaProjektKartaSok(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  const q = document.getElementById('nyaProjektKartaSokInput').value.trim();
+  if(!candidate || !q) return;
+  const btn = document.getElementById('nyaProjektKartaSokBtn');
+  btn.disabled = true;
+  setNyaProjektKartaStatus('Söker…');
+  try{
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=se&q=' + encodeURIComponent(q), {
+      headers: { 'Accept': 'application/json', 'Accept-Language': 'sv' }
+    });
+    if(!res.ok) throw new Error('Söktjänsten svarade ' + res.status);
+    const hits = await res.json();
+    if(!hits.length){ setNyaProjektKartaStatus('Hittade ingen plats för "' + q + '".', 'err'); return; }
+    const h = hits[0];
+    const p = { id: uid(), lat: +parseFloat(h.lat).toFixed(6), lng: +parseFloat(h.lon).toFixed(6), namn: candidate.data.kartpunkter.length ? q : 'Projektet', beskrivning: (h.display_name || '').split(',').slice(0, 3).join(',').trim() };
+    candidate.data.kartpunkter.push(p);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektKarta(candidate, { focusId: p.id });
+    setNyaProjektKartaStatus('Punkt satt: ' + (h.display_name || q).split(',').slice(0, 2).join(','), 'ok');
+    document.getElementById('nyaProjektKartaSokInput').value = '';
+  }catch(err){
+    setNyaProjektKartaStatus('Sökningen misslyckades: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('nyaProjektKartaSokBtn').onclick = nyaProjektKartaSok;
+document.getElementById('nyaProjektKartaSokInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); nyaProjektKartaSok(); }
+});
+
+function buildPropaKartaHtml(candidate){
+  const points = candidate.data.kartpunkter || [];
+  if(!points.length) return '<p class="eko-sub">Ingen karta inlagd än.</p>';
+  const list = points.map((p, idx) =>
+    '<div style="display:flex; gap:10px; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line-soft);">' +
+      '<span style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); min-width:22px;">' + (idx + 1) + '</span>' +
+      '<span style="font-weight:600;">' + escapeHtml(p.namn || ('Punkt ' + (idx + 1))) + '</span>' +
+      (p.beskrivning ? '<span style="color:var(--ink-soft); font-size:13px;">' + escapeHtml(p.beskrivning) + '</span>' : '') +
+    '</div>'
+  ).join('');
+  const punkterAttr = escapeHtml(JSON.stringify(points.map(p => ({ lat: p.lat, lng: p.lng, namn: p.namn, beskrivning: p.beskrivning })))).replace(/"/g, '&quot;');
+  return '<div class="propa-karta" data-punkter="' + punkterAttr + '" ' +
+    'style="height:440px; border-radius:10px; border:1px solid var(--line-soft); margin-bottom:16px; background:#eef0ec;"></div>' +
+    '<div>' + list + '</div>';
+}
+// Skapar Leaflet-kartan i propån första gången fliken visas (kartan måste
+// vara synlig för att få rätt storlek).
+function wirePropaKarta(root){
+  const el = root.querySelector('.propa-karta');
+  if(!el || el.__map || typeof L === 'undefined') return;
+  let points = [];
+  try{ points = JSON.parse(el.getAttribute('data-punkter') || '[]'); }catch(e){ points = []; }
+  const map = L.map(el, { scrollWheelZoom: false });
+  nyaProjektKartaTiles(map);
+  points.forEach((p, idx) => {
+    L.marker([p.lat, p.lng], { title: p.namn || '' }).addTo(map).bindPopup(nyaProjektKartaPopup(p, idx));
+  });
+  nyaProjektKartaFit(map, points);
+  el.__map = map;
+  setTimeout(() => map.invalidateSize(), 60);
+}
 function buildPropaTextHtml(text, emptyMsg){
   return text
     ? '<div style="white-space:pre-wrap; line-height:1.6; font-size:15px;">' + escapeHtml(text) + '</div>'
@@ -4262,6 +4469,7 @@ function buildPropaHtml(candidate){
     { key: 'info', label: 'Allmän information', html: buildPropaInfoHtml(candidate) },
     { key: 'marknad', label: 'Marknadsläge', html: buildPropaTextHtml(candidate.data.marknadslage, 'Inget marknadsläge beskrivet än.') },
     { key: 'risker', label: 'Risker', html: buildPropaTextHtml(candidate.data.risker, 'Inga risker beskrivna än.') },
+    { key: 'karta', label: 'Karta', html: buildPropaKartaHtml(candidate) },
     { key: 'bilagor', label: 'Bilagor', html: buildPropaBilagorHtml(candidate) }
   ];
   const tabBar = tabs.map((t, i) =>
@@ -4319,6 +4527,7 @@ function wirePropaTabs(root){
       root.querySelectorAll('.propa-tab-panel').forEach(p => {
         p.style.display = p.getAttribute('data-propa-panel') === key ? '' : 'none';
       });
+      if(key === 'karta') wirePropaKarta(root);
     };
   });
 }
