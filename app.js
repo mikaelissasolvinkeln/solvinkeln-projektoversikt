@@ -2603,6 +2603,82 @@ function buildNyaProjektEditableCard(candidate, key, label, type){
   return card;
 }
 
+// Föreningslånet är en vanlig intäktsrad (namn "Föreningslån") i data.intakter -
+// nyckeltalsrutan läser och skriver samma rad, så beloppet finns bara på ett ställe.
+function nyaProjektForeningslanRow(data){
+  return (data.intakter || []).find(r => /f[öo]renings?\s*l[åa]n/i.test(r.namn || '')) || null;
+}
+function nyaProjektSetForeningslan(data, value){
+  let row = nyaProjektForeningslanRow(data);
+  if(!row){
+    if(value == null) return;
+    row = { id: uid(), namn: 'Föreningslån', belopp: null };
+    const rows = data.intakter;
+    let idx = -1;
+    rows.forEach((r, i) => { if(/insats/i.test(r.namn || '')) idx = i; });
+    if(idx >= 0) rows.splice(idx + 1, 0, row); else rows.push(row);
+  }
+  row.belopp = value;
+}
+function buildNyaProjektForeningslanCard(candidate, boa){
+  const data = candidate.data;
+  const row = nyaProjektForeningslanRow(data);
+  const value = row ? row.belopp : null;
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.style.cursor = 'pointer';
+  title.title = 'Klicka för att fylla i föreningslånet';
+  title.textContent = nyaProjektFormatValue('kr', value);
+  title.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    input.value = value != null ? value : '';
+    input.style.cssText = "width:100%; box-sizing:border-box; font-size:20px; font-family:'Fraunces',serif; font-weight:700; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px;";
+    title.replaceWith(input);
+    input.focus(); input.select();
+    nyaProjektWireInlineInput(input, async () => {
+      const raw = input.value.trim();
+      const num = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSetForeningslan(data, (num === null || isNaN(num)) ? null : num);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    });
+  };
+  card.appendChild(title);
+  const perKvm = nyaProjektPerKvm(value, boa);
+  if(perKvm){
+    const kvmLine = document.createElement('div');
+    kvmLine.style.cssText = "font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;";
+    kvmLine.textContent = perKvm;
+    card.appendChild(kvmLine);
+  }
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = 'Föreningslån';
+  card.appendChild(sub);
+  return card;
+}
+// Bygger bara nyckeltalsrutorna - anropas även efter att en enskild rad
+// ändrats så att Intäkter/Kostnad/Resultat följer med utan full omritning.
+function renderNyaProjektNyckeltal(candidate){
+  const data = candidate.data;
+  const { boa } = nyaProjektBostaderCounts(data);
+  const { totalIntakter, totalKostnader, resultat, marginal } = nyaProjektTotals(data);
+  const grid = document.getElementById('nyaProjektNyckeltalGrid');
+  grid.innerHTML = '';
+  grid.appendChild(buildNyaProjektBostaderCard(candidate));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'boaTotal', 'BOA totalt (m²)', 'int'));
+  grid.appendChild(buildNyaProjektComputedCard('Intäkter', totalIntakter || null, 'kr', nyaProjektPerKvm(totalIntakter, boa)));
+  grid.appendChild(buildNyaProjektForeningslanCard(candidate, boa));
+  grid.appendChild(buildNyaProjektComputedCard('Kostnad', totalKostnader || null, 'kr', nyaProjektPerKvm(totalKostnader, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Resultat', (totalIntakter || totalKostnader) ? resultat : null, 'kr', nyaProjektPerKvm(resultat, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Projektmarginal', marginal, 'pct', null));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'avkastningEgetKapital', 'Avkastning eget kapital', 'pct'));
+}
 function buildNyaProjektComputedCard(label, value, type, perKvmText){
   const card = document.createElement('div');
   card.className = 'home-card';
@@ -2733,6 +2809,8 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
         amountTd.innerHTML = '';
         amountTd.appendChild(amountSpan);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        if(document.getElementById('nyaProjektNyckeltalGrid')) renderNyaProjektNyckeltal(candidate);
+        renderNyaProjektList();
       });
     };
     amountTd.appendChild(amountSpan);
@@ -2826,15 +2904,7 @@ function renderNyaProjektDetail(){
     candidate.status === 'promoted' ? '✓ Omvandlat till projekt' : 'Kandidat under utvärdering';
   document.getElementById('nyaProjektPromoteBtn').style.display = candidate.status === 'promoted' ? 'none' : 'inline-block';
 
-  const grid = document.getElementById('nyaProjektNyckeltalGrid');
-  grid.innerHTML = '';
-  grid.appendChild(buildNyaProjektBostaderCard(candidate));
-  grid.appendChild(buildNyaProjektEditableCard(candidate, 'boaTotal', 'BOA totalt (m²)', 'int'));
-  grid.appendChild(buildNyaProjektComputedCard('Intäkter', totalIntakter || null, 'kr', nyaProjektPerKvm(totalIntakter, boa)));
-  grid.appendChild(buildNyaProjektComputedCard('Kostnad', totalKostnader || null, 'kr', nyaProjektPerKvm(totalKostnader, boa)));
-  grid.appendChild(buildNyaProjektComputedCard('Resultat', (totalIntakter || totalKostnader) ? resultat : null, 'kr', nyaProjektPerKvm(resultat, boa)));
-  grid.appendChild(buildNyaProjektComputedCard('Projektmarginal', marginal, 'pct', null));
-  grid.appendChild(buildNyaProjektEditableCard(candidate, 'avkastningEgetKapital', 'Avkastning eget kapital', 'pct'));
+  renderNyaProjektNyckeltal(candidate);
 
   renderNyaProjektRowList(document.getElementById('nyaProjektIntakterBody'), data.intakter, candidate, { perKvm: true, boaTotal: boa });
 
@@ -3364,6 +3434,8 @@ function buildPropaEkonomiHtml(candidate){
   const d = candidate.data;
   const { antal, boa } = nyaProjektBostaderCounts(d);
   const { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal } = nyaProjektTotals(d);
+  const foreningslanRow = nyaProjektForeningslanRow(d);
+  const foreningslan = foreningslanRow ? foreningslanRow.belopp : null;
   const kr = v => v != null ? formatKrFull(v) : '—';
   const pct = v => v != null ? (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %' : '—';
   const perKvmLine = v => {
@@ -3388,6 +3460,7 @@ function buildPropaEkonomiHtml(candidate){
       '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + (boa != null ? boa.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(foreningslan) + '</div>' + perKvmLine(foreningslan) + '<div class="home-card-sub">Föreningslån</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(totalKostnader) + '</div>' + perKvmLine(totalKostnader) + '<div class="home-card-sub">Kostnad</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(resultat) + '</div>' + perKvmLine(resultat) + '<div class="home-card-sub">Resultat</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + pct(marginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
