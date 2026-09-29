@@ -2519,6 +2519,8 @@ function migrateNyaProjektData(data){
   });
 
   if(typeof data.allmanInfo !== 'string') data.allmanInfo = '';
+  if(typeof data.marknadslage !== 'string') data.marknadslage = '';
+  if(typeof data.risker !== 'string') data.risker = '';
   if(!data.bild || typeof data.bild !== 'object') data.bild = null;
   if(!Array.isArray(data.bilagor)) data.bilagor = [];
   data.bilagor.forEach(b => { if(!b.id) b.id = uid(); });
@@ -3358,6 +3360,8 @@ function renderNyaProjektDetail(){
 
   const infoInput = document.getElementById('nyaProjektAllmanInfoInput');
   infoInput.value = data.allmanInfo || '';
+  document.getElementById('nyaProjektMarknadslageInput').value = data.marknadslage || '';
+  document.getElementById('nyaProjektRiskerInput').value = data.risker || '';
 
   const bildWrap = document.getElementById('nyaProjektBildPreviewWrap');
   if(data.bild && data.bild.base64){
@@ -3409,15 +3413,23 @@ function renderNyaProjektBilagorList(candidate){
 
 const NYA_PROJEKT_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
-let nyaProjektAllmanInfoSaveTimer = null;
-document.getElementById('nyaProjektAllmanInfoInput').addEventListener('input', (e) => {
-  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
-  if(!candidate) return;
-  candidate.data.allmanInfo = e.target.value;
-  clearTimeout(nyaProjektAllmanInfoSaveTimer);
-  nyaProjektAllmanInfoSaveTimer = setTimeout(() => {
-    DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-  }, 600);
+// Fritextfälten (allmän information, marknadsläge, risker) sparas en kort
+// stund efter att man slutat skriva.
+const nyaProjektTextSaveTimers = {};
+[
+  { inputId: 'nyaProjektAllmanInfoInput', key: 'allmanInfo' },
+  { inputId: 'nyaProjektMarknadslageInput', key: 'marknadslage' },
+  { inputId: 'nyaProjektRiskerInput', key: 'risker' }
+].forEach(({ inputId, key }) => {
+  document.getElementById(inputId).addEventListener('input', (e) => {
+    const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+    if(!candidate) return;
+    candidate.data[key] = e.target.value;
+    clearTimeout(nyaProjektTextSaveTimers[key]);
+    nyaProjektTextSaveTimers[key] = setTimeout(() => {
+      DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    }, 600);
+  });
 });
 
 document.getElementById('nyaProjektBildUploadBtn').onclick = () => {
@@ -4071,6 +4083,11 @@ function buildPropaInfoHtml(candidate){
     : '<p class="eko-sub">Ingen allmän information tillagd än.</p>';
   return bildHtml + textHtml;
 }
+function buildPropaTextHtml(text, emptyMsg){
+  return text
+    ? '<div style="white-space:pre-wrap; line-height:1.6; font-size:15px;">' + escapeHtml(text) + '</div>'
+    : '<p class="eko-sub">' + emptyMsg + '</p>';
+}
 
 function buildPropaBilagorHtml(candidate){
   const rows = candidate.data.bilagor || [];
@@ -4192,6 +4209,8 @@ function buildPropaHtml(candidate){
     { key: 'ekonomi', label: 'Ekonomi', html: buildPropaEkonomiHtml(candidate) },
     { key: 'tidsplan', label: 'Tidsplan', html: buildPropaTidsplanHtml(candidate) },
     { key: 'info', label: 'Allmän information', html: buildPropaInfoHtml(candidate) },
+    { key: 'marknad', label: 'Marknadsläge', html: buildPropaTextHtml(candidate.data.marknadslage, 'Inget marknadsläge beskrivet än.') },
+    { key: 'risker', label: 'Risker', html: buildPropaTextHtml(candidate.data.risker, 'Inga risker beskrivna än.') },
     { key: 'bilagor', label: 'Bilagor', html: buildPropaBilagorHtml(candidate) }
   ];
   const tabBar = tabs.map((t, i) =>
