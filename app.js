@@ -2924,24 +2924,65 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       partSpan.style.cursor = 'pointer';
       partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
       partSpan.textContent = row.part || 'Ange part';
-      partSpan.onclick = () => {
+      const showPartSpan = () => {
+        partSpan.textContent = row.part || 'Ange part';
+        partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
+        partTd.innerHTML = '';
+        partTd.appendChild(partSpan);
+      };
+      const savePart = async (value) => {
+        row.part = (value || '').trim();
+        showPartSpan();
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        nyaProjektRefreshTidsaxel(candidate);
+      };
+      // Fritextfält för "Fyll i själv" - Enter/blur sparar, Escape avbryter.
+      const showPartInput = (initial) => {
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = 'T.ex. SEB, Solvinkeln Fastigheter AB';
-        input.value = row.part || '';
+        input.placeholder = 'Skriv finansiärens namn';
+        input.value = initial || '';
         input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
         partTd.innerHTML = '';
         partTd.appendChild(input);
         input.focus(); input.select();
-        nyaProjektWireInlineInput(input, async () => {
-          row.part = input.value.trim();
-          partSpan.textContent = row.part || 'Ange part';
-          partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
-          partTd.innerHTML = '';
-          partTd.appendChild(partSpan);
-          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-          nyaProjektRefreshTidsaxel(candidate);
+        nyaProjektWireInlineInput(input, async () => { await savePart(input.value); });
+      };
+      partSpan.onclick = () => {
+        // Rullista med de vanliga finansiärerna, eller "Fyll i själv" för fritext.
+        const sel = document.createElement('select');
+        sel.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' cursor:pointer;';
+        const FRITEXT = '__fritext__';
+        const opts_ = [{ v: '', t: '— Välj finansiär —' }]
+          .concat(NYA_PROJEKT_FINANSIARER.map(n => ({ v: n, t: n })))
+          .concat([{ v: FRITEXT, t: 'Fyll i själv…' }]);
+        opts_.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.v;
+          opt.textContent = o.t;
+          sel.appendChild(opt);
         });
+        const isPreset = NYA_PROJEKT_FINANSIARER.includes(row.part);
+        sel.value = row.part ? (isPreset ? row.part : FRITEXT) : '';
+        if(row.part && !isPreset){
+          // Eget värde: visa det som ett extra val så det syns vad som gäller nu.
+          const cur = document.createElement('option');
+          cur.value = row.part;
+          cur.textContent = row.part + ' (nuvarande)';
+          sel.insertBefore(cur, sel.lastElementChild);
+          sel.value = row.part;
+        }
+        partTd.innerHTML = '';
+        partTd.appendChild(sel);
+        sel.focus();
+        let done = false;
+        sel.addEventListener('change', async () => {
+          done = true;
+          if(sel.value === FRITEXT){ showPartInput(isPreset ? '' : row.part); return; }
+          await savePart(sel.value);
+        });
+        sel.addEventListener('blur', () => { if(!done) showPartSpan(); });
+        sel.addEventListener('keydown', e => { if(e.key === 'Escape'){ done = true; showPartSpan(); } });
       };
       partTd.appendChild(partSpan);
       tr.appendChild(partTd);
@@ -4148,6 +4189,16 @@ function nyaProjektTimelineItems(data){
 }
 // Stabil sortering på tolkat datum - rader med samma månad eller utan datum
 // behåller sin inbördes ordning.
+// Vanliga finansiärer i finansieringsplanens "Finansieras av" - utöver
+// dessa kan man alltid skriva ett eget namn via "Fyll i själv".
+const NYA_PROJEKT_FINANSIARER = [
+  'Derome Husproduktion AB',
+  'Borohus AB',
+  'NBE Gruppen',
+  'Sparbanken i Enköping',
+  'Triol Kapital AB',
+  'Kameo'
+];
 function nyaProjektSortByPeriod(rows){
   if(!Array.isArray(rows) || rows.length < 2) return;
   const keyed = rows.map((r, i) => ({ r, i, k: nyaProjektPeriodKey(nyaProjektParsePeriod(r.period)) }));
