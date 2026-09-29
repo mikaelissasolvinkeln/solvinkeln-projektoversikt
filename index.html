@@ -1238,6 +1238,17 @@
       </div>
       <button id="nyaProjektAddFinansieringBtn" class="add-inline-btn">+ Lägg till post</button>
 
+      <h3 style="margin:32px 0 10px;">Tidsplan</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Händelser i projektet, t.ex. "Signera försäljningsavtal" eller "Markarbete startar". Skriv när som "Oktober 2026" eller "2026-10". Belopp är valfritt. I investeringspropån visas händelserna på en tidsaxel tillsammans med kapitalbehoven från finansieringsplanen.</p>
+      <div class="table-scroll" style="margin-bottom:10px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead><tr><th style="text-align:left;">Händelse</th><th>Belopp (kr, valfritt)</th><th>När</th><th></th></tr></thead>
+          <tbody id="nyaProjektHandelserBody"></tbody>
+        </table>
+      </div>
+      <button id="nyaProjektAddHandelseBtn" class="add-inline-btn" style="margin-bottom:16px;">+ Lägg till händelse</button>
+      <div id="nyaProjektTidsaxelPreview"></div>
+
       <h3 style="margin:32px 0 10px;">Allmän information</h3>
       <p class="eko-sub" style="margin:0 0 10px;">Visas som en egen flik i investeringspropån.</p>
       <textarea id="nyaProjektAllmanInfoInput" rows="6" style="width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:8px; padding:10px 12px; font-family:inherit; font-size:14px; margin-bottom:12px;" placeholder="Beskrivning av projektet, läge, tidsplan m.m."></textarea>

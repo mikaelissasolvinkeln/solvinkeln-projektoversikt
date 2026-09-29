@@ -2511,6 +2511,12 @@ function migrateNyaProjektData(data){
   if(!Array.isArray(data.bostader)) data.bostader = [];
   data.bostader.forEach(b => { if(!b.id) b.id = uid(); });
 
+  if(!Array.isArray(data.handelser)) data.handelser = [];
+  data.handelser.forEach(h => {
+    if(!h.id) h.id = uid();
+    if(h.period === undefined) h.period = '';
+  });
+
   if(typeof data.allmanInfo !== 'string') data.allmanInfo = '';
   if(!data.bild || typeof data.bild !== 'object') data.bild = null;
   if(!Array.isArray(data.bilagor)) data.bilagor = [];
@@ -2900,6 +2906,7 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
         nameTd.innerHTML = '';
         nameTd.appendChild(nameSpan);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        nyaProjektRefreshTidsaxel(candidate);
       });
     };
     nameTd.appendChild(nameSpan);
@@ -2937,6 +2944,7 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
         amountTd.appendChild(amountSpan);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         if(document.getElementById('nyaProjektNyckeltalGrid')) renderNyaProjektNyckeltal(candidate);
+        nyaProjektRefreshTidsaxel(candidate);
         renderNyaProjektList();
       });
     };
@@ -2957,11 +2965,19 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       const periodSpan = document.createElement('span');
       periodSpan.className = 'editable';
       periodSpan.style.cursor = 'pointer';
-      periodSpan.textContent = row.period || '—';
+      // Visar den tolkade månaden ("Oktober 2026"); går texten inte att tolka
+      // visas den som den skrevs med en varning, så den hamnar rätt på tidsaxeln.
+      const setPeriodText = () => {
+        if(!row.period){ periodSpan.textContent = '—'; periodSpan.title = ''; return; }
+        const p = nyaProjektParsePeriod(row.period);
+        periodSpan.textContent = p ? nyaProjektPeriodLabel(row.period) : row.period + ' ⚠';
+        periodSpan.title = p ? 'Skrivet som: ' + row.period : 'Kunde inte tolkas som en månad - skriv t.ex. "Oktober 2026" eller "2026-10"';
+      };
+      setPeriodText();
       periodSpan.onclick = () => {
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = 'T.ex. Maj 2027';
+        input.placeholder = 'T.ex. Oktober 2026';
         input.value = row.period || '';
         input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
         periodTd.innerHTML = '';
@@ -2969,10 +2985,11 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
         input.focus(); input.select();
         nyaProjektWireInlineInput(input, async () => {
           row.period = input.value.trim();
-          periodSpan.textContent = row.period || '—';
+          setPeriodText();
           periodTd.innerHTML = '';
           periodTd.appendChild(periodSpan);
           await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          nyaProjektRefreshTidsaxel(candidate);
         });
       };
       periodTd.appendChild(periodSpan);
@@ -3298,6 +3315,8 @@ function renderNyaProjektDetail(){
     ' · Finansierat: ' + formatKrFull(totalFinansiering) +
     ' · Kvar att finansiera: ' + formatKrFull(totalKostnader - totalFinansiering);
   renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, { period: true });
+  renderNyaProjektRowList(document.getElementById('nyaProjektHandelserBody'), data.handelser, candidate, { period: true });
+  document.getElementById('nyaProjektTidsaxelPreview').innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
 
   const infoInput = document.getElementById('nyaProjektAllmanInfoInput');
   infoInput.value = data.allmanInfo || '';
@@ -3473,6 +3492,13 @@ document.getElementById('nyaProjektAddGruppBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate) return;
   candidate.data.kostnadsgrupper.push({ id: uid(), grupp: 'Ny grupp', poster: [] });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddHandelseBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.handelser.push({ id: uid(), namn: '', belopp: null, period: '' });
   await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
   renderNyaProjektDetail();
 };
@@ -4011,10 +4037,107 @@ function buildPropaBilagorHtml(candidate){
   ).join('') + '</div>';
 }
 
+// Tidsaxel: kapitalbehov (finansieringsplanens poster med period) och
+// händelser slås ihop och sorteras per månad. "När" skrivs fritt - tolkas
+// som "Oktober 2026", "okt 2026", "2026-10", "10/2026", "Q4 2026" eller "2026".
+const NYA_PROJEKT_MANADER = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december'];
+function nyaProjektParsePeriod(str){
+  if(!str) return null;
+  const s = String(str).trim().toLowerCase().replace(/\s+/g, ' ');
+  let m = s.match(/^(\d{4})[-\/.](\d{1,2})/);
+  if(m && +m[2] >= 1 && +m[2] <= 12) return { y: +m[1], m: +m[2] };
+  m = s.match(/^(\d{1,2})[\/.-](\d{4})$/);
+  if(m && +m[1] >= 1 && +m[1] <= 12) return { y: +m[2], m: +m[1] };
+  m = s.match(/^(?:q|kv)\s*([1-4])\s*[-\/ ]?\s*(\d{4})$/);
+  if(m) return { y: +m[2], m: (+m[1] - 1) * 3 + 1, quarter: +m[1] };
+  m = s.match(/^([a-zåäö]+)\.?\s*(\d{4})$/) || s.match(/^(\d{4})\s+([a-zåäö]+)\.?$/);
+  if(m){
+    const word = isNaN(+m[1]) ? m[1] : m[2];
+    const year = isNaN(+m[1]) ? m[2] : m[1];
+    const idx = NYA_PROJEKT_MANADER.findIndex(n => n.startsWith(word.slice(0, 3)));
+    if(idx >= 0) return { y: +year, m: idx + 1 };
+  }
+  m = s.match(/^(\d{4})$/);
+  if(m) return { y: +m[1], m: 1, yearOnly: true };
+  return null;
+}
+function nyaProjektPeriodKey(p){
+  return p ? p.y * 12 + (p.m - 1) : Number.POSITIVE_INFINITY;
+}
+function nyaProjektPeriodLabel(str){
+  const p = nyaProjektParsePeriod(str);
+  if(!p) return str || 'Ej tidsatt';
+  if(p.yearOnly) return String(p.y);
+  if(p.quarter) return 'Kvartal ' + p.quarter + ' ' + p.y;
+  const namn = NYA_PROJEKT_MANADER[p.m - 1];
+  return namn.charAt(0).toUpperCase() + namn.slice(1) + ' ' + p.y;
+}
+function nyaProjektTimelineItems(data){
+  const items = [];
+  (data.finansiering || []).filter(f => f.namn || f.belopp != null).forEach(f => {
+    items.push({ typ: 'kapital', namn: f.namn || 'Namnlös post', belopp: f.belopp, period: f.period || '' });
+  });
+  (data.handelser || []).filter(h => h.namn || h.belopp != null).forEach(h => {
+    items.push({ typ: 'handelse', namn: h.namn || 'Namnlös händelse', belopp: h.belopp, period: h.period || '' });
+  });
+  items.forEach((it, i) => { it.p = nyaProjektParsePeriod(it.period); it.key = nyaProjektPeriodKey(it.p); it.i = i; });
+  items.sort((a, b) => (a.key - b.key) || (a.typ === b.typ ? a.i - b.i : (a.typ === 'kapital' ? -1 : 1)));
+  return items;
+}
+function nyaProjektRefreshTidsaxel(candidate){
+  const el = document.getElementById('nyaProjektTidsaxelPreview');
+  if(el && candidate && candidate.id === currentNyaProjektId) el.innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
+}
+function buildPropaTidsplanHtml(candidate, opts){
+  const d = candidate.data;
+  const compact = !!(opts && opts.compact);
+  const items = nyaProjektTimelineItems(d);
+  const kr = v => v != null ? formatKrFull(v) : '';
+  if(!items.length){
+    return compact ? '' : '<p class="eko-sub">Ingen tidsplan inlagd än.</p>';
+  }
+  // Gruppera per period (samma etikett = samma grupp), i tidsordning.
+  const groups = [];
+  items.forEach(it => {
+    const label = it.p ? nyaProjektPeriodLabel(it.period) : 'Ej tidsatt';
+    let g = groups.find(x => x.label === label && x.key === it.key);
+    if(!g){ g = { label, key: it.key, items: [] }; groups.push(g); }
+    g.items.push(it);
+  });
+  let ack = 0;
+  const totalKapital = items.filter(it => it.typ === 'kapital').reduce((s, it) => s + (it.belopp || 0), 0);
+  let html = '<div style="position:relative; padding-left:22px; border-left:2px solid var(--line-soft); margin:' + (compact ? '8px 0 0 8px' : '4px 0 0 8px') + ';">';
+  groups.forEach(g => {
+    const kapital = g.items.filter(it => it.typ === 'kapital').reduce((s, it) => s + (it.belopp || 0), 0);
+    ack += kapital;
+    html += '<div style="position:relative; margin-bottom:' + (compact ? '16px' : '24px') + ';">' +
+      '<div style="position:absolute; left:-30px; top:3px; width:14px; height:14px; border-radius:50%; background:' + (kapital ? 'var(--ink)' : '#fff') + '; border:2px solid var(--ink);"></div>' +
+      '<div style="font-family:\'Fraunces\',serif; font-weight:700; font-size:' + (compact ? '14px' : '17px') + '; margin-bottom:6px;">' + escapeHtml(g.label) +
+      (kapital ? '<span style="font-family:\'JetBrains Mono\',monospace; font-weight:400; font-size:11.5px; color:var(--ink-soft); margin-left:10px;">Kapitalbehov ' + kr(kapital) + (totalKapital && groups.length > 1 ? ' · ackumulerat ' + kr(ack) : '') + '</span>' : '') +
+      '</div>';
+    g.items.forEach(it => {
+      const isKap = it.typ === 'kapital';
+      html += '<div style="display:flex; align-items:baseline; gap:10px; padding:' + (compact ? '3px 0' : '5px 0') + '; font-size:' + (compact ? '12.5px' : '14px') + ';">' +
+        '<span style="display:inline-block; min-width:' + (compact ? '84px' : '96px') + '; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; padding:2px 7px; border-radius:4px; text-align:center; ' +
+          (isKap ? 'background:var(--ink); color:#fff;' : 'background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue);') + '">' + (isKap ? 'Kapital' : 'Händelse') + '</span>' +
+        '<span style="flex:1;">' + escapeHtml(it.namn) + '</span>' +
+        (it.belopp != null ? '<span style="font-family:\'JetBrains Mono\',monospace; white-space:nowrap;">' + kr(it.belopp) + '</span>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  if(!compact && totalKapital){
+    html = '<p class="eko-sub" style="margin:0 0 16px;">Totalt kapitalbehov enligt finansieringsplanen: ' + kr(totalKapital) + '. Fyllda punkter = månader då kapital behövs.</p>' + html;
+  }
+  return html;
+}
+
 function buildPropaHtml(candidate){
   candidate.data = migrateNyaProjektData(candidate.data);
   const tabs = [
     { key: 'ekonomi', label: 'Ekonomi', html: buildPropaEkonomiHtml(candidate) },
+    { key: 'tidsplan', label: 'Tidsplan', html: buildPropaTidsplanHtml(candidate) },
     { key: 'info', label: 'Allmän information', html: buildPropaInfoHtml(candidate) },
     { key: 'bilagor', label: 'Bilagor', html: buildPropaBilagorHtml(candidate) }
   ];
