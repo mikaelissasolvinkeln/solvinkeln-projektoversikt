@@ -2459,6 +2459,27 @@ function migrateNyaProjektData(data){
     if(!Array.isArray(g.poster)) g.poster = [];
     g.poster.forEach(p => { if(!p.id) p.id = uid(); });
     delete g.summa;
+    if(!Array.isArray(g.underkategorier)) g.underkategorier = [];
+    g.underkategorier.forEach(u => { if(!u.id) u.id = uid(); });
+    // Byggherrekostnader får standarduppsättningen underkategorier första
+    // gången, och poster med tydliga namn sorteras in - resten lämnas
+    // okategoriserade så inget gissas fel.
+    if(/byggherre/i.test(g.grupp || '') && !g.underkategorier.length && !g.underkategorierInit){
+      const mk = namn => ({ id: uid(), namn });
+      const forsaljning = mk('Försäljning'), anslutningar = mk('Anslutningar'), ekonomi = mk('Ekonomi'), ovriga = mk('Övriga kostnader');
+      g.underkategorier = [forsaljning, anslutningar, ekonomi, ovriga];
+      g.underkategorierInit = true;
+      g.poster.forEach(p => {
+        if(p.underkategori) return;
+        const n = (p.namn || '').toLowerCase();
+        if(/anslutning/.test(n)) p.underkategori = anslutningar.id;
+        else if(/m[äa]klar|f[öo]rs[äa]ljning|marknad|rendering|sociala|visning|bop[äa]rm|annons/.test(n)) p.underkategori = forsaljning.id;
+        else if(/ekonomisk|revision|bokf[öo]ring|bank|r[äa]nta|finansiering|kassa|f[öo]rs[äa]kring/.test(n)) p.underkategori = ekonomi.id;
+      });
+    }
+    // Poster som pekar på en borttagen underkategori blir okategoriserade.
+    const ukIds = new Set(g.underkategorier.map(u => u.id));
+    g.poster.forEach(p => { if(p.underkategori && !ukIds.has(p.underkategori)) p.underkategori = null; });
   });
   if(data.fordelning){
     // "fordelning" var en ALTERNATIV, grövre vy av SAMMA totalkostnad som
@@ -2853,7 +2874,10 @@ document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
 
 function renderNyaProjektRowList(tbody, rows, candidate, opts){
   tbody.innerHTML = '';
-  rows.forEach(row => {
+  // opts.filter: visa bara en delmängd (t.ex. en underkategori) men flytta/ta
+  // bort i hela källistan så ordningen mellan posterna bevaras.
+  const visible = opts && opts.filter ? rows.filter(opts.filter) : rows;
+  visible.forEach(row => {
     const tr = document.createElement('tr');
 
     const nameTd = document.createElement('td');
@@ -2958,8 +2982,33 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     const delTd = document.createElement('td');
     delTd.style.whiteSpace = 'nowrap';
     delTd.style.textAlign = 'right';
-    // Flytta posten upp/ner i listan - ordningen sparas med kalkylen.
-    const idxNow = rows.indexOf(row);
+    if(opts && opts.underkategorier && opts.underkategorier.length){
+      // Välj underkategori direkt på raden.
+      const sel = document.createElement('select');
+      sel.title = 'Underkategori';
+      sel.style.cssText = 'font-size:11.5px; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; margin-right:6px; color:var(--ink-soft); background:#fff; max-width:140px;';
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'Ej kategoriserad';
+      sel.appendChild(none);
+      opts.underkategorier.forEach(uk => {
+        const o = document.createElement('option');
+        o.value = uk.id;
+        o.textContent = uk.namn;
+        sel.appendChild(o);
+      });
+      sel.value = row.underkategori || '';
+      sel.addEventListener('mousedown', e => e.stopPropagation());
+      sel.addEventListener('change', async () => {
+        row.underkategori = sel.value || null;
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      });
+      delTd.appendChild(sel);
+    }
+    // Flytta posten upp/ner i listan - ordningen sparas med kalkylen. Med
+    // filter byts plats med närmaste synliga granne i källistan.
+    const vIdx = visible.indexOf(row);
     const moveBtn = (label, title, delta, disabled) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -2968,18 +3017,20 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       btn.disabled = disabled;
       btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 4px;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
       nyaProjektActionButton(btn, async () => {
-        const i = rows.indexOf(row);
-        const j = i + delta;
-        if(i < 0 || j < 0 || j >= rows.length) return;
-        rows.splice(i, 1);
-        rows.splice(j, 0, row);
+        const vi = visible.indexOf(row);
+        const other = visible[vi + delta];
+        if(!other) return;
+        const i = rows.indexOf(row), j = rows.indexOf(other);
+        if(i < 0 || j < 0) return;
+        rows[i] = other;
+        rows[j] = row;
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         renderNyaProjektDetail();
       });
       return btn;
     };
-    delTd.appendChild(moveBtn('↑', 'Flytta upp', -1, idxNow <= 0));
-    delTd.appendChild(moveBtn('↓', 'Flytta ner', 1, idxNow >= rows.length - 1));
+    delTd.appendChild(moveBtn('↑', 'Flytta upp', -1, vIdx <= 0));
+    delTd.appendChild(moveBtn('↓', 'Flytta ner', 1, vIdx >= visible.length - 1));
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.textContent = '✕';
@@ -3104,22 +3155,139 @@ function renderNyaProjektDetail(){
 
       const table = document.createElement('table');
       table.style.width = '100%';
-      const tbody = document.createElement('tbody');
-      table.appendChild(tbody);
       room.appendChild(table);
-      renderNyaProjektRowList(tbody, group.poster, candidate, { perKvm: true, boaTotal: boa, beloppModal: true, antal });
+      const rowOpts = { perKvm: true, boaTotal: boa, beloppModal: true, antal, underkategorier: group.underkategorier };
+      const uks = group.underkategorier || [];
 
-      const addItemBtn = document.createElement('button');
-      addItemBtn.type = 'button';
-      addItemBtn.className = 'add-inline-btn';
-      addItemBtn.style.marginTop = '8px';
-      addItemBtn.textContent = '+ Lägg till post';
-      nyaProjektActionButton(addItemBtn, async () => {
-        group.poster.push({ id: uid(), namn: '', belopp: null });
+      const addPostBtn = (ukId) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'add-inline-btn';
+        btn.style.marginTop = '8px';
+        btn.textContent = '+ Lägg till post';
+        nyaProjektActionButton(btn, async () => {
+          group.poster.push({ id: uid(), namn: '', belopp: null, underkategori: ukId || null });
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          renderNyaProjektDetail();
+        });
+        return btn;
+      };
+
+      if(!uks.length){
+        const tbody = document.createElement('tbody');
+        table.appendChild(tbody);
+        renderNyaProjektRowList(tbody, group.poster, candidate, rowOpts);
+        room.appendChild(addPostBtn(null));
+      } else {
+        // En sektion per underkategori med rubrik, delsumma och egna poster,
+        // följt av eventuella okategoriserade poster.
+        const sections = uks.map(uk => ({ uk, filter: p => p.underkategori === uk.id }));
+        sections.push({ uk: null, filter: p => !p.underkategori });
+        sections.forEach(sec => {
+          const rows = group.poster.filter(sec.filter);
+          if(!sec.uk && !rows.length) return;
+          const subTotal = rows.reduce((s, p) => s + (p.belopp || 0), 0);
+          const headBody = document.createElement('tbody');
+          const headTr = document.createElement('tr');
+          headTr.className = 'nya-projekt-uk-head';
+          const headTd = document.createElement('td');
+          headTd.colSpan = 4;
+          headTd.style.cssText = 'text-align:left; padding:14px 0 4px; border-bottom:1px solid var(--line-soft);';
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'display:flex; align-items:center; gap:6px;';
+          const ukName = document.createElement('span');
+          ukName.style.cssText = 'font-weight:700; font-size:13.5px;' + (sec.uk ? ' cursor:pointer;' : ' color:var(--ink-soft);');
+          ukName.textContent = sec.uk ? sec.uk.namn : 'Ej kategoriserade';
+          if(sec.uk){
+            ukName.title = 'Klicka för att byta namn';
+            ukName.onclick = () => {
+              const input = document.createElement('input');
+              input.type = 'text';
+              input.value = sec.uk.namn || '';
+              input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' max-width:260px;';
+              ukName.replaceWith(input);
+              input.focus(); input.select();
+              nyaProjektWireInlineInput(input, async () => {
+                sec.uk.namn = input.value.trim() || 'Namnlös underkategori';
+                input.replaceWith(ukName);
+                await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+              });
+            };
+          }
+          wrap.appendChild(ukName);
+          const sum = document.createElement('span');
+          sum.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft); flex:1;";
+          sum.textContent = '· ' + formatKrFull(subTotal) + (nyaProjektPerKvm(subTotal, boa) ? ' · ' + nyaProjektPerKvm(subTotal, boa) : '') + ' · ' + rows.length + ' post' + (rows.length === 1 ? '' : 'er');
+          wrap.appendChild(sum);
+          if(sec.uk){
+            const ui = uks.indexOf(sec.uk);
+            const mv = (label, title, delta, disabled) => {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.textContent = label;
+              btn.title = title;
+              btn.disabled = disabled;
+              btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+              nyaProjektActionButton(btn, async () => {
+                const i = uks.indexOf(sec.uk), j = i + delta;
+                if(i < 0 || j < 0 || j >= uks.length) return;
+                uks.splice(i, 1);
+                uks.splice(j, 0, sec.uk);
+                await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+                renderNyaProjektDetail();
+              });
+              return btn;
+            };
+            wrap.appendChild(mv('↑', 'Flytta underkategorin upp', -1, ui <= 0));
+            wrap.appendChild(mv('↓', 'Flytta underkategorin ner', 1, ui >= uks.length - 1));
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = '✕';
+            del.title = 'Ta bort underkategorin (posterna blir okategoriserade)';
+            del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+            nyaProjektActionButton(del, async () => {
+              if(rows.length && !confirm('Ta bort underkategorin "' + sec.uk.namn + '"? De ' + rows.length + ' posterna ligger kvar som okategoriserade.')) return;
+              group.underkategorier = uks.filter(u => u.id !== sec.uk.id);
+              group.poster.forEach(p => { if(p.underkategori === sec.uk.id) p.underkategori = null; });
+              await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+              renderNyaProjektDetail();
+            });
+            wrap.appendChild(del);
+          }
+          headTd.appendChild(wrap);
+          headTr.appendChild(headTd);
+          headBody.appendChild(headTr);
+          table.appendChild(headBody);
+
+          const tbody = document.createElement('tbody');
+          table.appendChild(tbody);
+          renderNyaProjektRowList(tbody, group.poster, candidate, { ...rowOpts, filter: sec.filter });
+          const addTr = document.createElement('tr');
+          const addTd = document.createElement('td');
+          addTd.colSpan = 4;
+          addTd.style.cssText = 'text-align:left; padding:0 0 4px; border:none;';
+          const addBtn = addPostBtn(sec.uk ? sec.uk.id : null);
+          addBtn.style.marginTop = '4px';
+          addBtn.style.fontSize = '12px';
+          addTd.appendChild(addBtn);
+          addTr.appendChild(addTd);
+          tbody.appendChild(addTr);
+        });
+      }
+
+      const addUkBtn = document.createElement('button');
+      addUkBtn.type = 'button';
+      addUkBtn.className = 'add-inline-btn';
+      addUkBtn.style.cssText = 'margin-top:8px; margin-left:8px; opacity:0.8;';
+      addUkBtn.textContent = '+ Lägg till underkategori';
+      nyaProjektActionButton(addUkBtn, async () => {
+        const namn = prompt('Namn på underkategorin:');
+        if(!namn || !namn.trim()) return;
+        group.underkategorier.push({ id: uid(), namn: namn.trim() });
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         renderNyaProjektDetail();
       });
-      room.appendChild(addItemBtn);
+      room.appendChild(addUkBtn);
 
       groupsEl.appendChild(room);
     });
@@ -3727,11 +3895,38 @@ function buildPropaEkonomiHtml(candidate){
     return t ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;">' + t + '</div>' : '';
   };
 
+  // Kostnadsfördelningen är kompakt (en rad per grupp) - klick på gruppen
+  // fäller ut alla poster, grupperade per underkategori med delsummor.
   const groupRows = (d.kostnadsgrupper || []).map(g => {
     const total = nyaProjektGroupTotal(g);
-    return '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + escapeHtml(g.grupp) + '</td>' +
+    const gid = escapeHtml(g.id);
+    const posts = (g.poster || []).filter(p => p.namn || p.belopp != null);
+    let html = '<tr class="propa-group-row" data-propa-group="' + gid + '" style="cursor:pointer;" title="Klicka för att visa posterna">' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft);"><span class="propa-group-chevron" style="display:inline-block; width:14px; color:var(--ink-soft); transition:transform 0.15s;">▸</span>' + escapeHtml(g.grupp) +
+      '<span style="font-size:11px; color:var(--ink-soft); margin-left:8px;">' + posts.length + ' post' + (posts.length === 1 ? '' : 'er') + '</span></td>' +
       '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(total) + '</td>' +
       '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + (nyaProjektPerKvm(total, boa) || '—') + '</td></tr>';
+    const postRow = p => '<tr class="propa-group-detail" data-propa-group="' + gid + '" style="display:none;">' +
+      '<td style="padding:4px 0 4px 34px; border-bottom:1px solid var(--line-soft); font-size:12.5px;">' + escapeHtml(p.namn || 'Namnlös post') +
+      (p.perBostad != null ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); margin-left:8px;">' + kr(p.perBostad) + ' × ' + (p.perBostadAntal != null ? p.perBostadAntal : '?') + '</span>' : '') + '</td>' +
+      '<td style="padding:4px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12.5px;">' + kr(p.belopp) + '</td>' +
+      '<td style="padding:4px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12px; color:var(--ink-soft);">' + (nyaProjektPerKvm(p.belopp, boa) || '—') + '</td></tr>';
+    const uks = (g.underkategorier || []).map(uk => ({ namn: uk.namn, rows: posts.filter(p => p.underkategori === uk.id) }));
+    const rest = posts.filter(p => !p.underkategori);
+    if(uks.length){
+      if(rest.length) uks.push({ namn: 'Övrigt', rows: rest });
+      uks.filter(uk => uk.rows.length).forEach(uk => {
+        const sub = uk.rows.reduce((s, p) => s + (p.belopp || 0), 0);
+        html += '<tr class="propa-group-detail" data-propa-group="' + gid + '" style="display:none;">' +
+          '<td style="padding:6px 0 4px 18px; border-bottom:1px solid var(--line-soft); font-size:12.5px; font-weight:600;">' + escapeHtml(uk.namn) + '</td>' +
+          '<td style="padding:6px 0 4px; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12.5px; font-weight:600;">' + kr(sub) + '</td>' +
+          '<td style="padding:6px 0 4px; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12px; color:var(--ink-soft);">' + (nyaProjektPerKvm(sub, boa) || '—') + '</td></tr>';
+        html += uk.rows.map(postRow).join('');
+      });
+    } else {
+      html += posts.map(postRow).join('');
+    }
+    return html;
   }).join('');
 
   const finRows = (d.finansiering || []).filter(f => f.namn || f.belopp != null).map(f => {
@@ -3820,6 +4015,17 @@ function showPublicPropaOnly(){
 }
 
 function wirePropaTabs(root){
+  // Kostnadsgrupper i propån: klick på gruppraden fäller ut/ihop posterna.
+  root.querySelectorAll('.propa-group-row').forEach(rowEl => {
+    rowEl.onclick = () => {
+      const gid = rowEl.getAttribute('data-propa-group');
+      const details = root.querySelectorAll('.propa-group-detail[data-propa-group="' + gid + '"]');
+      const open = details.length && details[0].style.display === 'none';
+      details.forEach(d => { d.style.display = open ? '' : 'none'; });
+      const chev = rowEl.querySelector('.propa-group-chevron');
+      if(chev) chev.style.transform = open ? 'rotate(90deg)' : '';
+    };
+  });
   const buttons = root.querySelectorAll('.propa-tab-btn');
   buttons.forEach(btn => {
     btn.onclick = () => {
