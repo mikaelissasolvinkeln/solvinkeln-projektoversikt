@@ -2506,6 +2506,7 @@ function migrateNyaProjektData(data){
   data.finansiering.forEach(f => {
     if(!f.id) f.id = uid();
     if(f.period === undefined) f.period = '';
+    if(typeof f.part !== 'string') f.part = '';
   });
 
   if(!Array.isArray(data.bostader)) data.bostader = [];
@@ -2911,6 +2912,38 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     };
     nameTd.appendChild(nameSpan);
     tr.appendChild(nameTd);
+
+    if(opts && opts.part){
+      // Vilken part som finansierar posten (t.ex. bank, Solvinkeln, investerare).
+      const partTd = document.createElement('td');
+      partTd.style.textAlign = 'left';
+      const partSpan = document.createElement('span');
+      partSpan.className = 'editable';
+      partSpan.style.cursor = 'pointer';
+      partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
+      partSpan.textContent = row.part || 'Ange part';
+      partSpan.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'T.ex. SEB, Solvinkeln Fastigheter AB';
+        input.value = row.part || '';
+        input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
+        partTd.innerHTML = '';
+        partTd.appendChild(input);
+        input.focus(); input.select();
+        nyaProjektWireInlineInput(input, async () => {
+          row.part = input.value.trim();
+          partSpan.textContent = row.part || 'Ange part';
+          partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
+          partTd.innerHTML = '';
+          partTd.appendChild(partSpan);
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          nyaProjektRefreshTidsaxel(candidate);
+        });
+      };
+      partTd.appendChild(partSpan);
+      tr.appendChild(partTd);
+    }
 
     const amountTd = document.createElement('td');
     const amountSpan = document.createElement('span');
@@ -3319,7 +3352,7 @@ function renderNyaProjektDetail(){
   // tolkbart datum hamnar sist och kan flyttas med pilarna.
   nyaProjektSortByPeriod(data.finansiering);
   nyaProjektSortByPeriod(data.handelser);
-  renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, { period: true });
+  renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, { period: true, part: true });
   renderNyaProjektRowList(document.getElementById('nyaProjektHandelserBody'), data.handelser, candidate, { period: true });
   document.getElementById('nyaProjektTidsaxelPreview').innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
 
@@ -3996,9 +4029,16 @@ function buildPropaEkonomiHtml(candidate){
 
   const finRows = (d.finansiering || []).filter(f => f.namn || f.belopp != null).map(f => {
     return '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + escapeHtml(f.namn || '') + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); color:var(--ink-soft);">' + escapeHtml(f.part || '—') + '</td>' +
       '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(f.belopp) + '</td>' +
-      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; color:var(--ink-soft);">' + escapeHtml(f.period || '—') + '</td></tr>';
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; color:var(--ink-soft);">' + escapeHtml(f.period ? nyaProjektPeriodLabel(f.period) : '—') + '</td></tr>';
   }).join('');
+  const finHead = '<thead><tr>' +
+    '<th style="text-align:left; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Post</th>' +
+    '<th style="text-align:left; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Finansieras av</th>' +
+    '<th style="text-align:right; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Belopp</th>' +
+    '<th style="text-align:right; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">När</th>' +
+    '</tr></thead>';
 
   return '<div class="home-grid" style="margin-bottom:36px;">' +
       '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
@@ -4017,7 +4057,7 @@ function buildPropaEkonomiHtml(candidate){
     (finRows ?
       '<h3 style="font-family:\'Fraunces\',serif; margin-bottom:12px;">Finansieringsplan</h3>' +
       '<p class="eko-sub" style="margin:0 0 12px;">Kvar att finansiera: ' + kr(totalKostnader - totalFinansiering) + '</p>' +
-      '<table style="width:100%; border-collapse:collapse;"><tbody>' + finRows + '</tbody></table>'
+      '<table style="width:100%; border-collapse:collapse;">' + finHead + '<tbody>' + finRows + '</tbody></table>'
       : '');
 }
 
@@ -4080,7 +4120,7 @@ function nyaProjektPeriodLabel(str){
 function nyaProjektTimelineItems(data){
   const items = [];
   (data.finansiering || []).filter(f => f.namn || f.belopp != null).forEach(f => {
-    items.push({ typ: 'kapital', namn: f.namn || 'Namnlös post', belopp: f.belopp, period: f.period || '' });
+    items.push({ typ: 'kapital', namn: f.namn || 'Namnlös post', part: f.part || '', belopp: f.belopp, period: f.period || '' });
   });
   (data.handelser || []).filter(h => h.namn || h.belopp != null).forEach(h => {
     items.push({ typ: 'handelse', namn: h.namn || 'Namnlös händelse', belopp: h.belopp, period: h.period || '' });
@@ -4133,7 +4173,7 @@ function buildPropaTidsplanHtml(candidate, opts){
       html += '<div style="display:flex; align-items:baseline; gap:10px; padding:' + (compact ? '3px 0' : '5px 0') + '; font-size:' + (compact ? '12.5px' : '14px') + ';">' +
         '<span style="display:inline-block; min-width:' + (compact ? '84px' : '96px') + '; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; padding:2px 7px; border-radius:4px; text-align:center; ' +
           (isKap ? 'background:var(--ink); color:#fff;' : 'background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue);') + '">' + (isKap ? 'Kapital' : 'Händelse') + '</span>' +
-        '<span style="flex:1;">' + escapeHtml(it.namn) + '</span>' +
+        '<span style="flex:1;">' + escapeHtml(it.namn) + (it.part ? '<span style="color:var(--ink-soft);"> · ' + escapeHtml(it.part) + '</span>' : '') + '</span>' +
         (it.belopp != null ? '<span style="font-family:\'JetBrains Mono\',monospace; white-space:nowrap;">' + kr(it.belopp) + '</span>' : '') +
         '</div>';
     });
