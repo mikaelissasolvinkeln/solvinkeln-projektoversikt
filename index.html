@@ -1224,11 +1224,33 @@
       <p class="eko-sub" id="nyaProjektLikviditetsbehovText" style="margin:0 0 10px;"></p>
       <div class="table-scroll" style="margin-bottom:10px;">
         <table class="eko-compare-table" style="width:100%;">
-          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th><th></th></tr></thead>
+          <thead><tr><th style="text-align:left;">Post</th><th>Belopp (kr)</th><th>När (kapitalbehov)</th><th></th></tr></thead>
           <tbody id="nyaProjektFinansieringBody"></tbody>
         </table>
       </div>
       <button id="nyaProjektAddFinansieringBtn" class="add-inline-btn">+ Lägg till post</button>
+
+      <h3 style="margin:32px 0 10px;">Allmän information</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Visas som en egen flik i investeringspropån.</p>
+      <textarea id="nyaProjektAllmanInfoInput" rows="6" style="width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:8px; padding:10px 12px; font-family:inherit; font-size:14px; margin-bottom:12px;" placeholder="Beskrivning av projektet, läge, tidsplan m.m."></textarea>
+      <div style="margin-bottom:12px;">
+        <button type="button" id="nyaProjektBildUploadBtn" class="upload-btn">🖼️ Ladda upp bild</button>
+        <input type="file" id="nyaProjektBildFileInput" accept="image/*" style="display:none;">
+        <span id="nyaProjektBildStatus" class="contract-upload-status"></span>
+      </div>
+      <div id="nyaProjektBildPreviewWrap" style="display:none; margin-bottom:24px;">
+        <img id="nyaProjektBildPreview" style="max-width:320px; max-height:220px; border-radius:8px; display:block; margin-bottom:8px;">
+        <button id="nyaProjektBildRemoveBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort bild</button>
+      </div>
+
+      <h3 style="margin-bottom:10px;">Bilagor</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Delas i en egen flik i investeringspropån.</p>
+      <div style="margin-bottom:10px;">
+        <button type="button" id="nyaProjektBilagaUploadBtn" class="upload-btn">📎 Ladda upp bilaga</button>
+        <input type="file" id="nyaProjektBilagaFileInput" style="display:none;">
+        <span id="nyaProjektBilagaStatus" class="contract-upload-status"></span>
+      </div>
+      <div id="nyaProjektBilagorList"></div>
     </div>
 
     <div id="nyaProjektBostaderModalOverlay" class="modal-overlay">
