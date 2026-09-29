@@ -87,6 +87,19 @@ const TOOL = {
           required: ['namn', 'belopp'],
         },
       },
+      bostader: {
+        type: 'array',
+        description: 'Om kalkylen har ett eget kalkylblad med en lista över de enskilda bostäderna/lägenheterna (t.ex. en rad per lägenhetsnummer med yta och/eller pris) - en rad per bostad. Lämna tom array om inget sådant blad finns, gissa aldrig fram bostäder som inte står i kalkylen.',
+        items: {
+          type: 'object',
+          properties: {
+            namn: { type: 'string', description: 'T.ex. lägenhetsnummer eller hustyp, "Lgh 1"' },
+            kvm: { type: 'number', description: 'Boarea för just den bostaden i kvadratmeter, om det anges' },
+            pris: { type: 'number', description: 'Pris/insats för just den bostaden i kr, om det anges' },
+          },
+          required: ['namn'],
+        },
+      },
     },
     required: ['projektnamn'],
   },
@@ -143,7 +156,7 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 4096,
+        max_tokens: 8192,
         tools: [TOOL],
         tool_choice: { type: 'tool', name: 'extract_kalkyl' },
         messages: [
