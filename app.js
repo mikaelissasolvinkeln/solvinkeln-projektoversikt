@@ -2639,6 +2639,47 @@ function buildNyaProjektBostaderCard(candidate){
   return card;
 }
 
+// Inline-redigering i tabellcellerna: samma typsnitt/storlek som texten runt
+// omkring, och cellen återgår till vanlig text DIREKT när man är klar (Enter,
+// ändring eller klick utanför) - sparningen mot databasen sker sedan i
+// bakgrunden, så att fältet aldrig "fastnar" som ett vitt inmatningsfält.
+const NYA_PROJEKT_INLINE_INPUT_CSS = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font:inherit;';
+function nyaProjektWireInlineInput(input, commit){
+  let done = false;
+  const finish = async () => {
+    if(done) return;
+    done = true;
+    try{
+      await commit();
+    }catch(e){
+      showDebugError('Kunde inte spara', e);
+    }
+    renderNyaProjektDetail();
+  };
+  input.__commit = finish;
+  input.addEventListener('blur', finish);
+  input.addEventListener('change', finish);
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); finish(); }
+    if(e.key === 'Escape'){ done = true; renderNyaProjektDetail(); }
+  });
+}
+
+// Knappar (ta bort, lägg till) får inte "stjäla" fokus från ett öppet
+// inmatningsfält - då ritas tabellen om av blur-sparningen innan klicket
+// hinner landa och knappen verkar död. Ett ev. pågående fält sparas istället
+// först, sedan körs knappens egen åtgärd.
+function nyaProjektActionButton(btn, action){
+  btn.addEventListener('mousedown', e => e.preventDefault());
+  btn.style.padding = '4px 8px';
+  btn.style.fontSize = '14px';
+  btn.onclick = async () => {
+    const active = document.activeElement;
+    if(active && typeof active.__commit === 'function') await active.__commit();
+    await action();
+  };
+}
+
 // Bygger en rad-tabell (namn/belopp, båda redigerbara, ta bort-knapp) som
 // återanvänds för Intäkter och för posterna inuti varje kostnadsgrupp.
 function renderNyaProjektRowList(tbody, rows, candidate, opts){
@@ -2656,17 +2697,17 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       const input = document.createElement('input');
       input.type = 'text';
       input.value = row.namn || '';
-      input.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
       nameTd.innerHTML = '';
       nameTd.appendChild(input);
       input.focus(); input.select();
-      const save = async () => {
+      nyaProjektWireInlineInput(input, async () => {
         row.namn = input.value.trim();
+        nameSpan.textContent = row.namn || 'Namnlös post';
+        nameTd.innerHTML = '';
+        nameTd.appendChild(nameSpan);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-        renderNyaProjektDetail();
-      };
-      input.addEventListener('blur', save);
-      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+      });
     };
     nameTd.appendChild(nameSpan);
     tr.appendChild(nameTd);
@@ -2680,18 +2721,18 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       const input = document.createElement('input');
       input.type = 'number';
       input.value = row.belopp != null ? row.belopp : '';
-      input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' text-align:right;';
       amountTd.innerHTML = '';
       amountTd.appendChild(input);
       input.focus(); input.select();
-      const save = async () => {
+      nyaProjektWireInlineInput(input, async () => {
         const raw = input.value.trim();
         row.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+        amountTd.innerHTML = '';
+        amountTd.appendChild(amountSpan);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-        renderNyaProjektDetail();
-      };
-      input.addEventListener('blur', save);
-      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+      });
     };
     amountTd.appendChild(amountSpan);
     tr.appendChild(amountTd);
@@ -2716,17 +2757,17 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
         input.type = 'text';
         input.placeholder = 'T.ex. Maj 2027';
         input.value = row.period || '';
-        input.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+        input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
         periodTd.innerHTML = '';
         periodTd.appendChild(input);
         input.focus(); input.select();
-        const save = async () => {
+        nyaProjektWireInlineInput(input, async () => {
           row.period = input.value.trim();
+          periodSpan.textContent = row.period || '—';
+          periodTd.innerHTML = '';
+          periodTd.appendChild(periodSpan);
           await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-          renderNyaProjektDetail();
-        };
-        input.addEventListener('blur', save);
-        input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+        });
       };
       periodTd.appendChild(periodSpan);
       tr.appendChild(periodTd);
@@ -2734,16 +2775,17 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
 
     const delTd = document.createElement('td');
     const delBtn = document.createElement('button');
+    delBtn.type = 'button';
     delBtn.textContent = '✕';
     delBtn.title = 'Ta bort';
     delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
-    delBtn.onclick = async () => {
+    nyaProjektActionButton(delBtn, async () => {
       const idx = rows.indexOf(row);
       if(idx > -1) rows.splice(idx, 1);
       await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
       renderNyaProjektDetail();
       renderNyaProjektList();
-    };
+    });
     delTd.appendChild(delBtn);
     tr.appendChild(delTd);
 
@@ -2770,15 +2812,14 @@ function renderNyaProjektDetail(){
     input.style.cssText = "font-family:'Fraunces',serif; font-size:inherit; font-weight:inherit; width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:2px 6px;";
     titleEl.replaceWith(input);
     input.focus(); input.select();
-    const save = async () => {
+    nyaProjektWireInlineInput(input, async () => {
       const name = input.value.trim();
       if(name) candidate.name = name;
+      titleEl.textContent = candidate.name;
+      input.replaceWith(titleEl);
       await DB.updateNyaProjekt(candidate.id, { name: candidate.name });
-      renderNyaProjektDetail();
       renderNyaProjektList();
-    };
-    input.addEventListener('blur', save);
-    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+    });
   };
   document.getElementById('nyaProjektDetailStatus').textContent =
     candidate.status === 'promoted' ? '✓ Omvandlat till projekt' : 'Kandidat under utvärdering';
@@ -2816,27 +2857,27 @@ function renderNyaProjektDetail(){
         const input = document.createElement('input');
         input.type = 'text';
         input.value = group.grupp || '';
-        input.style.cssText = 'flex:1; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font-size:15px;';
+        input.style.cssText = 'flex:1; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font:inherit;';
         nameSpan.replaceWith(input);
         input.focus(); input.select();
-        const save = async () => {
+        nyaProjektWireInlineInput(input, async () => {
           group.grupp = input.value.trim() || 'Namnlös grupp';
+          input.replaceWith(nameSpan);
           await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-          renderNyaProjektDetail();
-        };
-        input.addEventListener('blur', save);
-        input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+        });
       };
       header.appendChild(nameSpan);
       const delGroupBtn = document.createElement('button');
+      delGroupBtn.type = 'button';
       delGroupBtn.textContent = '✕';
       delGroupBtn.title = 'Ta bort gruppen';
-      delGroupBtn.onclick = async () => {
+      nyaProjektActionButton(delGroupBtn, async () => {
+        if(!confirm('Ta bort gruppen "' + (group.grupp || 'Namnlös grupp') + '" med alla poster?')) return;
         data.kostnadsgrupper = data.kostnadsgrupper.filter(g => g.id !== group.id);
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         renderNyaProjektDetail();
         renderNyaProjektList();
-      };
+      });
       header.appendChild(delGroupBtn);
       room.appendChild(header);
 
@@ -2848,14 +2889,15 @@ function renderNyaProjektDetail(){
       renderNyaProjektRowList(tbody, group.poster, candidate, { perKvm: true, boaTotal: boa });
 
       const addItemBtn = document.createElement('button');
+      addItemBtn.type = 'button';
       addItemBtn.className = 'add-inline-btn';
       addItemBtn.style.marginTop = '8px';
       addItemBtn.textContent = '+ Lägg till post';
-      addItemBtn.onclick = async () => {
+      nyaProjektActionButton(addItemBtn, async () => {
         group.poster.push({ id: uid(), namn: '', belopp: null });
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         renderNyaProjektDetail();
-      };
+      });
       room.appendChild(addItemBtn);
 
       groupsEl.appendChild(room);
@@ -3021,8 +3063,21 @@ document.getElementById('nyaProjektAddFinansieringBtn').onclick = async () => {
 
 // ---------- Bostäder (per kandidat) - prisdifferentiera mellan enskilda bostäder ----------
 let currentNyaProjektBostaderId = null;
-function openNyaProjektBostaderModal(candidateId){
+async function openNyaProjektBostaderModal(candidateId){
   currentNyaProjektBostaderId = candidateId;
+  const candidate = nyaProjektList.find(c => c.id === candidateId);
+  // Finns inga bostäder listade men kalkylen anger ett antal: skapa en tom rad
+  // per bostad så att listan bara behöver fyllas i, inte byggas upp för hand.
+  if(candidate && !candidate.data.bostader.length && candidate.data.antalBostader > 0){
+    for(let i = 1; i <= candidate.data.antalBostader; i++){
+      candidate.data.bostader.push({ id: uid(), namn: 'Lgh ' + i, kvm: null, pris: null });
+    }
+    try{
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    }catch(e){
+      showDebugError('Kunde inte spara bostäder', e);
+    }
+  }
   renderNyaProjektBostaderModal();
   document.getElementById('nyaProjektBostaderModalOverlay').classList.add('open');
 }
