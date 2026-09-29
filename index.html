@@ -475,6 +475,9 @@
     text-align:right; color:var(--ink);
   }
   .eko-inline-input:hover, .eko-inline-input:focus{ border-color: var(--line-soft); background:#fff; }
+  /* Inga upp/ner-pilar på sifferfält - de tar plats och gör fälten svåra att fylla i */
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
+  input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   .eko-compare-table select.eko-inline-select{
     width:100%; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;
     font-size:12.5px; font-family:'Inter',sans-serif; background:#fff;
@@ -1253,21 +1256,29 @@
       <div id="nyaProjektBilagorList"></div>
     </div>
 
-    <div id="nyaProjektBostaderModalOverlay" class="modal-overlay">
-      <div class="modal-box" style="max-width:560px;">
-        <h3>Bostäder</h3>
-        <p class="modal-sub" id="nyaProjektBostaderModalSub">Prisdifferentiera mellan de enskilda bostäderna.</p>
-        <div class="table-scroll" style="max-height:360px; overflow-y:auto;">
-          <table class="eko-compare-table" style="width:100%;">
-            <thead><tr><th style="text-align:left;">Namn</th><th>Kvm</th><th>Pris (kr)</th><th></th></tr></thead>
-            <tbody id="nyaProjektBostaderBody"></tbody>
-          </table>
-        </div>
-        <button id="nyaProjektAddBostadBtn" class="add-inline-btn" style="margin-top:10px;">+ Lägg till bostad</button>
-        <div class="modal-actions">
-          <button id="nyaProjektBostaderCloseBtn">Stäng</button>
-        </div>
+    <div id="nyaProjektBostaderView" style="display:none;">
+      <div class="project-header">
+        <button id="nyaProjektBostaderCloseBtn" class="back-btn">← Tillbaka till kalkylen</button>
+        <h2 id="nyaProjektBostaderTitle" class="project-header-name">Bostäder</h2>
       </div>
+      <p class="eko-sub" id="nyaProjektBostaderModalSub" style="margin:0 0 16px;">Prisdifferentiera mellan de enskilda bostäderna.</p>
+
+      <div class="contract-upload-row" style="margin-bottom:16px;">
+        <button type="button" id="nyaProjektBostaderExcelBtn" class="upload-btn">📊 Läs in bostäder från Excel</button>
+        <input type="file" id="nyaProjektBostaderExcelInput" accept=".xlsx,.xls" style="display:none;">
+        <span id="nyaProjektBostaderExcelStatus" class="contract-upload-status"></span>
+      </div>
+      <p class="eko-sub" style="margin:0 0 12px;">Excel-filen ska ha en rad per bostad med kolumner för namn/lägenhetsnummer, kvm (BOA) och pris - rubrikerna får heta ungefär vad som helst. Eller fyll i tabellen nedan för hand.</p>
+
+      <div class="table-scroll" style="margin-bottom:10px;">
+        <table class="eko-compare-table" style="width:100%;">
+          <colgroup><col style="width:40%;"><col><col><col style="width:44px;"></colgroup>
+          <thead><tr><th style="text-align:left;">Namn</th><th>Kvm</th><th>Pris (kr)</th><th></th></tr></thead>
+          <tbody id="nyaProjektBostaderBody"></tbody>
+          <tfoot id="nyaProjektBostaderFoot"></tfoot>
+        </table>
+      </div>
+      <button id="nyaProjektAddBostadBtn" class="add-inline-btn">+ Lägg till bostad</button>
     </div>
 
     <div id="ekonomiProjektBudgetView" style="display:none;">

@@ -1329,6 +1329,8 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiVinstSolvinkelnView').style.display = view === 'vinstsolvinkeln' ? 'block' : 'none';
   document.getElementById('ekonomiNyaProjektListView').style.display = view === 'nyaprojekt' ? 'block' : 'none';
   document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('nyaProjektBostaderView').style.display = 'none';
+  currentNyaProjektBostaderId = null;
   if(view === 'oversikt') renderEkonomiOversikt();
   else if(view === 'projekt') renderEkonomiProjekt();
   else if(view === 'budget') renderEkonomiBudgetList();
@@ -3148,24 +3150,137 @@ async function openNyaProjektBostaderModal(candidateId){
       showDebugError('Kunde inte spara bostäder', e);
     }
   }
+  setNyaProjektBostaderExcelStatus('');
   renderNyaProjektBostaderModal();
-  document.getElementById('nyaProjektBostaderModalOverlay').classList.add('open');
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('nyaProjektBostaderView').style.display = 'block';
+  window.scrollTo(0, 0);
 }
 function closeNyaProjektBostaderModal(){
-  document.getElementById('nyaProjektBostaderModalOverlay').classList.remove('open');
+  document.getElementById('nyaProjektBostaderView').style.display = 'none';
   currentNyaProjektBostaderId = null;
+  if(currentNyaProjektId){
+    document.getElementById('ekonomiNyaProjektDetailView').style.display = 'block';
+    renderNyaProjektDetail();
+  }
+  renderNyaProjektList();
 }
 document.getElementById('nyaProjektBostaderCloseBtn').onclick = closeNyaProjektBostaderModal;
-document.getElementById('nyaProjektBostaderModalOverlay').addEventListener('click', e => {
-  if(e.target.id === 'nyaProjektBostaderModalOverlay') closeNyaProjektBostaderModal();
+
+function setNyaProjektBostaderExcelStatus(msg, kind){
+  const el = document.getElementById('nyaProjektBostaderExcelStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+// Läser en bostadslista ur ett kalkylblad utan AI: letar upp rubrikraden
+// (namn/lgh, kvm/BOA, pris) och tar varje rad under den som en bostad.
+// Saknas rubriker tas de tre första ifyllda kolumnerna som namn, kvm, pris.
+function xlsxToBostader(wb){
+  const isName = h => /namn|l[äa]g(enhet|h)|bostad|\bnr\b|nummer|objekt|beteckning/i.test(h);
+  const isKvm = h => /kvm|boa|m2|m²|yta|area|storlek/i.test(h);
+  const isPris = h => /pris|kr|belopp|insats/i.test(h);
+  const num = v => {
+    if(v == null || v === '') return null;
+    if(typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/\s|kr|m²|m2/gi, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  };
+  let best = [];
+  wb.SheetNames.forEach(name => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null, raw: true });
+    let hdrIdx = -1, cName = -1, cKvm = -1, cPris = -1;
+    for(let r = 0; r < Math.min(grid.length, 40); r++){
+      const row = grid[r] || [];
+      let n = -1, k = -1, p = -1;
+      row.forEach((cell, c) => {
+        const h = cell == null ? '' : String(cell);
+        if(!h) return;
+        if(n < 0 && isName(h)) n = c;
+        else if(k < 0 && isKvm(h)) k = c;
+        else if(p < 0 && isPris(h)) p = c;
+      });
+      if(k >= 0 && p >= 0){ hdrIdx = r; cName = n; cKvm = k; cPris = p; break; }
+    }
+    let rows = [];
+    if(hdrIdx >= 0){
+      for(let r = hdrIdx + 1; r < grid.length; r++){
+        const row = grid[r] || [];
+        const kvm = num(row[cKvm]);
+        const pris = num(row[cPris]);
+        const namn = cName >= 0 && row[cName] != null ? String(row[cName]).trim() : '';
+        if(kvm == null && pris == null) continue;
+        if(/^(summa|totalt|total|snitt|medel)/i.test(namn)) continue;
+        rows.push({ namn, kvm, pris });
+      }
+    } else {
+      for(let r = 0; r < grid.length; r++){
+        const cells = (grid[r] || []).filter(v => v != null && v !== '');
+        if(cells.length < 2) continue;
+        const kvm = num(cells[cells.length - 2]);
+        const pris = num(cells[cells.length - 1]);
+        if(kvm == null || pris == null) continue;
+        const namn = cells.length > 2 ? String(cells[0]).trim() : '';
+        if(/^(summa|totalt|total|snitt|medel)/i.test(namn)) continue;
+        rows.push({ namn, kvm, pris });
+      }
+    }
+    if(rows.length > best.length) best = rows;
+  });
+  return best.map((b, i) => ({ id: uid(), namn: b.namn || ('Lgh ' + (i + 1)), kvm: b.kvm, pris: b.pris }));
+}
+document.getElementById('nyaProjektBostaderExcelBtn').onclick = () => {
+  document.getElementById('nyaProjektBostaderExcelInput').click();
+};
+document.getElementById('nyaProjektBostaderExcelInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate){ e.target.value = ''; return; }
+  const btn = document.getElementById('nyaProjektBostaderExcelBtn');
+  btn.disabled = true;
+  setNyaProjektBostaderExcelStatus('Läser filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const rows = xlsxToBostader(wb);
+    if(!rows.length) throw new Error('Hittade inga bostäder i filen (behöver kolumner för kvm och pris).');
+    const existing = candidate.data.bostader;
+    const hasContent = existing.some(b => b.kvm != null || b.pris != null);
+    if(hasContent && !confirm('Ersätt de ' + existing.length + ' bostäder som redan är ifyllda med ' + rows.length + ' bostäder från filen?')){
+      setNyaProjektBostaderExcelStatus('Avbrutet - inget ändrades.');
+      return;
+    }
+    candidate.data.bostader = rows;
+    candidate.data.antalBostader = rows.length;
+    const kvmRows = rows.filter(r => r.kvm != null);
+    if(kvmRows.length) candidate.data.boaTotal = kvmRows.reduce((s, r) => s + r.kvm, 0);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektBostaderModal();
+    renderNyaProjektList();
+    setNyaProjektBostaderExcelStatus(rows.length + ' bostäder inlästa från ' + file.name + '.', 'ok');
+  }catch(err){
+    setNyaProjektBostaderExcelStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
 });
 
 function renderNyaProjektBostaderModal(){
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
   if(!candidate) return;
   const rows = candidate.data.bostader;
+  const totalPris = rows.reduce((s, r) => s + (r.pris || 0), 0);
+  const totalKvm = rows.reduce((s, r) => s + (r.kvm || 0), 0);
+  document.getElementById('nyaProjektBostaderTitle').textContent = 'Bostäder · ' + candidate.name;
   document.getElementById('nyaProjektBostaderModalSub').textContent =
-    candidate.name + ' · ' + rows.length + ' bostäder · ' + formatKrFull(rows.reduce((s, r) => s + (r.pris || 0), 0)) + ' totalt';
+    rows.length + ' bostäder · ' + totalKvm.toLocaleString('sv-SE') + ' m² · ' + formatKrFull(totalPris) + ' totalt' +
+    (totalKvm ? ' · ' + formatKrPerKvm(totalPris, totalKvm) : '');
+  const foot = document.getElementById('nyaProjektBostaderFoot');
+  foot.innerHTML = rows.length
+    ? '<tr class="eko-row-resultat"><td style="text-align:left;">Summa</td><td>' + totalKvm.toLocaleString('sv-SE') + '</td><td>' + formatKrFull(totalPris) + '</td><td></td></tr>'
+    : '';
 
   const tbody = document.getElementById('nyaProjektBostaderBody');
   tbody.innerHTML = '';
