@@ -1,3 +1,19 @@
+// Byggstämpel - sätts till samma värde i index.html (<meta name="app-build">)
+// och här vid varje publicering (deploy/stamp.sh). Efter en publicering kan
+// webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
+// med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
+// Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
+const APP_BUILD = '20260929154359';
+(function checkAppBuild(){
+  const meta = document.querySelector('meta[name="app-build"]');
+  const htmlBuild = meta ? meta.getAttribute('content') : null;
+  if(!htmlBuild || htmlBuild === APP_BUILD) return;
+  const params = new URLSearchParams(location.search);
+  if(params.has('r')) return; // redan omladdad en gång - undvik loop
+  params.set('r', String(Date.now()));
+  location.replace(location.pathname + '?' + params.toString() + location.hash);
+})();
+
 const PROJECTS_KEY = 'projects-list';
 const PAMINNELSER_KEY = 'paminnelser';
 
