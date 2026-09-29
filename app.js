@@ -2988,6 +2988,7 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
           setPeriodText();
           periodTd.innerHTML = '';
           periodTd.appendChild(periodSpan);
+          nyaProjektSortByPeriod(rows);
           await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
           nyaProjektRefreshTidsaxel(candidate);
         });
@@ -3314,6 +3315,10 @@ function renderNyaProjektDetail(){
     'Likviditetsbehov (= total kostnad): ' + formatKrFull(totalKostnader) +
     ' · Finansierat: ' + formatKrFull(totalFinansiering) +
     ' · Kvar att finansiera: ' + formatKrFull(totalKostnader - totalFinansiering);
+  // Finansieringsplan och händelser ligger alltid i datumordning; rader utan
+  // tolkbart datum hamnar sist och kan flyttas med pilarna.
+  nyaProjektSortByPeriod(data.finansiering);
+  nyaProjektSortByPeriod(data.handelser);
   renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, { period: true });
   renderNyaProjektRowList(document.getElementById('nyaProjektHandelserBody'), data.handelser, candidate, { period: true });
   document.getElementById('nyaProjektTidsaxelPreview').innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
@@ -4083,6 +4088,14 @@ function nyaProjektTimelineItems(data){
   items.forEach((it, i) => { it.p = nyaProjektParsePeriod(it.period); it.key = nyaProjektPeriodKey(it.p); it.i = i; });
   items.sort((a, b) => (a.key - b.key) || (a.typ === b.typ ? a.i - b.i : (a.typ === 'kapital' ? -1 : 1)));
   return items;
+}
+// Stabil sortering på tolkat datum - rader med samma månad eller utan datum
+// behåller sin inbördes ordning.
+function nyaProjektSortByPeriod(rows){
+  if(!Array.isArray(rows) || rows.length < 2) return;
+  const keyed = rows.map((r, i) => ({ r, i, k: nyaProjektPeriodKey(nyaProjektParsePeriod(r.period)) }));
+  keyed.sort((a, b) => (a.k - b.k) || (a.i - b.i));
+  keyed.forEach((x, i) => { rows[i] = x.r; });
 }
 function nyaProjektRefreshTidsaxel(candidate){
   const el = document.getElementById('nyaProjektTidsaxelPreview');
