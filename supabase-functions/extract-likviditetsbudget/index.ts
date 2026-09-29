@@ -29,11 +29,14 @@ const TOOL = {
   description:
     'Rader och månadsbelopp ur en likviditetsbudget (Excel) för ett bostadsprojekt. Budgeten har en rad ' +
     'per post (t.ex. "Byggnadskreditiv", "Entreprenadkostnad", "Markförvärv", "Insatser", "Tillträde", ' +
-    '"Föreningslån") och en kolumn per kalendermånad över hela projektets löptid - månaderna står ofta som ' +
-    'en egen rad med bara månadsnamn (t.ex. "Januari", "Februari"), med årtalen på en RUBRIKRAD ovanför ' +
-    '(t.ex. "2025", "2026", "2027") som gäller för flera månadskolumner i följd tills nästa årtal. Räkna ' +
-    'ut varje kolumns riktiga år genom att kombinera månadsnamnet med det årtal som står ovanför just den ' +
-    'kolumnen. Hoppa ALLTID över summerings-/delsummeringsrader (t.ex. "Summa inbetalningar", "Summa ' +
+    '"Föreningslån") och en kolumn per kalendermånad över hela projektets löptid. Varje rad i texten anges ' +
+    'som "radnummer | A=värde  C=värde  H=värde ..." där bokstaven är kolumnen i kalkylbladet (tomma celler ' +
+    'visas inte alls). Månadsnamnen (t.ex. "Januari", "Februari") står på en egen rad med samma ' +
+    'kolumnbokstäver, och årtalen (t.ex. "2025", "2026", "2027") på en RUBRIKRAD ovanför där ett årtal gäller ' +
+    'från sin kolumn och framåt tills nästa årtal. Ett belopps månad = den månad som står i SAMMA ' +
+    'kolumnbokstav på månadsraden, kombinerat med det årtal som gäller för den kolumnen - matcha alltid på ' +
+    'kolumnbokstaven, aldrig på ordningen. Om det finns en IB-kolumn (ingående balans) före första månaden: ' +
+    'lägg dess belopp på rutnätets första månad. Hoppa ALLTID över summerings-/delsummeringsrader (t.ex. "Summa inbetalningar", "Summa ' +
     'utbetalningar", "Månadens saldo", "Kassa", "IB", "Försäljningsgrad") - de räknas ut automatiskt av ' +
     'mottagaren. Hoppa även över en eventuell separat sidotabell om finansiering av anskaffningen som inte ' +
     'är en del av månadsrutnätet. Gissa aldrig ett belopp eller en månad du är osäker på - hoppa över den ' +
@@ -130,7 +133,7 @@ Deno.serve(async (req) => {
             content:
               'Det här är innehållet i en likviditetsbudget (Excel), filnamn "' +
               (filename || 'okänd') +
-              '", ett kalkylblad i taget separerat med "=== Blad: <namn> ===" och varje rad som "radnummer | cell1<TAB>cell2<TAB>...". ' +
+              '", ett kalkylblad i taget separerat med "=== Blad: <namn> ===" och varje rad som "radnummer | A=cell  C=cell  H=cell ..." (bokstaven = kolumnen i bladet, tomma celler visas inte). ' +
               'Extrahera alla rader och deras månadsbelopp med verktyget extract_likviditetsbudget.\n\n' +
               gridText,
           },
