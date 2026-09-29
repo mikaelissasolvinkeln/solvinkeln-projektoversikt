@@ -1375,6 +1375,7 @@
             </tr>
           </thead>
           <tbody id="ekonomiMarkFastigheterBody"></tbody>
+          <tfoot id="ekonomiMarkFastigheterFoot"></tfoot>
         </table>
         <div id="ekonomiMarkFastigheterEmptyState" class="empty-state" style="display:none;">Ingen fastighet inlagd än för den här föreningen.</div>
       </div>
@@ -1387,6 +1388,33 @@
         <input type="file" id="kopebrevFileInput" accept="application/pdf" style="display:none;">
         <span id="kopebrevUploadStatus" class="contract-upload-status"></span>
       </div>
+
+      <h3 style="margin:24px 0 4px;">Läs in fastigheter från Excel</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Kolumner: fastighetsbeteckning, ort, anskaffningsbelopp, vattenanslutning, gatukostnad - varje rad blir en fastighet ovan.</p>
+      <div class="contract-upload-row">
+        <button type="button" id="markExcelUploadBtn" class="upload-btn">📄 Läs in fastigheter (Excel)</button>
+        <input type="file" id="markExcelFileInput" accept=".xlsx,.xls" style="display:none;">
+        <span id="markExcelUploadStatus" class="contract-upload-status"></span>
+      </div>
+
+      <h3 style="margin:24px 0 4px;">Fakturor - gatukostnad och vattenanslutning</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp en faktura (PDF) så läses beloppet in och läggs på rätt fastighet. Inget momsavdrag: debiteras moms tas beloppet inklusive moms, annars fakturabeloppet som det står.</p>
+      <div class="contract-upload-row">
+        <button type="button" id="markFakturaUploadBtn" class="upload-btn">📎 Läs in faktura (PDF)</button>
+        <input type="file" id="markFakturaFileInput" accept="application/pdf" style="display:none;">
+        <span id="markFakturaUploadStatus" class="contract-upload-status"></span>
+      </div>
+      <div id="markFakturaPendingBox" style="display:none; margin:10px 0; padding:10px 12px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px; display:none;">
+        <span id="markFakturaPendingText" style="margin-right:8px;"></span>
+        <select id="markFakturaPendingSelect" style="margin-right:6px;"></select>
+        <select id="markFakturaPendingTyp" style="margin-right:6px;">
+          <option value="gatukostnad">Gatukostnad</option>
+          <option value="vattenanslutning">Vattenanslutning</option>
+        </select>
+        <button id="markFakturaPendingAddBtn">Lägg till</button>
+        <button id="markFakturaPendingCancelBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>
+      </div>
+      <div id="markFakturorList" style="margin-top:10px;"></div>
     </div>
 
     <div id="ekonomiProjektLanView" style="display:none;">
