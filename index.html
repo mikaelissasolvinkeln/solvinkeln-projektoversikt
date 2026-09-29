@@ -1400,10 +1400,10 @@
       </div>
 
       <h3 style="margin:24px 0 4px;">Fakturor - gatukostnad och vattenanslutning</h3>
-      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp en faktura (PDF) så läses beloppet in och läggs på rätt fastighet. Inget momsavdrag: debiteras moms tas beloppet inklusive moms, annars fakturabeloppet som det står.</p>
+      <p class="eko-sub" style="margin:0 0 10px;">Ladda upp en eller flera fakturor (PDF, en PDF kan även innehålla flera fakturor) så läses beloppen in och läggs på rätt fastighet - varje faktura bekräftas i tur och ordning. Fakturor med ett fakturanummer som redan är inläst hoppas över. Inget momsavdrag: debiteras moms tas beloppet inklusive moms, annars fakturabeloppet som det står.</p>
       <div class="contract-upload-row">
-        <button type="button" id="markFakturaUploadBtn" class="upload-btn">📎 Läs in faktura (PDF)</button>
-        <input type="file" id="markFakturaFileInput" accept="application/pdf" style="display:none;">
+        <button type="button" id="markFakturaUploadBtn" class="upload-btn">📎 Läs in fakturor (PDF, en eller flera)</button>
+        <input type="file" id="markFakturaFileInput" accept="application/pdf" multiple style="display:none;">
         <span id="markFakturaUploadStatus" class="contract-upload-status"></span>
       </div>
       <div id="markFakturaPendingBox" style="display:none; margin:10px 0; padding:10px 12px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px; display:none;">

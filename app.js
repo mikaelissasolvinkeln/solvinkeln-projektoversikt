@@ -3962,15 +3962,10 @@ document.getElementById('markFakturaUploadBtn').onclick = () => {
   document.getElementById('markFakturaFileInput').click();
 };
 document.getElementById('markFakturaFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if(!file) return;
+  const files = Array.from(e.target.files || []);
+  if(!files.length) return;
   const pid = currentEkonomiMarkProjectId;
   if(!pid) return;
-  if(file.size > CONTRACT_MAX_BYTES){
-    setMarkFakturaStatus('Filen är för stor (max 8 MB).', 'err');
-    e.target.value = '';
-    return;
-  }
   if(!(companyEkonomiData.mark[pid] || []).length){
     setMarkFakturaStatus('Lägg till minst en fastighet först.', 'err');
     e.target.value = '';
@@ -3978,36 +3973,46 @@ document.getElementById('markFakturaFileInput').addEventListener('change', async
   }
   const btn = document.getElementById('markFakturaUploadBtn');
   btn.disabled = true;
-  setMarkFakturaStatus('Läser fakturan…');
+  const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+  const known = markKnownFakturanummer(pid);
+  const seen = new Set();
+  const fresh = [];
+  let hittade = 0, dubbletter = 0;
+  const problem = [];
   try{
-    const pdfBase64 = await fileToBase64(file);
-    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
     if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
-    const { data, error } = await sb.functions.invoke('extract-mark-faktura', { body: { pdfBase64, filename: file.name } });
-    if(error) throw error;
-    const all = (data && Array.isArray(data.fakturor)) ? data.fakturor : (data && data.belopp != null ? [data] : []);
-    const valid = all.filter(f => f && f.belopp != null);
-    if(!valid.length) throw new Error('Kunde inte läsa ut någon faktura.');
-    const known = markKnownFakturanummer(pid);
-    const seenInFile = new Set();
-    const fresh = [];
-    let dubbletter = 0;
-    valid.forEach(f => {
-      const nr = normalizeFakturanummer(f.fakturanummer);
-      if(nr && (known.has(nr) || seenInFile.has(nr))){ dubbletter++; return; }
-      if(nr) seenInFile.add(nr);
-      fresh.push(f);
-    });
-    markPendingQueue = fresh.map((f, i) => ({ ...f, filnamn: file.name, queuePos: fresh.length > 1 ? i + 1 : 0, queueTotal: fresh.length }));
-    setMarkFakturaStatus(
-      valid.length + ' faktur' + (valid.length === 1 ? 'a' : 'or') + ' hittad' + (valid.length === 1 ? '' : 'e') +
+    for(let i = 0; i < files.length; i++){
+      const file = files[i];
+      setMarkFakturaStatus('Läser ' + (files.length > 1 ? 'fil ' + (i + 1) + ' av ' + files.length + ': ' : '') + file.name + '…');
+      if(file.size > CONTRACT_MAX_BYTES){ problem.push(file.name + ' (för stor, max 8 MB)'); continue; }
+      try{
+        const pdfBase64 = await fileToBase64(file);
+        const { data, error } = await sb.functions.invoke('extract-mark-faktura', { body: { pdfBase64, filename: file.name } });
+        if(error) throw error;
+        const all = (data && Array.isArray(data.fakturor)) ? data.fakturor : (data && data.belopp != null ? [data] : []);
+        const valid = all.filter(f => f && f.belopp != null);
+        if(!valid.length){ problem.push(file.name + ' (ingen faktura hittad)'); continue; }
+        valid.forEach(f => {
+          hittade++;
+          const nr = normalizeFakturanummer(f.fakturanummer);
+          if(nr && (known.has(nr) || seen.has(nr))){ dubbletter++; return; }
+          if(nr) seen.add(nr);
+          fresh.push({ ...f, filnamn: file.name });
+        });
+      }catch(err){
+        problem.push(file.name + ' (' + (err.message || err) + ')');
+      }
+    }
+    markPendingQueue = fresh.map((f, i) => ({ ...f, queuePos: fresh.length > 1 ? i + 1 : 0, queueTotal: fresh.length }));
+    let msg = hittade + ' faktur' + (hittade === 1 ? 'a' : 'or') + ' hittad' + (hittade === 1 ? '' : 'e') +
+      (files.length > 1 ? ' i ' + files.length + ' filer' : '') +
       (dubbletter ? ', ' + dubbletter + ' redan inläst' + (dubbletter === 1 ? '' : 'a') + ' (hoppas över)' : '') +
-      (fresh.length ? ' - bekräfta nedan.' : '.'),
-      fresh.length ? '' : 'err'
-    );
+      (fresh.length ? ' - bekräfta nedan.' : '.');
+    if(problem.length) msg += ' Kunde inte läsa: ' + problem.join('; ');
+    setMarkFakturaStatus(msg, fresh.length ? '' : 'err');
     showMarkFakturaPending();
   }catch(err){
-    setMarkFakturaStatus('Kunde inte läsa fakturan: ' + (err.message || err), 'err');
+    setMarkFakturaStatus('Kunde inte läsa fakturorna: ' + (err.message || err), 'err');
   }finally{
     btn.disabled = false;
     e.target.value = '';
