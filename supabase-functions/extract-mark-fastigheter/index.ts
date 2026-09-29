@@ -24,8 +24,10 @@ const TOOL = {
   description:
     'Fastigheterna ur en Excel-lista för ett markförvärv - en rad per fastighet. Kolumnrubrikerna ' +
     'varierar: förvärvspriset kan heta t.ex. "Anskaffningsbelopp", "Förvärvspris", "Köpeskilling" eller ' +
-    '"Pris"; vattenanslutningen "Vattenanslutning", "VA", "VA-anslutning" eller "Anslutningsavgift"; ' +
-    'gatukostnaden "Gatukostnad" eller "Gatukostnadsersättning". Fastighetsbeteckningen är namnet på ' +
+    '"Pris"; ett eventuellt aktieköp (marken köps ibland uppdelat i köp av fastighet och köp av aktier) ' +
+    '"Aktieköp", "Aktier" eller "Köpeskilling aktier"; vattenanslutningen "Vattenanslutning", "VA", ' +
+    '"VA-anslutning" eller "Anslutningsavgift"; gatukostnaden "Gatukostnad" eller ' +
+    '"Gatukostnadsersättning". Fastighetsbeteckningen är namnet på ' +
     'fastigheten (t.ex. "Gladö 76:5"). Hoppa över rubrikrader och summeringsrader (t.ex. "Summa", ' +
     '"Totalt"). Belopp i kr utan tusentalsavgränsare. Gissa aldrig ett belopp - lämna fältet tomt istället.',
   input_schema: {
@@ -38,7 +40,8 @@ const TOOL = {
           properties: {
             fastighetsbeteckning: { type: 'string' },
             ort: { type: 'string' },
-            forvarvspris: { type: 'number', description: 'Anskaffningsbelopp/förvärvspris i kr' },
+            forvarvspris: { type: 'number', description: 'Anskaffningsbelopp/förvärvspris för själva fastigheten i kr' },
+            aktiekop: { type: 'number', description: 'Belopp för aktieköp i kr, om förvärvet delvis sker via aktier' },
             vattenanslutning: { type: 'number', description: 'Vattenanslutningsbelopp i kr' },
             gatukostnad: { type: 'number', description: 'Gatukostnad i kr' },
           },
