@@ -1486,11 +1486,10 @@ function renderEkonomiProjektMark(){
   empty.style.display = fastigheter.length ? 'none' : 'block';
   fastigheter.forEach(fast => {
     const row = document.createElement('tr');
-    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
 
     const textFields = [
-      { key: 'fastighetsbeteckning', cell: 0 },
-      { key: 'ort', cell: 1 }
+      { key: 'fastighetsbeteckning', cell: 0 }
     ];
     textFields.forEach(tf => {
       const input = document.createElement('input');
@@ -1503,10 +1502,10 @@ function renderEkonomiProjektMark(){
     });
 
     const numberFields = [
-      { key: 'forvarvspris', cell: 2 },
-      { key: 'aktiekop', cell: 3 },
-      { key: 'vattenanslutning', cell: 5 },
-      { key: 'gatukostnad', cell: 6 }
+      { key: 'forvarvspris', cell: 1 },
+      { key: 'aktiekop', cell: 2 },
+      { key: 'vattenanslutning', cell: 4 },
+      { key: 'gatukostnad', cell: 5 }
     ];
     numberFields.forEach(nf => {
       likviditetsbudgetEditableCell(row.children[nf.cell], fast[nf.key] || null, async (val) => {
@@ -1514,8 +1513,8 @@ function renderEkonomiProjektMark(){
         renderEkonomiProjektMark();
       });
     });
-    row.children[4].textContent = formatKrFull((fast.forvarvspris || 0) + (fast.aktiekop || 0));
-    row.children[4].style.fontWeight = '600';
+    row.children[3].textContent = formatKrFull((fast.forvarvspris || 0) + (fast.aktiekop || 0));
+    row.children[3].style.fontWeight = '600';
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -1523,8 +1522,8 @@ function renderEkonomiProjektMark(){
     removeBtn.title = 'Ta bort fastighet';
     removeBtn.textContent = '✕';
     removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
-    row.children[7].appendChild(removeBtn);
-    row.children[7].className = 'row-actions';
+    row.children[6].appendChild(removeBtn);
+    row.children[6].className = 'row-actions';
 
     tbody.appendChild(row);
   });
@@ -1539,7 +1538,7 @@ function renderEkonomiProjektMark(){
       acc.gatukostnad += f.gatukostnad || 0;
       return acc;
     }, { forvarvspris: 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0 });
-    foot.innerHTML = '<tr class="eko-row-resultat"><td>Summa</td><td></td>' +
+    foot.innerHTML = '<tr class="eko-row-resultat"><td>Summa</td>' +
       '<td>' + formatKrFull(sum.forvarvspris) + '</td>' +
       '<td>' + formatKrFull(sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.forvarvspris + sum.aktiekop) + '</td>' +
