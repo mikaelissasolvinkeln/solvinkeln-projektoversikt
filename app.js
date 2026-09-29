@@ -2111,7 +2111,10 @@ async function renderLikviditetsbudget(){
 
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
-  table.style.width = '100%';
+  // Sidans globala table-regel (width:100%, table-layout:fixed) skulle klämma ihop
+  // 20+ månadskolumner på en skärmbredd - låt tabellen växa med innehållet så
+  // .table-scroll får rulla i sidled istället.
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
   headRow.innerHTML = '<th style="text-align:left; min-width:170px;">Post</th><th style="min-width:150px;">Kategori</th>' +
@@ -2255,7 +2258,7 @@ document.getElementById('likviditetsbudgetFileInput').addEventListener('change',
   try{
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
-    const gridText = xlsxWorkbookToGridText(wb);
+    const gridText = xlsxWorkbookToLabeledGridText(wb);
     const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
     if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
     const { data, error } = await sb.functions.invoke('extract-likviditetsbudget', { body: { gridText, filename: file.name } });
@@ -3109,6 +3112,29 @@ function xlsxWorkbookToGridText(wb){
       if(!hasContent) return;
       const cells = row.map(c => c === undefined || c === null ? '' : String(c)).join('\t');
       parts.push((i + 1) + ' | ' + cells);
+    });
+  });
+  return parts.join('\n');
+}
+
+// Som xlsxWorkbookToGridText, men varje ifylld cell märks med sin kolumnbokstav
+// (A=..., H=...) istället för att tomma celler markeras med tabbar - modellen
+// ska aldrig behöva räkna tomma celler för att veta vilken månadskolumn ett
+// belopp står i (glesa rader med många tomma celler i rad blev annars förskjutna).
+function xlsxWorkbookToLabeledGridText(wb){
+  const parts = [];
+  wb.SheetNames.forEach(name => {
+    const sheet = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+    parts.push('=== Blad: ' + name + ' ===');
+    rows.forEach((row, i) => {
+      const cells = [];
+      row.forEach((c, ci) => {
+        if(c === undefined || c === null || String(c).trim() === '') return;
+        cells.push(XLSX.utils.encode_col(ci) + '=' + String(c));
+      });
+      if(!cells.length) return;
+      parts.push((i + 1) + ' | ' + cells.join('  '));
     });
   });
   return parts.join('\n');
