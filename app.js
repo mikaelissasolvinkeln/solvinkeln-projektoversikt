@@ -2014,9 +2014,10 @@ async function saveEkonomiLikviditetIngaende(value){
 function likviditetsbudgetMonths(rec){
   const set = new Set();
   (rec.rows || []).forEach(r => Object.keys(r.budget || {}).forEach(m => set.add(m)));
-  return [...set].sort();
+  return [...set].sort((a, b) => a === 'IB' ? -1 : b === 'IB' ? 1 : a.localeCompare(b));
 }
 function likviditetsbudgetMonthLabel(m){
+  if(m === 'IB') return 'IB (före period)';
   const parts = m.split('-');
   const y = parseInt(parts[0], 10);
   const mo = parseInt(parts[1], 10);
@@ -2057,9 +2058,9 @@ async function likviditetsbudgetUtfallMap(pid, rows, months){
 
   rows.forEach(row => {
     months.forEach(m => {
-      if(likviditetsbudgetIsInsatsRow(row)){
+      if(m !== 'IB' && likviditetsbudgetIsInsatsRow(row)){
         map[row.id][m] = insatsByMonth[m] || 0;
-      } else if(row.kategori){
+      } else if(m !== 'IB' && row.kategori){
         map[row.id][m] = ledgerByKategoriMonth[row.kategori + '|' + m] || 0;
       } else {
         map[row.id][m] = (row.manualUtfall && row.manualUtfall[m] != null) ? row.manualUtfall[m] : null;
@@ -2235,7 +2236,7 @@ function likviditetsbudgetGridToRows(data){
     namn: r.namn || '',
     typ: r.typ === 'intakt' ? 'intakt' : 'kostnad',
     kategori: null,
-    budget: (r.manader || []).reduce((acc, m) => { if(m.manad && m.belopp != null) acc[m.manad] = m.belopp; return acc; }, {}),
+    budget: (r.manader || []).reduce((acc, m) => { if(m.manad && m.belopp != null) acc[m.manad] = (acc[m.manad] || 0) + m.belopp; return acc; }, {}),
     manualUtfall: {}
   }));
 }
@@ -2258,7 +2259,7 @@ document.getElementById('likviditetsbudgetFileInput').addEventListener('change',
   try{
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
-    const gridText = xlsxWorkbookToLabeledGridText(wb);
+    const gridText = xlsxLikviditetsbudgetToText(wb);
     const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
     if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
     const { data, error } = await sb.functions.invoke('extract-likviditetsbudget', { body: { gridText, filename: file.name } });
@@ -3117,21 +3118,67 @@ function xlsxWorkbookToGridText(wb){
   return parts.join('\n');
 }
 
-// Som xlsxWorkbookToGridText, men varje ifylld cell märks med sin kolumnbokstav
-// (A=..., H=...) istället för att tomma celler markeras med tabbar - modellen
-// ska aldrig behöva räkna tomma celler för att veta vilken månadskolumn ett
-// belopp står i (glesa rader med många tomma celler i rad blev annars förskjutna).
-function xlsxWorkbookToLabeledGridText(wb){
+const LIKVIDITETSBUDGET_MANADER = ['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov','dec'];
+function likviditetsbudgetManadIndex(v){
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if(s.length < 3 || s.length > 10) return -1;
+  return LIKVIDITETSBUDGET_MANADER.findIndex(m => s.startsWith(m));
+}
+function likviditetsbudgetArtal(v){
+  const n = typeof v === 'number' ? v : parseInt(String(v == null ? '' : v).trim(), 10);
+  return (Number.isInteger(n) && n >= 2000 && n <= 2100) ? n : null;
+}
+
+// Löser kolumn -> kalendermånad (YYYY-MM) deterministiskt här på klienten och
+// skriver nyckeln direkt framför varje belopp ("2026-04=12500000"), så att
+// modellen bara behöver kopiera den. Att låta modellen själv matcha kolumn mot
+// månadsrad gav enstaka rader förskjutna en månad. IB-kolumnen (ingående
+// balans) får nyckeln "IB" och blir en egen kolumn före första månaden, precis
+// som i mallen. Celler utanför månadskolumnerna (sidotabeller) märks med
+// kolumnbokstav så att de går att känna igen och hoppa över.
+function xlsxLikviditetsbudgetToText(wb){
   const parts = [];
   wb.SheetNames.forEach(name => {
     const sheet = wb.Sheets[name];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
     parts.push('=== Blad: ' + name + ' ===');
+
+    let monthRowIdx = -1, best = 0;
+    rows.forEach((row, i) => {
+      const n = row.filter(c => likviditetsbudgetManadIndex(c) >= 0).length;
+      if(n > best){ best = n; monthRowIdx = i; }
+    });
+    const colKey = {};
+    let yearRowIdx = -1;
+    if(monthRowIdx >= 0 && best >= 6){
+      const monthRow = rows[monthRowIdx];
+      for(let r = monthRowIdx - 1; r >= 0 && r >= monthRowIdx - 3; r--){
+        if(rows[r].some(c => likviditetsbudgetArtal(c) != null)){ yearRowIdx = r; break; }
+      }
+      const yearRow = yearRowIdx >= 0 ? rows[yearRowIdx] : null;
+      const firstYear = yearRow ? yearRow.map(likviditetsbudgetArtal).find(y => y != null) : null;
+      let year = null, prevIdx = -1;
+      monthRow.forEach((c, ci) => {
+        const y = yearRow ? likviditetsbudgetArtal(yearRow[ci]) : null;
+        const mi = likviditetsbudgetManadIndex(c);
+        if(mi < 0){
+          if(String(c).trim().toUpperCase() === 'IB') colKey[ci] = 'IB';
+          return;
+        }
+        if(y != null) year = y;
+        else if(year == null) year = firstYear != null ? (mi > 6 ? firstYear - 1 : firstYear) : new Date().getFullYear();
+        else if(prevIdx >= 0 && mi < prevIdx) year += 1;
+        prevIdx = mi;
+        colKey[ci] = year + '-' + String(mi + 1).padStart(2, '0');
+      });
+    }
+
     rows.forEach((row, i) => {
       const cells = [];
       row.forEach((c, ci) => {
         if(c === undefined || c === null || String(c).trim() === '') return;
-        cells.push(XLSX.utils.encode_col(ci) + '=' + String(c));
+        const key = colKey[ci];
+        cells.push((key && i !== yearRowIdx ? key : XLSX.utils.encode_col(ci)) + '=' + String(c));
       });
       if(!cells.length) return;
       parts.push((i + 1) + ' | ' + cells.join('  '));
