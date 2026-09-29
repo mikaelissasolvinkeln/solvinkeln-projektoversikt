@@ -1465,6 +1465,7 @@ function openEkonomiProjektMark(project){
   setKopebrevUploadStatus('', '');
   setMarkExcelStatus('', '');
   setMarkFakturaStatus('', '');
+  markPendingQueue = [];
   markPendingFaktura = null;
   document.getElementById('markFakturaPendingBox').style.display = 'none';
   renderEkonomiProjektMark();
@@ -3872,10 +3873,12 @@ document.getElementById('markExcelFileInput').addEventListener('change', async (
   }
 });
 
-// Faktura (gatukostnad/vattenanslutning): läses in, visas för bekräftelse med
-// vald fastighet (förifylld om beteckningen på fakturan matchar) och läggs
-// sedan både på fastighetens belopp och i dess fakturalista så att den går att
-// spåra och ta bort igen.
+// Fakturor (gatukostnad/vattenanslutning): en PDF kan innehålla flera fakturor.
+// Varje faktura visas i tur och ordning för bekräftelse med vald fastighet
+// (förifylld om beteckningen på fakturan matchar) och läggs sedan både på
+// fastighetens belopp och i dess fakturalista så att den går att spåra och ta
+// bort igen. Fakturor vars fakturanummer redan finns i projektet hoppas över.
+let markPendingQueue = [];
 let markPendingFaktura = null;
 function setMarkFakturaStatus(msg, kind){
   const el = document.getElementById('markFakturaUploadStatus');
@@ -3885,10 +3888,24 @@ function setMarkFakturaStatus(msg, kind){
 function normalizeBeteckning(s){
   return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
-function showMarkFakturaPending(data){
+function normalizeFakturanummer(s){
+  return String(s || '').toLowerCase().replace(/\s+/g, '').trim();
+}
+function markKnownFakturanummer(pid){
+  const set = new Set();
+  (companyEkonomiData.mark[pid] || []).forEach(f => (f.fakturor || []).forEach(fk => {
+    const n = normalizeFakturanummer(fk.fakturanummer);
+    if(n) set.add(n);
+  }));
+  return set;
+}
+function showMarkFakturaPending(){
   const pid = currentEkonomiMarkProjectId;
   const fastigheter = companyEkonomiData.mark[pid] || [];
-  markPendingFaktura = data;
+  const box = document.getElementById('markFakturaPendingBox');
+  const data = markPendingQueue.shift();
+  markPendingFaktura = data || null;
+  if(!data){ box.style.display = 'none'; return; }
   const sel = document.getElementById('markFakturaPendingSelect');
   sel.innerHTML = fastigheter.map(f => '<option value="' + escapeHtml(f.id) + '">' + escapeHtml(f.fastighetsbeteckning || 'Namnlös fastighet') + '</option>').join('');
   const wanted = normalizeBeteckning(data.fastighetsbeteckning);
@@ -3896,15 +3913,18 @@ function showMarkFakturaPending(data){
   if(match) sel.value = match.id;
   document.getElementById('markFakturaPendingTyp').value = data.typ === 'vattenanslutning' ? 'vattenanslutning' : 'gatukostnad';
   document.getElementById('markFakturaPendingText').textContent =
+    (data.queuePos ? data.queuePos + ' av ' + data.queueTotal + ': ' : '') +
     formatKrFull(data.belopp || 0) + (data.momsDebiterad === false ? ' (utan moms)' : ' inkl. moms') +
+    (data.fakturanummer ? ' · faktura ' + data.fakturanummer : '') +
+    (data.fakturadatum ? ' · ' + data.fakturadatum : '') +
     (data.leverantor ? ' · ' + data.leverantor : '') +
     (data.fastighetsbeteckning ? ' · fastighet enligt fakturan: ' + data.fastighetsbeteckning : ' · ingen fastighet angiven på fakturan') +
     (match ? '' : ' - välj fastighet:');
-  document.getElementById('markFakturaPendingBox').style.display = 'block';
+  document.getElementById('markFakturaPendingCancelBtn').textContent = markPendingQueue.length ? 'Hoppa över' : 'Avbryt';
+  box.style.display = 'block';
 }
 document.getElementById('markFakturaPendingCancelBtn').onclick = () => {
-  markPendingFaktura = null;
-  document.getElementById('markFakturaPendingBox').style.display = 'none';
+  showMarkFakturaPending();
 };
 document.getElementById('markFakturaPendingAddBtn').onclick = async () => {
   const data = markPendingFaktura;
@@ -3913,6 +3933,12 @@ document.getElementById('markFakturaPendingAddBtn').onclick = async () => {
   const fastigheter = companyEkonomiData.mark[pid] || [];
   const fast = fastigheter.find(f => f.id === document.getElementById('markFakturaPendingSelect').value);
   if(!fast){ setMarkFakturaStatus('Välj en fastighet först.', 'err'); return; }
+  const nr = normalizeFakturanummer(data.fakturanummer);
+  if(nr && markKnownFakturanummer(pid).has(nr)){
+    setMarkFakturaStatus('Faktura ' + data.fakturanummer + ' finns redan - hoppade över.', 'err');
+    showMarkFakturaPending();
+    return;
+  }
   const typ = document.getElementById('markFakturaPendingTyp').value;
   if(!Array.isArray(fast.fakturor)) fast.fakturor = [];
   fast.fakturor.push({
@@ -3927,11 +3953,10 @@ document.getElementById('markFakturaPendingAddBtn').onclick = async () => {
     uppladdadAt: new Date().toISOString()
   });
   fast[typ] = (fast[typ] || 0) + (data.belopp || 0);
-  markPendingFaktura = null;
-  document.getElementById('markFakturaPendingBox').style.display = 'none';
   await persistEkonomiMark();
-  setMarkFakturaStatus('Fakturan tillagd på ' + (fast.fastighetsbeteckning || 'fastigheten') + '.', 'ok');
+  setMarkFakturaStatus('Faktura' + (data.fakturanummer ? ' ' + data.fakturanummer : '') + ' tillagd på ' + (fast.fastighetsbeteckning || 'fastigheten') + '.', 'ok');
   renderEkonomiProjektMark();
+  showMarkFakturaPending();
 };
 document.getElementById('markFakturaUploadBtn').onclick = () => {
   document.getElementById('markFakturaFileInput').click();
@@ -3960,9 +3985,27 @@ document.getElementById('markFakturaFileInput').addEventListener('change', async
     if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
     const { data, error } = await sb.functions.invoke('extract-mark-faktura', { body: { pdfBase64, filename: file.name } });
     if(error) throw error;
-    if(!data || data.belopp == null) throw new Error('Kunde inte läsa ut något belopp.');
-    setMarkFakturaStatus('');
-    showMarkFakturaPending({ ...data, filnamn: file.name });
+    const all = (data && Array.isArray(data.fakturor)) ? data.fakturor : (data && data.belopp != null ? [data] : []);
+    const valid = all.filter(f => f && f.belopp != null);
+    if(!valid.length) throw new Error('Kunde inte läsa ut någon faktura.');
+    const known = markKnownFakturanummer(pid);
+    const seenInFile = new Set();
+    const fresh = [];
+    let dubbletter = 0;
+    valid.forEach(f => {
+      const nr = normalizeFakturanummer(f.fakturanummer);
+      if(nr && (known.has(nr) || seenInFile.has(nr))){ dubbletter++; return; }
+      if(nr) seenInFile.add(nr);
+      fresh.push(f);
+    });
+    markPendingQueue = fresh.map((f, i) => ({ ...f, filnamn: file.name, queuePos: fresh.length > 1 ? i + 1 : 0, queueTotal: fresh.length }));
+    setMarkFakturaStatus(
+      valid.length + ' faktur' + (valid.length === 1 ? 'a' : 'or') + ' hittad' + (valid.length === 1 ? '' : 'e') +
+      (dubbletter ? ', ' + dubbletter + ' redan inläst' + (dubbletter === 1 ? '' : 'a') + ' (hoppas över)' : '') +
+      (fresh.length ? ' - bekräfta nedan.' : '.'),
+      fresh.length ? '' : 'err'
+    );
+    showMarkFakturaPending();
   }catch(err){
     setMarkFakturaStatus('Kunde inte läsa fakturan: ' + (err.message || err), 'err');
   }finally{
