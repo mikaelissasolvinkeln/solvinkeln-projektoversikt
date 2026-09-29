@@ -2706,12 +2706,14 @@ function buildNyaProjektBostaderCard(candidate){
   card.className = 'home-card';
   const title = document.createElement('div');
   title.className = 'home-card-title';
-  title.style.cursor = 'pointer';
   title.textContent = nyaProjektFormatValue('int', antal);
-  title.onclick = () => openNyaProjektBostaderModal(candidate.id);
+  // Hela rutan är klickbar (inte bara siffran) så man inte behöver pricka rätt.
+  card.style.cursor = 'pointer';
+  card.title = 'Öppna listan över bostäder';
+  card.onclick = () => openNyaProjektBostaderModal(candidate.id);
   const sub = document.createElement('div');
   sub.className = 'home-card-sub';
-  sub.textContent = 'Bostäder (klicka för lista)';
+  sub.textContent = 'Bostäder (klicka för lista) →';
   card.appendChild(title);
   card.appendChild(sub);
   return card;
