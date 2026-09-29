@@ -1427,8 +1427,9 @@ function renderEkonomiMarkList(){
   let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0;
   projects.forEach(p => {
     const fastigheter = companyEkonomiData.mark[p.id] || [];
+    // Förvärv = fastighetsköp + ev. aktieköp (marken köps ibland uppdelat i båda)
     const sum = fastigheter.reduce((acc, f) => {
-      acc.forvarvspris += f.forvarvspris || 0;
+      acc.forvarvspris += (f.forvarvspris || 0) + (f.aktiekop || 0);
       acc.vattenanslutning += f.vattenanslutning || 0;
       acc.gatukostnad += f.gatukostnad || 0;
       return acc;
@@ -1484,7 +1485,7 @@ function renderEkonomiProjektMark(){
   empty.style.display = fastigheter.length ? 'none' : 'block';
   fastigheter.forEach(fast => {
     const row = document.createElement('tr');
-    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td>';
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
 
     const textFields = [
       { key: 'fastighetsbeteckning', cell: 0 },
@@ -1502,8 +1503,9 @@ function renderEkonomiProjektMark(){
 
     const numberFields = [
       { key: 'forvarvspris', cell: 2 },
-      { key: 'vattenanslutning', cell: 3 },
-      { key: 'gatukostnad', cell: 4 }
+      { key: 'aktiekop', cell: 3 },
+      { key: 'vattenanslutning', cell: 5 },
+      { key: 'gatukostnad', cell: 6 }
     ];
     numberFields.forEach(nf => {
       likviditetsbudgetEditableCell(row.children[nf.cell], fast[nf.key] || null, async (val) => {
@@ -1511,6 +1513,8 @@ function renderEkonomiProjektMark(){
         renderEkonomiProjektMark();
       });
     });
+    row.children[4].textContent = formatKrFull((fast.forvarvspris || 0) + (fast.aktiekop || 0));
+    row.children[4].style.fontWeight = '600';
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -1518,8 +1522,8 @@ function renderEkonomiProjektMark(){
     removeBtn.title = 'Ta bort fastighet';
     removeBtn.textContent = '✕';
     removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
-    row.children[5].appendChild(removeBtn);
-    row.children[5].className = 'row-actions';
+    row.children[7].appendChild(removeBtn);
+    row.children[7].className = 'row-actions';
 
     tbody.appendChild(row);
   });
@@ -1529,12 +1533,15 @@ function renderEkonomiProjektMark(){
   if(fastigheter.length){
     const sum = fastigheter.reduce((acc, f) => {
       acc.forvarvspris += f.forvarvspris || 0;
+      acc.aktiekop += f.aktiekop || 0;
       acc.vattenanslutning += f.vattenanslutning || 0;
       acc.gatukostnad += f.gatukostnad || 0;
       return acc;
-    }, { forvarvspris: 0, vattenanslutning: 0, gatukostnad: 0 });
+    }, { forvarvspris: 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0 });
     foot.innerHTML = '<tr class="eko-row-resultat"><td>Summa</td><td></td>' +
       '<td>' + formatKrFull(sum.forvarvspris) + '</td>' +
+      '<td>' + formatKrFull(sum.aktiekop) + '</td>' +
+      '<td>' + formatKrFull(sum.forvarvspris + sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.vattenanslutning) + '</td>' +
       '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td></tr>';
   }
@@ -1591,7 +1598,7 @@ async function addEkonomiMarkFastighet(){
   if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
   companyEkonomiData.mark[pid].push({
     id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
-    fastighetsbeteckning: '', ort: '', forvarvspris: 0, vattenanslutning: 0, gatukostnad: 0
+    fastighetsbeteckning: '', ort: '', forvarvspris: 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0
   });
   try{
     await persistEkonomiMark();
@@ -3745,6 +3752,7 @@ document.getElementById('kopebrevFileInput').addEventListener('change', async (e
       fastighetsbeteckning: data.fastighetsbeteckning || '',
       ort: data.ort || '',
       forvarvspris: data.forvarvspris || 0,
+      aktiekop: data.aktiekop || 0,
       vattenanslutning: data.vattenanslutning || 0,
       gatukostnad: data.gatukostnad || 0
     });
@@ -3792,6 +3800,7 @@ document.getElementById('markExcelFileInput').addEventListener('change', async (
         fastighetsbeteckning: f.fastighetsbeteckning || '',
         ort: f.ort || '',
         forvarvspris: f.forvarvspris || 0,
+        aktiekop: f.aktiekop || 0,
         vattenanslutning: f.vattenanslutning || 0,
         gatukostnad: f.gatukostnad || 0,
         fakturor: []
