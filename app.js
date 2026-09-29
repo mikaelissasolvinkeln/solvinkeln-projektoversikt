@@ -2956,11 +2956,35 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     }
 
     const delTd = document.createElement('td');
+    delTd.style.whiteSpace = 'nowrap';
+    delTd.style.textAlign = 'right';
+    // Flytta posten upp/ner i listan - ordningen sparas med kalkylen.
+    const idxNow = rows.indexOf(row);
+    const moveBtn = (label, title, delta, disabled) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.title = title;
+      btn.disabled = disabled;
+      btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 4px;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+      nyaProjektActionButton(btn, async () => {
+        const i = rows.indexOf(row);
+        const j = i + delta;
+        if(i < 0 || j < 0 || j >= rows.length) return;
+        rows.splice(i, 1);
+        rows.splice(j, 0, row);
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      });
+      return btn;
+    };
+    delTd.appendChild(moveBtn('↑', 'Flytta upp', -1, idxNow <= 0));
+    delTd.appendChild(moveBtn('↓', 'Flytta ner', 1, idxNow >= rows.length - 1));
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.textContent = '✕';
     delBtn.title = 'Ta bort';
-    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 4px; margin-left:6px;';
     nyaProjektActionButton(delBtn, async () => {
       const idx = rows.indexOf(row);
       if(idx > -1) rows.splice(idx, 1);
@@ -3052,6 +3076,29 @@ function renderNyaProjektDetail(){
         renderNyaProjektDetail();
         renderNyaProjektList();
       });
+      // Flytta hela gruppen upp/ner bland kostnadsgrupperna.
+      const gIdx = data.kostnadsgrupper.indexOf(group);
+      const moveGroupBtn = (label, title, delta, disabled) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.title = title;
+        btn.disabled = disabled;
+        btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+        nyaProjektActionButton(btn, async () => {
+          const list = data.kostnadsgrupper;
+          const i = list.indexOf(group);
+          const j = i + delta;
+          if(i < 0 || j < 0 || j >= list.length) return;
+          list.splice(i, 1);
+          list.splice(j, 0, group);
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          renderNyaProjektDetail();
+        });
+        return btn;
+      };
+      header.appendChild(moveGroupBtn('↑', 'Flytta gruppen upp', -1, gIdx <= 0));
+      header.appendChild(moveGroupBtn('↓', 'Flytta gruppen ner', 1, gIdx >= data.kostnadsgrupper.length - 1));
       header.appendChild(delGroupBtn);
       room.appendChild(header);
 
