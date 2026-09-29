@@ -3252,9 +3252,7 @@ document.getElementById('nyaProjektBostaderExcelInput').addEventListener('change
       return;
     }
     candidate.data.bostader = rows;
-    candidate.data.antalBostader = rows.length;
-    const kvmRows = rows.filter(r => r.kvm != null);
-    if(kvmRows.length) candidate.data.boaTotal = kvmRows.reduce((s, r) => s + r.kvm, 0);
+    nyaProjektSyncBostader(candidate.data);
     await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
     renderNyaProjektBostaderModal();
     renderNyaProjektList();
@@ -3267,6 +3265,25 @@ document.getElementById('nyaProjektBostaderExcelInput').addEventListener('change
   }
 });
 
+// Summan av bostadslistan är källan till nyckeltalet "BOA totalt" och till
+// intäktsraden "Insatser": skrivs över varje gång en bostad ändras, läggs till
+// eller tas bort, så att kalkylen alltid följer listan.
+function nyaProjektSyncBostader(data){
+  const rows = data.bostader || [];
+  const kvmRows = rows.filter(r => r.kvm != null);
+  const prisRows = rows.filter(r => r.pris != null);
+  if(rows.length) data.antalBostader = rows.length;
+  if(kvmRows.length) data.boaTotal = Math.round(kvmRows.reduce((s, r) => s + r.kvm, 0) * 100) / 100;
+  if(prisRows.length){
+    if(!Array.isArray(data.intakter)) data.intakter = [];
+    let row = data.intakter.find(r => /insats/i.test(r.namn || ''));
+    if(!row){
+      row = { id: uid(), namn: 'Insatser', belopp: null };
+      data.intakter.unshift(row);
+    }
+    row.belopp = prisRows.reduce((s, r) => s + r.pris, 0);
+  }
+}
 function renderNyaProjektBostaderModal(){
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
   if(!candidate) return;
@@ -3279,7 +3296,7 @@ function renderNyaProjektBostaderModal(){
     (totalKvm ? ' · ' + formatKrPerKvm(totalPris, totalKvm) : '');
   const foot = document.getElementById('nyaProjektBostaderFoot');
   foot.innerHTML = rows.length
-    ? '<tr class="eko-row-resultat"><td style="text-align:left;">Summa</td><td>' + totalKvm.toLocaleString('sv-SE') + '</td><td>' + formatKrFull(totalPris) + '</td><td></td></tr>'
+    ? '<tr class="eko-row-resultat"><td style="text-align:left;">Summa <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">→ BOA totalt och Insatser i kalkylen</span></td><td>' + totalKvm.toLocaleString('sv-SE') + ' m²</td><td>' + formatKrFull(totalPris) + '</td><td></td></tr>'
     : '';
 
   const tbody = document.getElementById('nyaProjektBostaderBody');
@@ -3309,6 +3326,7 @@ function renderNyaProjektBostaderModal(){
     kvmInput.addEventListener('change', async () => {
       const raw = kvmInput.value.trim();
       row.kvm = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSyncBostader(candidate.data);
       await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
       renderNyaProjektBostaderModal();
     });
@@ -3323,6 +3341,7 @@ function renderNyaProjektBostaderModal(){
     prisInput.addEventListener('change', async () => {
       const raw = prisInput.value.trim();
       row.pris = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSyncBostader(candidate.data);
       await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
       renderNyaProjektBostaderModal();
     });
@@ -3335,6 +3354,7 @@ function renderNyaProjektBostaderModal(){
     delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
     delBtn.onclick = async () => {
       candidate.data.bostader = candidate.data.bostader.filter(b => b.id !== row.id);
+      nyaProjektSyncBostader(candidate.data);
       await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
       renderNyaProjektBostaderModal();
       renderNyaProjektDetail();
@@ -3350,6 +3370,7 @@ document.getElementById('nyaProjektAddBostadBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
   if(!candidate) return;
   candidate.data.bostader.push({ id: uid(), namn: '', kvm: null, pris: null });
+  nyaProjektSyncBostader(candidate.data);
   await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
   renderNyaProjektBostaderModal();
   renderNyaProjektDetail();
