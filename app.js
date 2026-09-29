@@ -27,7 +27,8 @@ const EKONOMI_KEYS = {
   likviditet: 'ekonomi-likviditet',
   lan: 'ekonomi-lan',
   brItems: 'ekonomi-br-items',
-  mark: 'ekonomi-mark'
+  mark: 'ekonomi-mark',
+  likviditetsbudget: 'ekonomi-likviditetsbudget'
 };
 // Fast lista kostnadsposter i en projektbudget - Totalkostnad räknas alltid ut,
 // tilldelas aldrig en reskontrarad.
@@ -145,7 +146,7 @@ let liggarenRecurringTemplates = [];
 let myPersonId = null;
 let myEmail = '';
 let isEkonomiAdmin = false;
-let companyEkonomiData = { meta: {}, budgetDetalj: {}, reskontra: {}, likviditet: {}, lan: {}, brItems: {}, mark: {} };
+let companyEkonomiData = { meta: {}, budgetDetalj: {}, reskontra: {}, likviditet: {}, lan: {}, brItems: {}, mark: {}, likviditetsbudget: {} };
 let currentEkonomiBudgetProjectId = null;
 let currentEkonomiMarkProjectId = null;
 let ekonomiBudgetAreaRevenue = { kvm: 0, intakter: 0 };
@@ -1271,14 +1272,15 @@ function renderPaminnelser(){
 // ---------- Ekonomi (företagsövergripande) ----------
 async function loadEkonomiData(){
   try{
-    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark] = await Promise.all([
+    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark, likviditetsbudget] = await Promise.all([
       DB.getPersonalData(EKONOMI_KEYS.meta),
       DB.getPersonalData(EKONOMI_KEYS.budgetDetalj),
       DB.getPersonalData(EKONOMI_KEYS.reskontra),
       DB.getPersonalData(EKONOMI_KEYS.likviditet),
       DB.getPersonalData(EKONOMI_KEYS.lan),
       DB.getPersonalData(EKONOMI_KEYS.brItems),
-      DB.getPersonalData(EKONOMI_KEYS.mark)
+      DB.getPersonalData(EKONOMI_KEYS.mark),
+      DB.getPersonalData(EKONOMI_KEYS.likviditetsbudget)
     ]);
     companyEkonomiData = {
       meta: (meta && JSON.parse(meta.value)) || {},
@@ -1287,7 +1289,8 @@ async function loadEkonomiData(){
       likviditet: (likviditet && JSON.parse(likviditet.value)) || {},
       lan: (lan && JSON.parse(lan.value)) || {},
       brItems: (brItems && JSON.parse(brItems.value)) || {},
-      mark: (mark && JSON.parse(mark.value)) || {}
+      mark: (mark && JSON.parse(mark.value)) || {},
+      likviditetsbudget: (likviditetsbudget && JSON.parse(likviditetsbudget.value)) || {}
     };
   }catch(e){
     showDebugError('Kunde inte läsa ekonomidata', e);
@@ -1992,6 +1995,7 @@ async function renderEkonomiProjektLikviditet(){
       '<td class="' + saldoClass + '">' + formatMSEK(r.saldo) + '</td>';
     tbody.appendChild(row);
   });
+  await renderLikviditetsbudget();
 }
 
 async function saveEkonomiLikviditetIngaende(value){
@@ -2005,6 +2009,270 @@ async function saveEkonomiLikviditetIngaende(value){
     showDebugError('Kunde inte spara', e);
   }
 }
+
+// ---------- Likviditetsbudget (hela projektets löptid, budget vs utfall per månad) ----------
+function likviditetsbudgetMonths(rec){
+  const set = new Set();
+  (rec.rows || []).forEach(r => Object.keys(r.budget || {}).forEach(m => set.add(m)));
+  return [...set].sort();
+}
+function likviditetsbudgetMonthLabel(m){
+  const parts = m.split('-');
+  const y = parseInt(parts[0], 10);
+  const mo = parseInt(parts[1], 10);
+  return MONTH_NAMES[mo - 1] + ' ' + y;
+}
+function likviditetsbudgetIsInsatsRow(row){
+  return row.typ === 'intakt' && /insats|tilltr[aä]d/i.test(row.namn || '');
+}
+async function likviditetsbudgetUtfallMap(pid, rows, months){
+  const map = {};
+  rows.forEach(r => { map[r.id] = {}; });
+
+  let apts = [];
+  if(rows.some(likviditetsbudgetIsInsatsRow)){
+    try{
+      const raw = await fetchApartmentsRaw(pid);
+      apts = raw.apartments.map(normalizeApartment);
+    }catch(e){ apts = []; }
+  }
+  const insatsByMonth = {};
+  apts.forEach(a => {
+    const dateStr = a.slutbetald && a.slutbetald.date;
+    if(!dateStr) return;
+    const key = dateStr.slice(0, 7);
+    const amount = parseKr(a.slutbetald.amount) || parseKr(a.totalpris);
+    insatsByMonth[key] = (insatsByMonth[key] || 0) + amount;
+  });
+
+  const ledger = companyEkonomiData.reskontra[pid] || [];
+  const ledgerByKategoriMonth = {};
+  ledger.forEach(line => {
+    if(!line.kategori) return;
+    const dateStr = line.forfallodatum || line.fakturadatum;
+    if(!dateStr) return;
+    const key = line.kategori + '|' + dateStr.slice(0, 7);
+    ledgerByKategoriMonth[key] = (ledgerByKategoriMonth[key] || 0) + ekonomiLedgerAmount(line);
+  });
+
+  rows.forEach(row => {
+    months.forEach(m => {
+      if(likviditetsbudgetIsInsatsRow(row)){
+        map[row.id][m] = insatsByMonth[m] || 0;
+      } else if(row.kategori){
+        map[row.id][m] = ledgerByKategoriMonth[row.kategori + '|' + m] || 0;
+      } else {
+        map[row.id][m] = (row.manualUtfall && row.manualUtfall[m] != null) ? row.manualUtfall[m] : null;
+      }
+    });
+  });
+  return map;
+}
+
+async function saveLikviditetsbudget(pid){
+  await DB.setPersonalData(EKONOMI_KEYS.likviditetsbudget, JSON.stringify(companyEkonomiData.likviditetsbudget));
+}
+
+function likviditetsbudgetEditableCell(td, value, onSave){
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.style.cursor = 'pointer';
+  span.textContent = value != null ? formatKrFull(value) : '—';
+  span.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.value = value != null ? value : '';
+    input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus(); input.select();
+    const save = async () => {
+      const raw = input.value.trim();
+      await onSave(raw === '' ? null : parseFloat(raw.replace(',', '.')));
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  td.appendChild(span);
+}
+
+async function renderLikviditetsbudget(){
+  const pid = currentEkonomiLikviditetProjectId;
+  const rec = companyEkonomiData.likviditetsbudget[pid] || { rows: [] };
+  companyEkonomiData.likviditetsbudget[pid] = rec;
+  const wrap = document.getElementById('likviditetsbudgetTableWrap');
+  if(!rec.rows.length){
+    wrap.innerHTML = '<p class="eko-sub">Ingen likviditetsbudget inläst än.</p>';
+    return;
+  }
+  const months = likviditetsbudgetMonths(rec);
+  const utfallMap = await likviditetsbudgetUtfallMap(pid, rec.rows, months);
+  if(pid !== currentEkonomiLikviditetProjectId) return;
+
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.width = '100%';
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  headRow.innerHTML = '<th style="text-align:left; min-width:170px;">Post</th><th style="min-width:150px;">Kategori</th>' +
+    months.map(m => '<th style="min-width:110px;">' + likviditetsbudgetMonthLabel(m) + '</th>').join('') + '<th></th>';
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  rec.rows.forEach(row => {
+    if(!row.budget) row.budget = {};
+    if(!row.manualUtfall) row.manualUtfall = {};
+
+    const btr = document.createElement('tr');
+    const nameTd = document.createElement('td');
+    nameTd.style.textAlign = 'left';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'editable';
+    nameSpan.style.cursor = 'pointer';
+    nameSpan.textContent = row.namn || 'Namnlös post';
+    nameSpan.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = row.namn || '';
+      input.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+      nameTd.innerHTML = '';
+      nameTd.appendChild(input);
+      input.focus(); input.select();
+      const save = async () => {
+        row.namn = input.value.trim();
+        await saveLikviditetsbudget(pid);
+        renderLikviditetsbudget();
+      };
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+    };
+    nameTd.appendChild(nameSpan);
+    btr.appendChild(nameTd);
+
+    const katTd = document.createElement('td');
+    const select = document.createElement('select');
+    select.style.cssText = 'width:100%; font-size:12.5px; border:1px solid var(--line-soft); border-radius:5px; padding:3px;';
+    select.innerHTML = '<option value="">—</option>' +
+      EKONOMI_COST_CATEGORIES.map(c => '<option value="' + escapeHtml(c) + '"' + (row.kategori === c ? ' selected' : '') + '>' + escapeHtml(c) + '</option>').join('');
+    select.onchange = async () => {
+      row.kategori = select.value || null;
+      await saveLikviditetsbudget(pid);
+      renderLikviditetsbudget();
+    };
+    katTd.appendChild(select);
+    btr.appendChild(katTd);
+
+    months.forEach(m => {
+      const td = document.createElement('td');
+      likviditetsbudgetEditableCell(td, row.budget[m], async (val) => {
+        if(val == null) delete row.budget[m]; else row.budget[m] = val;
+        await saveLikviditetsbudget(pid);
+        renderLikviditetsbudget();
+      });
+      btr.appendChild(td);
+    });
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort raden';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.onclick = async () => {
+      rec.rows = rec.rows.filter(r => r.id !== row.id);
+      await saveLikviditetsbudget(pid);
+      renderLikviditetsbudget();
+    };
+    delTd.appendChild(delBtn);
+    btr.appendChild(delTd);
+    tbody.appendChild(btr);
+
+    const utr = document.createElement('tr');
+    utr.style.color = 'var(--ink-soft)';
+    utr.style.fontSize = '12px';
+    const utLabelTd = document.createElement('td');
+    utLabelTd.style.textAlign = 'left';
+    utLabelTd.textContent = 'Utfall';
+    utr.appendChild(utLabelTd);
+    utr.appendChild(document.createElement('td'));
+    const autoSource = likviditetsbudgetIsInsatsRow(row) || !!row.kategori;
+    months.forEach(m => {
+      const td = document.createElement('td');
+      const utfallVal = (utfallMap[row.id] || {})[m];
+      if(autoSource){
+        td.textContent = utfallVal != null ? formatKrFull(utfallVal) : '—';
+      } else {
+        likviditetsbudgetEditableCell(td, utfallVal, async (val) => {
+          if(val == null) delete row.manualUtfall[m]; else row.manualUtfall[m] = val;
+          await saveLikviditetsbudget(pid);
+          renderLikviditetsbudget();
+        });
+      }
+      utr.appendChild(td);
+    });
+    utr.appendChild(document.createElement('td'));
+    tbody.appendChild(utr);
+  });
+  table.appendChild(tbody);
+  wrap.innerHTML = '';
+  wrap.appendChild(table);
+}
+
+document.getElementById('likviditetsbudgetAddRowBtn').onclick = async () => {
+  const pid = currentEkonomiLikviditetProjectId;
+  const rec = companyEkonomiData.likviditetsbudget[pid] || { rows: [] };
+  companyEkonomiData.likviditetsbudget[pid] = rec;
+  rec.rows.push({ id: uid(), namn: '', typ: 'kostnad', kategori: null, budget: {}, manualUtfall: {} });
+  await saveLikviditetsbudget(pid);
+  renderLikviditetsbudget();
+};
+
+function likviditetsbudgetGridToRows(data){
+  return (data.rader || []).map(r => ({
+    id: uid(),
+    namn: r.namn || '',
+    typ: r.typ === 'intakt' ? 'intakt' : 'kostnad',
+    kategori: null,
+    budget: (r.manader || []).reduce((acc, m) => { if(m.manad && m.belopp != null) acc[m.manad] = m.belopp; return acc; }, {}),
+    manualUtfall: {}
+  }));
+}
+
+function setLikviditetsbudgetUploadStatus(msg, kind){
+  const el = document.getElementById('likviditetsbudgetUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('likviditetsbudgetUploadBtn').onclick = () => {
+  document.getElementById('likviditetsbudgetFileInput').click();
+};
+document.getElementById('likviditetsbudgetFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiLikviditetProjectId;
+  const btn = document.getElementById('likviditetsbudgetUploadBtn');
+  btn.disabled = true;
+  setLikviditetsbudgetUploadStatus('Läser budgeten…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-likviditetsbudget', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    if(!data || !Array.isArray(data.rader) || !data.rader.length) throw new Error('Kunde inte tolka budgeten.');
+    const rows = likviditetsbudgetGridToRows(data);
+    companyEkonomiData.likviditetsbudget[pid] = { rows };
+    await saveLikviditetsbudget(pid);
+    setLikviditetsbudgetUploadStatus(rows.length + ' rader inlästa.', 'ok');
+    renderLikviditetsbudget();
+  }catch(err){
+    setLikviditetsbudgetUploadStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
 
 // Förväntad vinst Solvinkeln = förväntad entreprenadsvinst + ägarandel × förväntad vinst
 function ekonomiVinstSolvinkeln(meta){

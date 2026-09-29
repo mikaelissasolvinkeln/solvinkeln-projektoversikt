@@ -1457,6 +1457,20 @@
           <tbody id="ekonomiLikviditetPlanBody"></tbody>
         </table>
       </div>
+
+      <h3 style="margin:36px 0 10px;">Likviditetsbudget (hela projektet)</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">
+        Kostnadsrader jämförs mot kategoriserade reskontraposter (Budget-fliken) om en kategori väljs.
+        Intäktsrader som heter Insatser/Tillträde jämförs automatiskt mot lägenheternas slutbetalningar.
+        Övriga rader kan fyllas i manuellt under Utfall.
+      </p>
+      <div style="margin-bottom:12px;">
+        <button type="button" id="likviditetsbudgetUploadBtn" class="upload-btn">📄 Läs in likviditetsbudget (Excel)</button>
+        <input type="file" id="likviditetsbudgetFileInput" accept=".xlsx,.xls" style="display:none;">
+        <span id="likviditetsbudgetUploadStatus" class="contract-upload-status"></span>
+      </div>
+      <div class="table-scroll" id="likviditetsbudgetTableWrap" style="margin-bottom:10px;"></div>
+      <button id="likviditetsbudgetAddRowBtn" class="add-inline-btn">+ Lägg till rad</button>
     </div>
   </div>
 
