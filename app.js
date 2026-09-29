@@ -2762,6 +2762,95 @@ function nyaProjektActionButton(btn, action){
 
 // Bygger en rad-tabell (namn/belopp, båda redigerbara, ta bort-knapp) som
 // återanvänds för Intäkter och för posterna inuti varje kostnadsgrupp.
+// Popup för ett kostnadsbelopp: antingen skrivs totalen in direkt, eller så
+// anges belopp per bostad × antal bostäder (t.ex. VA-anslutning 50 000 kr × 22)
+// och totalen räknas ut. Uppdelningen sparas på raden (perBostad/perBostadAntal)
+// så den syns under beloppet och kan justeras nästa gång.
+let nyaProjektBeloppModalCtx = null;
+function openNyaProjektBeloppModal(candidate, row, antalBostader){
+  nyaProjektBeloppModalCtx = { candidate, row };
+  const per = document.getElementById('nyaProjektBeloppPerBostad');
+  const antal = document.getElementById('nyaProjektBeloppAntal');
+  const total = document.getElementById('nyaProjektBeloppTotal');
+  document.getElementById('nyaProjektBeloppModalTitle').textContent = row.namn || 'Belopp';
+  per.value = row.perBostad != null ? row.perBostad : '';
+  antal.value = row.perBostadAntal != null ? row.perBostadAntal : (antalBostader != null ? antalBostader : '');
+  total.value = row.belopp != null ? row.belopp : '';
+  nyaProjektBeloppModalUpdateFormel();
+  document.getElementById('nyaProjektBeloppModalOverlay').classList.add('open');
+  setTimeout(() => { per.focus(); per.select(); }, 50);
+}
+function nyaProjektBeloppModalNum(id){
+  const raw = document.getElementById(id).value.trim();
+  if(raw === '') return null;
+  const n = parseFloat(raw.replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+function nyaProjektBeloppModalUpdateFormel(){
+  const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+  const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+  const el = document.getElementById('nyaProjektBeloppFormel');
+  if(per != null && antal != null){
+    el.textContent = formatKrFull(per) + ' × ' + antal.toLocaleString('sv-SE') + ' = ' + formatKrFull(per * antal);
+  } else {
+    el.textContent = per != null ? 'Ange antal bostäder för att räkna ut totalen.' : '';
+  }
+}
+function closeNyaProjektBeloppModal(){
+  document.getElementById('nyaProjektBeloppModalOverlay').classList.remove('open');
+  nyaProjektBeloppModalCtx = null;
+}
+['nyaProjektBeloppPerBostad', 'nyaProjektBeloppAntal'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+    const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+    if(per != null && antal != null){
+      document.getElementById('nyaProjektBeloppTotal').value = Math.round(per * antal * 100) / 100;
+    }
+    nyaProjektBeloppModalUpdateFormel();
+  });
+});
+document.getElementById('nyaProjektBeloppTotal').addEventListener('input', () => {
+  // Skrivs totalen in för hand gäller den - uppdelningen per bostad släpps.
+  document.getElementById('nyaProjektBeloppPerBostad').value = '';
+  nyaProjektBeloppModalUpdateFormel();
+});
+['nyaProjektBeloppPerBostad', 'nyaProjektBeloppAntal', 'nyaProjektBeloppTotal'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('nyaProjektBeloppModalSave').click(); }
+    if(e.key === 'Escape'){ closeNyaProjektBeloppModal(); }
+  });
+});
+document.getElementById('nyaProjektBeloppModalCancel').onclick = closeNyaProjektBeloppModal;
+document.getElementById('nyaProjektBeloppModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'nyaProjektBeloppModalOverlay') closeNyaProjektBeloppModal();
+});
+document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
+  const ctx = nyaProjektBeloppModalCtx;
+  if(!ctx) return;
+  const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+  const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+  const total = nyaProjektBeloppModalNum('nyaProjektBeloppTotal');
+  const { candidate, row } = ctx;
+  if(per != null && antal != null){
+    row.perBostad = per;
+    row.perBostadAntal = antal;
+    row.belopp = Math.round(per * antal * 100) / 100;
+  } else {
+    delete row.perBostad;
+    delete row.perBostadAntal;
+    row.belopp = total;
+  }
+  closeNyaProjektBeloppModal();
+  try{
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
 function renderNyaProjektRowList(tbody, rows, candidate, opts){
   tbody.innerHTML = '';
   rows.forEach(row => {
@@ -2797,7 +2886,18 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     amountSpan.className = 'editable';
     amountSpan.style.cursor = 'pointer';
     amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+    if(opts && opts.beloppModal && row.perBostad != null && row.belopp != null){
+      // Visar hur beloppet är uppbyggt när det specificerats per bostad.
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-soft);";
+      spec.textContent = formatKrFull(row.perBostad) + ' × ' + (row.perBostadAntal != null ? row.perBostadAntal : '?');
+      amountSpan.appendChild(spec);
+    }
     amountSpan.onclick = () => {
+      if(opts && opts.beloppModal){
+        openNyaProjektBeloppModal(candidate, row, opts.antal);
+        return;
+      }
       const input = document.createElement('input');
       input.type = 'number';
       input.value = row.belopp != null ? row.belopp : '';
@@ -2960,7 +3060,7 @@ function renderNyaProjektDetail(){
       const tbody = document.createElement('tbody');
       table.appendChild(tbody);
       room.appendChild(table);
-      renderNyaProjektRowList(tbody, group.poster, candidate, { perKvm: true, boaTotal: boa });
+      renderNyaProjektRowList(tbody, group.poster, candidate, { perKvm: true, boaTotal: boa, beloppModal: true, antal });
 
       const addItemBtn = document.createElement('button');
       addItemBtn.type = 'button';
