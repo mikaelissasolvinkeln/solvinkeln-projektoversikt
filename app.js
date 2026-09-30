@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930115144';
+const APP_BUILD = '20260930122004';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2726,6 +2726,109 @@ function nyaProjektNormName(s){
 }
 // Bygger upp kalkylstrukturen från mallen och lägger in inlästa belopp där
 // namnet känns igen. Allt som inte matchar hamnar i "Oplacerade kostnader".
+// Läser in en Excel-kalkyl i en BEFINTLIG kalkyl (t.ex. en som skapats från
+// mallen): inlästa belopp läggs på de poster/intäktsrader som känns igen på
+// namnet, resten hamnar under "Oplacerade kostnader". Bostäder, antal och BOA
+// fylls bara i om de saknas.
+function nyaProjektMergeImport(data, imported){
+  imported = migrateNyaProjektData(imported || {});
+  const importedPoster = [];
+  imported.kostnadsgrupper.forEach(g => g.poster.forEach(p => importedPoster.push({ ...p, ursprungGrupp: g.grupp || '' })));
+  const allPosts = [];
+  data.kostnadsgrupper.filter(g => !g.oplacerade).forEach(g => g.poster.forEach(p => allPosts.push(p)));
+  const used = new Set();
+  const findMatch = (name) => {
+    const n = nyaProjektNormName(name);
+    if(!n) return null;
+    let hit = allPosts.find(p => !used.has(p) && nyaProjektNormName(p.namn) === n);
+    if(hit) return hit;
+    hit = allPosts.find(p => {
+      if(used.has(p)) return false;
+      const t = nyaProjektNormName(p.namn);
+      return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t));
+    });
+    return hit || null;
+  };
+  let placed = 0;
+  const unplaced = [];
+  importedPoster.forEach(ip => {
+    const hit = findMatch(ip.namn);
+    if(hit){
+      used.add(hit);
+      hit.belopp = ip.belopp != null ? ip.belopp : hit.belopp;
+      if(ip.perBostad != null){ hit.perBostad = ip.perBostad; hit.perBostadAntal = ip.perBostadAntal; }
+      placed++;
+    } else if((ip.namn || '').trim() || ip.belopp != null){
+      unplaced.push({ id: uid(), namn: ip.namn || '', belopp: ip.belopp != null ? ip.belopp : null, underkategori: null, ursprungGrupp: ip.ursprungGrupp });
+    }
+  });
+  if(unplaced.length){
+    let opl = data.kostnadsgrupper.find(g => g.oplacerade);
+    if(!opl){
+      opl = { id: uid(), grupp: 'Oplacerade kostnader', underkategorier: [], poster: [], oplacerade: true };
+      data.kostnadsgrupper.push(opl);
+    }
+    opl.poster.push(...unplaced);
+  }
+  // Intäkter: matcha på namn, annars ny rad.
+  const usedInt = new Set();
+  imported.intakter.filter(r => (r.namn || '').trim() || r.belopp != null).forEach(r => {
+    const n = nyaProjektNormName(r.namn);
+    const hit = data.intakter.find(x => !usedInt.has(x) && (nyaProjektNormName(x.namn) === n || (n.length >= 5 && (nyaProjektNormName(x.namn).includes(n) || n.includes(nyaProjektNormName(x.namn))))));
+    if(hit){ usedInt.add(hit); hit.belopp = r.belopp; }
+    else data.intakter.push({ id: uid(), namn: r.namn || '', belopp: r.belopp });
+  });
+  // Finansiering: matcha på namn, annars ny rad.
+  imported.finansiering.filter(f => (f.namn || '').trim() || f.belopp != null).forEach(f => {
+    const n = nyaProjektNormName(f.namn);
+    const hit = data.finansiering.find(x => nyaProjektNormName(x.namn) === n);
+    if(hit){ if(f.belopp != null) hit.belopp = f.belopp; if(f.period && !hit.period) hit.period = f.period; }
+    else data.finansiering.push({ id: uid(), namn: f.namn || '', belopp: f.belopp, period: f.period || '', part: '' });
+  });
+  if(!data.bostader.length && imported.bostader.length) data.bostader = imported.bostader;
+  if(data.antalBostader == null && imported.antalBostader != null) data.antalBostader = imported.antalBostader;
+  if(data.boaTotal == null && imported.boaTotal != null) data.boaTotal = imported.boaTotal;
+  nyaProjektSyncBostader(data);
+  return { placed, unplaced: unplaced.length };
+}
+document.getElementById('nyaProjektImportHereBtn').onclick = () => {
+  document.getElementById('nyaProjektImportHereInput').click();
+};
+document.getElementById('nyaProjektImportHereInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate){ e.target.value = ''; return; }
+  const btn = document.getElementById('nyaProjektImportHereBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Läser kalkylen…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kalkyl', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.projektnamn) throw new Error('Kunde inte tolka kalkylen.');
+    if(Array.isArray(data.finansieringsforslag)){
+      data.finansiering = data.finansieringsforslag;
+      delete data.finansieringsforslag;
+    }
+    const res = nyaProjektMergeImport(candidate.data, data);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektDetail();
+    renderNyaProjektList();
+    alert('Kalkylen "' + data.projektnamn + '" är inläst i ' + candidate.name + '.\n\n' + res.placed + ' poster fick belopp på befintliga poster.' + (res.unplaced ? '\n' + res.unplaced + ' poster kändes inte igen och ligger under "Oplacerade kostnader" längst ner - placera dem med "Flytta till".' : '\nAlla poster kändes igen.'));
+  }catch(err){
+    alert('Kunde inte läsa in kalkylen: ' + (err.message || err));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+    e.target.value = '';
+  }
+});
 function nyaProjektApplyMall(data, mall){
   data = migrateNyaProjektData(data || {});
   const importedPoster = [];
