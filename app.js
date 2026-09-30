@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930143123';
+const APP_BUILD = '20260930143300';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2585,6 +2585,13 @@ function migrateNyaProjektData(data){
     if(h.period === undefined) h.period = '';
   });
 
+  // Talfält som råkat sparas som text ("null", "12") normaliseras till tal eller null.
+  ['avkastningEgetKapital', 'antalBostader', 'boaTotal'].forEach(k => {
+    if(typeof data[k] === 'string'){
+      const n = parseFloat(data[k].replace(',', '.'));
+      data[k] = isNaN(n) ? null : n;
+    }
+  });
   if(typeof data.allmanInfo !== 'string') data.allmanInfo = '';
   if(typeof data.marknadslage !== 'string') data.marknadslage = '';
   if(typeof data.risker !== 'string') data.risker = '';
