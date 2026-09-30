@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930122004';
+const APP_BUILD = '20260930124108';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2684,7 +2684,10 @@ const NYA_PROJEKT_MALL_DEFAULT = {
 async function loadNyaProjektMall(){
   try{
     const rec = await DB.getPersonalData(NYA_PROJEKT_MALL_KEY);
-    nyaProjektMall = rec && rec.value && Array.isArray(rec.value.kostnadsgrupper) ? rec.value : null;
+    // personal_data lagrar värdet som JSON-text (samma som övriga ekonominycklar).
+    let v = rec ? rec.value : null;
+    if(typeof v === 'string'){ try{ v = JSON.parse(v); }catch(e){ v = null; } }
+    nyaProjektMall = v && Array.isArray(v.kostnadsgrupper) ? v : null;
   }catch(e){
     nyaProjektMall = null;
   }
@@ -2929,7 +2932,7 @@ document.getElementById('nyaProjektSaveMallBtn').onclick = async () => {
   const nPoster = mall.kostnadsgrupper.reduce((s, g) => s + g.poster.length, 0);
   if(!confirm('Spara strukturen i "' + candidate.name + '" som mall för nya kalkyler?\n\n' + mall.kostnadsgrupper.length + ' kostnadsgrupper med ' + nPoster + ' poster, ' + mall.intakter.length + ' intäktsrader och ' + mall.finansiering.length + ' finansieringsposter. Inga belopp följer med.')) return;
   try{
-    await DB.setPersonalData(NYA_PROJEKT_MALL_KEY, mall);
+    await DB.setPersonalData(NYA_PROJEKT_MALL_KEY, JSON.stringify(mall));
     nyaProjektMall = mall;
     renderNyaProjektMallInfo();
     alert('Mallen är sparad. Nya kalkyler och Excel-inläsningar utgår nu från "' + candidate.name + '".');
