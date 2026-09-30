@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930142304';
+const APP_BUILD = '20260930143123';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4622,6 +4622,14 @@ function buildPropaEkonomiHtml(candidate){
   const foreningslanRow = nyaProjektForeningslanRow(d);
   const foreningslan = foreningslanRow ? foreningslanRow.belopp : null;
   const kr = v => v != null ? formatKrFull(v) : '—';
+  // Fördelningen per intäktspost skickas med rutan och visas i en popup vid klick.
+  const intakterRows = (d.intakter || []).filter(r => r.namn || r.belopp != null).map(r => ({
+    namn: r.namn || 'Intäkt',
+    belopp: r.belopp,
+    perKvm: nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) || '',
+    spec: (r.enheter != null && r.kvmPerEnhet != null && r.krPerKvm != null) ? r.enheter.toLocaleString('sv-SE') + ' × ' + r.kvmPerEnhet.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(r.krPerKvm) + '/kvm' : ''
+  }));
+  const intakterAttr = escapeHtml(JSON.stringify({ total: totalIntakter, totalPerKvm: nyaProjektPerKvm(totalIntakter, boa) || '', rows: intakterRows })).replace(/"/g, '&quot;');
   const pct = v => v != null ? (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %' : '—';
   const perKvmLine = v => {
     const t = nyaProjektPerKvm(v, boa);
@@ -4678,13 +4686,8 @@ function buildPropaEkonomiHtml(candidate){
   return '<div class="home-grid" style="margin-bottom:36px;">' +
       '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + (boa != null ? boa.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
-      // Intäkter: totalen som rubrik, varje intäktspost (Insatser, Föreningslån ...) som rad under.
-      '<div class="home-card"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter totalt</div>' +
-        ((d.intakter || []).filter(r => r.namn || r.belopp != null).length ?
-          '<div class="home-card-figures">' + (d.intakter || []).filter(r => r.namn || r.belopp != null).map(r =>
-            '<div class="figure-row"><span>' + escapeHtml(r.namn || 'Intäkt') + '</span><strong>' + kr(r.belopp) + (nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) ? '<span style="font-weight:400; color:var(--ink-soft); font-size:11px; margin-left:6px;">' + nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) + '</span>' : '') + '</strong></div>'
-          ).join('') + '</div>' : '') +
-      '</div>' +
+      // Intäkter: som en vanlig nyckeltalsruta - klick öppnar en popup med fördelningen per intäktspost.
+      '<div class="home-card propa-intakter-card" data-intakter="' + intakterAttr + '" style="cursor:pointer;" title="Klicka för fördelning per intäktspost"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter <span style="font-size:10px; color:var(--ink-soft);">(klicka för fördelning)</span></div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(totalKostnader) + '</div>' + perKvmLine(totalKostnader) + '<div class="home-card-sub">Kostnad</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(resultat) + '</div>' + perKvmLine(resultat) + '<div class="home-card-sub">Resultat</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + pct(marginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
@@ -5077,7 +5080,43 @@ function showPublicPropaOnly(){
   return root;
 }
 
+// Popup i propån med fördelningen per intäktspost (byggs vid klick, stängs
+// med knappen, Escape eller klick utanför).
+function showPropaIntakterPopup(info){
+  const old = document.getElementById('propaIntakterPopup');
+  if(old) old.remove();
+  const kr = v => v != null ? formatKrFull(v) : '—';
+  const overlay = document.createElement('div');
+  overlay.id = 'propaIntakterPopup';
+  overlay.className = 'modal-overlay open';
+  const rowsHtml = (info.rows || []).map(r =>
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid var(--line-soft);">' +
+      '<div><div style="font-weight:600;">' + escapeHtml(r.namn) + '</div>' + (r.spec ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft);">' + escapeHtml(r.spec) + '</div>' : '') + '</div>' +
+      '<div style="text-align:right; white-space:nowrap;"><div style="font-family:\'JetBrains Mono\',monospace;">' + kr(r.belopp) + '</div>' + (r.perKvm ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft);">' + escapeHtml(r.perKvm) + '</div>' : '') + '</div>' +
+    '</div>'
+  ).join('');
+  overlay.innerHTML = '<div class="modal-box" style="max-width:480px;">' +
+    '<h3>Intäkter</h3>' +
+    '<p class="modal-sub">Fördelning per intäktspost.</p>' +
+    (rowsHtml || '<p class="eko-sub">Inga intäktsposter inlagda.</p>') +
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:10px 0 0; font-weight:700;"><span>Totalt</span><span style="text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(info.total) + (info.totalPerKvm ? '<div style="font-weight:400; font-size:11px; color:var(--ink-soft);">' + escapeHtml(info.totalPerKvm) + '</div>' : '') + '</span></div>' +
+    '<div class="modal-actions" style="margin-top:14px;"><button type="button" id="propaIntakterPopupClose" style="background:var(--ink); color:#fff;">Stäng</button></div>' +
+  '</div>';
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  document.getElementById('propaIntakterPopupClose').onclick = close;
+}
 function wirePropaTabs(root){
+  root.querySelectorAll('.propa-intakter-card').forEach(card => {
+    card.onclick = () => {
+      let info = { rows: [] };
+      try{ info = JSON.parse(card.getAttribute('data-intakter') || '{}'); }catch(e){}
+      showPropaIntakterPopup(info);
+    };
+  });
   // Kostnadsgrupper i propån: klick på gruppraden fäller ut/ihop posterna.
   root.querySelectorAll('.propa-group-row').forEach(rowEl => {
     rowEl.onclick = () => {
