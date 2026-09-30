@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260929154359';
+const APP_BUILD = '20260930115144';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1439,10 +1439,55 @@ function closeEkonomiProjektBudget(){
 }
 
 // ---------- Mark-detalj: köpebrevsuppgifter per projekt (en förening kan äga flera fastigheter) ----------
+// Kostnadsposter i budgeten som hör till marken - används för "Ackumulerade
+// kostnader hittills" under Mark.
+const EKONOMI_MARK_KATEGORIER = ['Markförvärv', 'Markarbete', 'VA anslutningar', 'Kommun avgifter'];
+function ekonomiTagnaKostnaderPerKategori(projectId){
+  const out = {};
+  (companyEkonomiData.reskontra[projectId] || []).forEach(l => {
+    if(!l.kategori) return;
+    out[l.kategori] = (out[l.kategori] || 0) + ekonomiLedgerAmount(l);
+  });
+  return out;
+}
+function renderEkonomiMarkTagna(){
+  const tbody = document.getElementById('ekonomiMarkTagnaBody');
+  const foot = document.getElementById('ekonomiMarkTagnaFoot');
+  tbody.innerHTML = '';
+  const tot = { mark: 0, alla: 0 };
+  const totKat = {};
+  EKONOMI_MARK_KATEGORIER.forEach(k => { totKat[k] = 0; });
+  projects.forEach(p => {
+    const perKat = ekonomiTagnaKostnaderPerKategori(p.id);
+    const alla = Object.values(perKat).reduce((s, v) => s + v, 0);
+    const mark = EKONOMI_MARK_KATEGORIER.reduce((s, k) => s + (perKat[k] || 0), 0);
+    if(!alla) return;
+    EKONOMI_MARK_KATEGORIER.forEach(k => { totKat[k] += perKat[k] || 0; });
+    tot.mark += mark;
+    tot.alla += alla;
+    const row = document.createElement('tr');
+    row.innerHTML = '<td style="text-align:left;">' + escapeHtml(p.name) + '</td>' +
+      EKONOMI_MARK_KATEGORIER.map(k => '<td>' + (perKat[k] ? formatKrFull(perKat[k]) : '—') + '</td>').join('') +
+      '<td style="font-weight:600;">' + (mark ? formatKrFull(mark) : '—') + '</td>' +
+      '<td>' + formatKrFull(alla) + '</td>';
+    tbody.appendChild(row);
+  });
+  if(!tbody.children.length){
+    tbody.innerHTML = '<tr><td colspan="7" class="eko-sub" style="text-align:left;">Inga tagna kostnader än - läs in och kategorisera reskontran under Budget.</td></tr>';
+    foot.innerHTML = '';
+  } else {
+    foot.innerHTML = '<tr class="eko-row-resultat"><td style="text-align:left;">Summa</td>' +
+      EKONOMI_MARK_KATEGORIER.map(k => '<td>' + formatKrFull(totKat[k]) + '</td>').join('') +
+      '<td>' + formatKrFull(tot.mark) + '</td><td>' + formatKrFull(tot.alla) + '</td></tr>';
+  }
+  document.getElementById('ekoMarkKpiTagnaMark').textContent = formatKrFull(tot.mark);
+  document.getElementById('ekoMarkKpiTagnaAlla').textContent = formatKrFull(tot.alla);
+}
 function renderEkonomiMarkList(){
   const tbody = document.getElementById('ekonomiMarkBody');
   tbody.innerHTML = '';
   let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0;
+  let forvarvPagaende = 0, forvarvAvslutade = 0;
   projects.forEach(p => {
     const fastigheter = companyEkonomiData.mark[p.id] || [];
     // Förvärv = fastighetsköp + ev. aktieköp (marken köps ibland uppdelat i båda)
@@ -1455,10 +1500,13 @@ function renderEkonomiMarkList(){
     totalForvarvspris += sum.forvarvspris;
     totalGatukostnad += sum.gatukostnad;
     totalVattenanslutning += sum.vattenanslutning;
+    const status = p.status || 'Pågående';
+    if(status === 'Avslutat') forvarvAvslutade += sum.forvarvspris; else forvarvPagaende += sum.forvarvspris;
     const row = document.createElement('tr');
     row.onclick = () => openEkonomiProjektMark(p);
     row.innerHTML =
       '<td>' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left; color:' + (status === 'Avslutat' ? 'var(--ink-soft)' : 'var(--ink)') + ';">' + escapeHtml(status) + '</td>' +
       '<td>' + fastigheter.length + '</td>' +
       '<td>' + (sum.forvarvspris ? formatKrFull(sum.forvarvspris) : '—') + '</td>' +
       '<td>' + (sum.vattenanslutning ? formatKrFull(sum.vattenanslutning) : '—') + '</td>' +
@@ -1466,8 +1514,11 @@ function renderEkonomiMarkList(){
     tbody.appendChild(row);
   });
   document.getElementById('ekoMarkKpiForvarvspris').textContent = formatKrFull(totalForvarvspris);
+  document.getElementById('ekoMarkKpiForvarvPagaende').textContent = formatKrFull(forvarvPagaende);
+  document.getElementById('ekoMarkKpiForvarvAvslutade').textContent = formatKrFull(forvarvAvslutade);
   document.getElementById('ekoMarkKpiGatukostnad').textContent = formatKrFull(totalGatukostnad);
   document.getElementById('ekoMarkKpiVattenanslutning').textContent = formatKrFull(totalVattenanslutning);
+  renderEkonomiMarkTagna();
 }
 
 function openEkonomiProjektMark(project){
@@ -2576,14 +2627,213 @@ function nyaProjektBostaderCounts(data){
 
 async function loadNyaProjektList(){
   try{
-    nyaProjektList = await DB.listNyaProjekt();
+    const [list] = await Promise.all([DB.listNyaProjekt(), loadNyaProjektMall()]);
+    nyaProjektList = list;
     nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); });
   }catch(e){
     nyaProjektList = [];
     showDebugError('Kunde inte läsa nya projekt', e);
   }
   renderNyaProjektList();
+  renderNyaProjektMallInfo();
 }
+
+// ---- Mall för nya kalkyler ----
+// Strukturen (intäktsrader, kostnadsgrupper med underkategorier och poster,
+// finansieringsposter - bara namn, inga belopp) sparas från en befintlig kalkyl
+// med "Spara struktur som mall". Varje ny kalkyl utgår från mallen; vid
+// Excel-inläsning fylls mallens poster med de belopp som känns igen på namnet
+// och resten hamnar i gruppen "Oplacerade kostnader" längst ner.
+const NYA_PROJEKT_MALL_KEY = 'nya-projekt-mall';
+let nyaProjektMall = null;
+const NYA_PROJEKT_MALL_DEFAULT = {
+  intakter: ['Insatser', 'Föreningslån'],
+  kostnadsgrupper: [
+    { grupp: 'Anskaffningskostnad mark', underkategorier: [], poster: [
+      { namn: 'Mark' }, { namn: 'Aktier' }
+    ] },
+    { grupp: 'Entreprenad', underkategorier: [], poster: [
+      { namn: 'Entreprenad' }
+    ] },
+    { grupp: 'Byggherrekostnader', underkategorier: ['Försäljning', 'Anslutningar', 'Ekonomi', 'Övriga kostnader'], poster: [
+      { namn: 'Mäklararvode', underkategori: 'Försäljning' },
+      { namn: 'Renderingar', underkategori: 'Försäljning' },
+      { namn: 'Säljbroschyr', underkategori: 'Försäljning' },
+      { namn: 'Byggskylt', underkategori: 'Försäljning' },
+      { namn: 'Eftermarknad', underkategori: 'Försäljning' },
+      { namn: 'VA-anslutning', underkategori: 'Anslutningar' },
+      { namn: 'Elanslutning', underkategori: 'Anslutningar' },
+      { namn: 'Tele/internet', underkategori: 'Anslutningar' },
+      { namn: 'Ekonomisk plan', underkategori: 'Ekonomi' },
+      { namn: 'Kassa BRF', underkategori: 'Ekonomi' },
+      { namn: 'Lagfart (Brf)', underkategori: 'Ekonomi' },
+      { namn: 'Pantbrev Föreningslån', underkategori: 'Ekonomi' },
+      { namn: 'Kontrollansvarig', underkategori: 'Övriga kostnader' },
+      { namn: 'Arkitekt', underkategori: 'Övriga kostnader' },
+      { namn: 'Slutbesiktning', underkategori: 'Övriga kostnader' },
+      { namn: 'Slutstädning bostäder', underkategori: 'Övriga kostnader' },
+      { namn: 'Solvinkeln Fastigheter AB', underkategori: 'Övriga kostnader' },
+      { namn: 'Övriga kostnader', underkategori: 'Övriga kostnader' }
+    ] },
+    { grupp: 'Finansiering', underkategorier: [], poster: [
+      { namn: 'Byggkreditiv bank' }, { namn: 'Markfinansiering' }
+    ] }
+  ],
+  finansiering: []
+};
+async function loadNyaProjektMall(){
+  try{
+    const rec = await DB.getPersonalData(NYA_PROJEKT_MALL_KEY);
+    nyaProjektMall = rec && rec.value && Array.isArray(rec.value.kostnadsgrupper) ? rec.value : null;
+  }catch(e){
+    nyaProjektMall = null;
+  }
+}
+function nyaProjektGetMall(){
+  return nyaProjektMall || NYA_PROJEKT_MALL_DEFAULT;
+}
+function renderNyaProjektMallInfo(){
+  const el = document.getElementById('nyaProjektMallInfo');
+  if(!el) return;
+  const m = nyaProjektGetMall();
+  const nPoster = m.kostnadsgrupper.reduce((s, g) => s + g.poster.length, 0);
+  el.textContent = nyaProjektMall
+    ? 'Mall: sparad från "' + (m.sparadFran || 'kalkyl') + '" ' + (m.sparadAt ? new Date(m.sparadAt).toLocaleDateString('sv-SE') : '') + ' · ' + m.kostnadsgrupper.length + ' kostnadsgrupper, ' + nPoster + ' poster. Nya kalkyler och Excel-inläsningar utgår från mallen.'
+    : 'Ingen egen mall sparad än - standardmallen används (' + m.kostnadsgrupper.length + ' kostnadsgrupper, ' + nPoster + ' poster). Öppna en kalkyl och klicka "Spara struktur som mall" för att använda den som förlaga.';
+}
+function nyaProjektMallFromCandidate(candidate){
+  const d = candidate.data;
+  return {
+    intakter: d.intakter.map(r => (r.namn || '').trim()).filter(Boolean),
+    kostnadsgrupper: d.kostnadsgrupper.filter(g => !g.oplacerade).map(g => {
+      const uks = g.underkategorier || [];
+      return {
+        grupp: g.grupp || 'Namnlös grupp',
+        underkategorier: uks.map(u => u.namn),
+        poster: g.poster.filter(p => (p.namn || '').trim()).map(p => {
+          const uk = uks.find(u => u.id === p.underkategori);
+          return { namn: p.namn.trim(), underkategori: uk ? uk.namn : null };
+        })
+      };
+    }),
+    finansiering: d.finansiering.map(f => (f.namn || '').trim()).filter(Boolean),
+    sparadFran: candidate.name,
+    sparadAt: new Date().toISOString()
+  };
+}
+function nyaProjektNormName(s){
+  return String(s || '').toLowerCase().replace(/[^a-z0-9åäö]/g, '');
+}
+// Bygger upp kalkylstrukturen från mallen och lägger in inlästa belopp där
+// namnet känns igen. Allt som inte matchar hamnar i "Oplacerade kostnader".
+function nyaProjektApplyMall(data, mall){
+  data = migrateNyaProjektData(data || {});
+  const importedPoster = [];
+  data.kostnadsgrupper.forEach(g => g.poster.forEach(p => importedPoster.push({ ...p, ursprungGrupp: g.grupp || '' })));
+
+  const groups = mall.kostnadsgrupper.map(mg => {
+    const uks = (mg.underkategorier || []).map(n => ({ id: uid(), namn: n }));
+    return {
+      id: uid(),
+      grupp: mg.grupp,
+      underkategorier: uks,
+      underkategorierInit: true,
+      poster: (mg.poster || []).map(mp => {
+        const uk = uks.find(u => u.namn === mp.underkategori);
+        return { id: uid(), namn: mp.namn, belopp: null, underkategori: uk ? uk.id : null };
+      })
+    };
+  });
+  const allTemplatePosts = [];
+  groups.forEach(g => g.poster.forEach(p => allTemplatePosts.push(p)));
+  const findMatch = (name) => {
+    const n = nyaProjektNormName(name);
+    if(!n) return null;
+    let hit = allTemplatePosts.find(p => p.belopp == null && nyaProjektNormName(p.namn) === n);
+    if(hit) return hit;
+    hit = allTemplatePosts.find(p => {
+      if(p.belopp != null) return false;
+      const t = nyaProjektNormName(p.namn);
+      return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t));
+    });
+    return hit || null;
+  };
+  const unplaced = [];
+  importedPoster.forEach(ip => {
+    const hit = findMatch(ip.namn);
+    if(hit){
+      hit.belopp = ip.belopp != null ? ip.belopp : null;
+      if(ip.perBostad != null){ hit.perBostad = ip.perBostad; hit.perBostadAntal = ip.perBostadAntal; }
+    } else if((ip.namn || '').trim() || ip.belopp != null){
+      unplaced.push({ id: uid(), namn: ip.namn || '', belopp: ip.belopp != null ? ip.belopp : null, underkategori: null, ursprungGrupp: ip.ursprungGrupp });
+    }
+  });
+  if(unplaced.length){
+    groups.push({ id: uid(), grupp: 'Oplacerade kostnader', underkategorier: [], poster: unplaced, oplacerade: true });
+  }
+  data.kostnadsgrupper = groups;
+
+  // Intäkter: mallens rader först (fyllda med inlästa belopp om namnet matchar),
+  // därefter eventuella inlästa rader som inte finns i mallen.
+  const importedIntakter = data.intakter.slice();
+  const intakter = (mall.intakter || []).map(namn => {
+    const n = nyaProjektNormName(namn);
+    const idx = importedIntakter.findIndex(r => nyaProjektNormName(r.namn) === n || (n.length >= 5 && nyaProjektNormName(r.namn).includes(n)));
+    const src = idx > -1 ? importedIntakter.splice(idx, 1)[0] : null;
+    return { id: uid(), namn, belopp: src ? src.belopp : null };
+  });
+  importedIntakter.filter(r => (r.namn || '').trim() || r.belopp != null).forEach(r => intakter.push({ id: uid(), namn: r.namn || '', belopp: r.belopp }));
+  data.intakter = intakter;
+
+  // Finansieringsplan: mallens poster läggs till om de saknas.
+  (mall.finansiering || []).forEach(namn => {
+    if(!data.finansiering.some(f => nyaProjektNormName(f.namn) === nyaProjektNormName(namn))){
+      data.finansiering.push({ id: uid(), namn, belopp: null, period: '', part: '' });
+    }
+  });
+  return data;
+}
+async function createNyaProjektFromData(name, data){
+  const row = {
+    id: uid(),
+    share_id: uid() + uid() + uid(),
+    name,
+    data: nyaProjektApplyMall(data, nyaProjektGetMall()),
+    is_public: false,
+    status: 'candidate',
+    created_by: myPersonId,
+    created_by_name: myName
+  };
+  const saved = await DB.insertNyaProjekt(row);
+  nyaProjektList.unshift(saved);
+  renderNyaProjektList();
+  return saved;
+}
+document.getElementById('nyaProjektNewFromMallBtn').onclick = async () => {
+  const name = prompt('Namn på den nya kalkylen:');
+  if(!name || !name.trim()) return;
+  try{
+    const saved = await createNyaProjektFromData(name.trim(), {});
+    openNyaProjektDetail(saved.id);
+  }catch(e){
+    showDebugError('Kunde inte skapa kalkylen', e);
+  }
+};
+document.getElementById('nyaProjektSaveMallBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const mall = nyaProjektMallFromCandidate(candidate);
+  const nPoster = mall.kostnadsgrupper.reduce((s, g) => s + g.poster.length, 0);
+  if(!confirm('Spara strukturen i "' + candidate.name + '" som mall för nya kalkyler?\n\n' + mall.kostnadsgrupper.length + ' kostnadsgrupper med ' + nPoster + ' poster, ' + mall.intakter.length + ' intäktsrader och ' + mall.finansiering.length + ' finansieringsposter. Inga belopp följer med.')) return;
+  try{
+    await DB.setPersonalData(NYA_PROJEKT_MALL_KEY, mall);
+    nyaProjektMall = mall;
+    renderNyaProjektMallInfo();
+    alert('Mallen är sparad. Nya kalkyler och Excel-inläsningar utgår nu från "' + candidate.name + '".');
+  }catch(e){
+    showDebugError('Kunde inte spara mallen', e);
+  }
+};
 
 function renderNyaProjektList(){
   const tbody = document.getElementById('ekonomiNyaProjektBody');
@@ -2904,6 +3154,89 @@ document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
   renderNyaProjektList();
 };
 
+// Popup för en intäktspost: antal enheter × kvm per enhet × kr per kvm = total,
+// eller totalen direkt. Uppdelningen sparas på raden (enheter/kvmPerEnhet/krPerKvm).
+let nyaProjektIntaktModalCtx = null;
+function nyaProjektIntaktNum(id){
+  const raw = document.getElementById(id).value.trim();
+  if(raw === '') return null;
+  const n = parseFloat(raw.replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+function nyaProjektIntaktModalUpdate(writeTotal){
+  const e = nyaProjektIntaktNum('nyaProjektIntaktEnheter');
+  const k = nyaProjektIntaktNum('nyaProjektIntaktKvm');
+  const p = nyaProjektIntaktNum('nyaProjektIntaktKrKvm');
+  const el = document.getElementById('nyaProjektIntaktFormel');
+  if(e != null && k != null && p != null){
+    const total = Math.round(e * k * p);
+    el.textContent = e.toLocaleString('sv-SE') + ' × ' + k.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(p) + '/kvm = ' + formatKrFull(total) + ' (' + (e * k).toLocaleString('sv-SE') + ' kvm totalt)';
+    if(writeTotal) document.getElementById('nyaProjektIntaktTotal').value = total;
+  } else {
+    el.textContent = (e != null || k != null || p != null) ? 'Fyll i alla tre för att räkna ut totalen.' : '';
+  }
+}
+function openNyaProjektIntaktModal(candidate, row, antalBostader, boa){
+  nyaProjektIntaktModalCtx = { candidate, row };
+  document.getElementById('nyaProjektIntaktModalTitle').textContent = row.namn || 'Intäkt';
+  const has = row.enheter != null && row.kvmPerEnhet != null && row.krPerKvm != null;
+  document.getElementById('nyaProjektIntaktEnheter').value = has ? row.enheter : (antalBostader != null ? antalBostader : '');
+  document.getElementById('nyaProjektIntaktKvm').value = has ? row.kvmPerEnhet : (antalBostader && boa ? Math.round(boa / antalBostader * 10) / 10 : '');
+  document.getElementById('nyaProjektIntaktKrKvm').value = has ? row.krPerKvm : '';
+  document.getElementById('nyaProjektIntaktTotal').value = row.belopp != null ? row.belopp : '';
+  nyaProjektIntaktModalUpdate(false);
+  document.getElementById('nyaProjektIntaktModalOverlay').classList.add('open');
+  setTimeout(() => { const el = document.getElementById(has ? 'nyaProjektIntaktKrKvm' : 'nyaProjektIntaktEnheter'); el.focus(); el.select(); }, 50);
+}
+function closeNyaProjektIntaktModal(){
+  document.getElementById('nyaProjektIntaktModalOverlay').classList.remove('open');
+  nyaProjektIntaktModalCtx = null;
+}
+['nyaProjektIntaktEnheter', 'nyaProjektIntaktKvm', 'nyaProjektIntaktKrKvm'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => nyaProjektIntaktModalUpdate(true));
+});
+document.getElementById('nyaProjektIntaktTotal').addEventListener('input', () => {
+  // Skrivs totalen in för hand gäller den - uppdelningen släpps.
+  document.getElementById('nyaProjektIntaktKrKvm').value = '';
+  nyaProjektIntaktModalUpdate(false);
+});
+['nyaProjektIntaktEnheter', 'nyaProjektIntaktKvm', 'nyaProjektIntaktKrKvm', 'nyaProjektIntaktTotal'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('nyaProjektIntaktModalSave').click(); }
+    if(e.key === 'Escape'){ closeNyaProjektIntaktModal(); }
+  });
+});
+document.getElementById('nyaProjektIntaktModalCancel').onclick = closeNyaProjektIntaktModal;
+document.getElementById('nyaProjektIntaktModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'nyaProjektIntaktModalOverlay') closeNyaProjektIntaktModal();
+});
+document.getElementById('nyaProjektIntaktModalSave').onclick = async () => {
+  const ctx = nyaProjektIntaktModalCtx;
+  if(!ctx) return;
+  const { candidate, row } = ctx;
+  const e = nyaProjektIntaktNum('nyaProjektIntaktEnheter');
+  const k = nyaProjektIntaktNum('nyaProjektIntaktKvm');
+  const p = nyaProjektIntaktNum('nyaProjektIntaktKrKvm');
+  const total = nyaProjektIntaktNum('nyaProjektIntaktTotal');
+  if(e != null && k != null && p != null){
+    row.enheter = e; row.kvmPerEnhet = k; row.krPerKvm = p;
+    row.belopp = Math.round(e * k * p);
+  } else {
+    // Enheter/kvm får ligga kvar som underlag för kr/kvm även när totalen skrivs direkt.
+    if(e != null && k != null){ row.enheter = e; row.kvmPerEnhet = k; } else { delete row.enheter; delete row.kvmPerEnhet; }
+    delete row.krPerKvm;
+    row.belopp = total;
+  }
+  closeNyaProjektIntaktModal();
+  try{
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  }catch(err){
+    showDebugError('Kunde inte spara', err);
+  }
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
 function renderNyaProjektRowList(tbody, rows, candidate, opts){
   tbody.innerHTML = '';
   // opts.filter: visa bara en delmängd (t.ex. en underkategori) men flytta/ta
@@ -2918,6 +3251,12 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     nameSpan.className = 'editable';
     nameSpan.style.cursor = 'pointer';
     nameSpan.textContent = row.namn || 'Namnlös post';
+    if(row.ursprungGrupp && opts && opts.moveGroup && opts.moveGroup.oplacerade){
+      const src = document.createElement('span');
+      src.style.cssText = 'font-size:11px; color:var(--ink-soft); margin-left:8px;';
+      src.textContent = '(låg under "' + row.ursprungGrupp + '" i filen)';
+      nameSpan.appendChild(src);
+    }
     nameSpan.onclick = () => {
       const input = document.createElement('input');
       input.type = 'text';
@@ -3016,6 +3355,13 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     amountSpan.className = 'editable';
     amountSpan.style.cursor = 'pointer';
     amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+    if(opts && opts.intaktModal && row.enheter != null && row.kvmPerEnhet != null && row.krPerKvm != null && row.belopp != null){
+      // Visar hur intäkten är uppbyggd: enheter × kvm × kr/kvm.
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-soft);";
+      spec.textContent = row.enheter.toLocaleString('sv-SE') + ' × ' + row.kvmPerEnhet.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(row.krPerKvm) + '/kvm';
+      amountSpan.appendChild(spec);
+    }
     if(opts && opts.beloppModal && row.perBostad != null && row.belopp != null){
       // Visar hur beloppet är uppbyggt när det specificerats per bostad.
       const spec = document.createElement('div');
@@ -3026,6 +3372,10 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     amountSpan.onclick = () => {
       if(opts && opts.beloppModal){
         openNyaProjektBeloppModal(candidate, row, opts.antal);
+        return;
+      }
+      if(opts && opts.intaktModal){
+        openNyaProjektIntaktModal(candidate, row, opts.antal, opts.boa);
         return;
       }
       const input = document.createElement('input');
@@ -3055,7 +3405,11 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
       kvmTd.style.fontFamily = "'JetBrains Mono', monospace";
       kvmTd.style.fontSize = '11px';
       kvmTd.style.color = 'var(--ink-soft)';
-      kvmTd.textContent = nyaProjektPerKvm(row.belopp, opts.boaTotal) || '—';
+      // Intäktspost med egna enheter/kvm: kr/kvm räknas på postens egna kvm,
+      // inte på hela projektets BOA (typerna kan skilja sig åt).
+      const egnaKvm = (row.enheter != null && row.kvmPerEnhet != null) ? row.enheter * row.kvmPerEnhet : null;
+      kvmTd.textContent = nyaProjektPerKvm(row.belopp, egnaKvm || opts.boaTotal) || '—';
+      if(egnaKvm) kvmTd.title = 'Beräknat på postens egna ' + egnaKvm.toLocaleString('sv-SE') + ' kvm';
       tr.appendChild(kvmTd);
     }
 
@@ -3099,27 +3453,57 @@ function renderNyaProjektRowList(tbody, rows, candidate, opts){
     const delTd = document.createElement('td');
     delTd.style.whiteSpace = 'nowrap';
     delTd.style.textAlign = 'right';
-    if(opts && opts.underkategorier && opts.underkategorier.length){
-      // Välj underkategori direkt på raden.
+    if(opts && opts.moveGroup && Array.isArray(opts.moveTargets)){
+      // "Flytta till": alla grupper och underkategorier i kalkylen. Byte av
+      // underkategori inom gruppen och flytt till en annan grupp går via samma lista.
       const sel = document.createElement('select');
-      sel.title = 'Underkategori';
-      sel.style.cssText = 'font-size:11.5px; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; margin-right:6px; color:var(--ink-soft); background:#fff; max-width:140px;';
-      const none = document.createElement('option');
-      none.value = '';
-      none.textContent = 'Ej kategoriserad';
-      sel.appendChild(none);
-      opts.underkategorier.forEach(uk => {
-        const o = document.createElement('option');
-        o.value = uk.id;
-        o.textContent = uk.namn;
-        sel.appendChild(o);
+      sel.title = 'Flytta till grupp / underkategori';
+      sel.style.cssText = 'font-size:11.5px; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; margin-right:6px; color:var(--ink-soft); background:#fff; max-width:170px;';
+      const curVal = opts.moveGroup.id + '|' + (row.underkategori || '');
+      opts.moveTargets.forEach(g => {
+        const uks = g.underkategorier || [];
+        const og = document.createElement('optgroup');
+        og.label = g.grupp || 'Namnlös grupp';
+        const mk = (ukId, label) => {
+          const o = document.createElement('option');
+          o.value = g.id + '|' + (ukId || '');
+          o.textContent = label;
+          og.appendChild(o);
+        };
+        if(!uks.length) mk(null, g.grupp || 'Namnlös grupp');
+        else {
+          uks.forEach(uk => mk(uk.id, uk.namn));
+          mk(null, 'Ej kategoriserad');
+        }
+        sel.appendChild(og);
       });
-      sel.value = row.underkategori || '';
+      sel.value = curVal;
+      if(sel.value !== curVal){
+        const o = document.createElement('option');
+        o.value = curVal;
+        o.textContent = 'Flytta till…';
+        sel.insertBefore(o, sel.firstChild);
+        sel.value = curVal;
+      }
       sel.addEventListener('mousedown', e => e.stopPropagation());
       sel.addEventListener('change', async () => {
-        row.underkategori = sel.value || null;
+        const [gid, ukId] = sel.value.split('|');
+        const target = opts.moveTargets.find(g => g.id === gid);
+        if(!target) return;
+        if(target !== opts.moveGroup){
+          const i = opts.moveGroup.poster.indexOf(row);
+          if(i > -1) opts.moveGroup.poster.splice(i, 1);
+          target.poster.push(row);
+          delete row.ursprungGrupp;
+          // Tom "Oplacerade kostnader"-grupp städas bort automatiskt.
+          if(opts.moveGroup.oplacerade && !opts.moveGroup.poster.length){
+            candidate.data.kostnadsgrupper = candidate.data.kostnadsgrupper.filter(g => g !== opts.moveGroup);
+          }
+        }
+        row.underkategori = ukId || null;
         await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
         renderNyaProjektDetail();
+        renderNyaProjektList();
       });
       delTd.appendChild(sel);
     }
@@ -3201,7 +3585,7 @@ function renderNyaProjektDetail(){
 
   renderNyaProjektNyckeltal(candidate);
 
-  renderNyaProjektRowList(document.getElementById('nyaProjektIntakterBody'), data.intakter, candidate, { perKvm: true, boaTotal: boa });
+  renderNyaProjektRowList(document.getElementById('nyaProjektIntakterBody'), data.intakter, candidate, { perKvm: true, boaTotal: boa, intaktModal: true, antal, boa });
 
   const groupsEl = document.getElementById('nyaProjektKostnadsgrupper');
   groupsEl.innerHTML = '';
@@ -3273,8 +3657,16 @@ function renderNyaProjektDetail(){
       const table = document.createElement('table');
       table.style.width = '100%';
       room.appendChild(table);
-      const rowOpts = { perKvm: true, boaTotal: boa, beloppModal: true, antal, underkategorier: group.underkategorier };
+      const rowOpts = { perKvm: true, boaTotal: boa, beloppModal: true, antal, moveGroup: group, moveTargets: data.kostnadsgrupper };
       const uks = group.underkategorier || [];
+      if(group.oplacerade){
+        room.style.border = '2px dashed var(--blue)';
+        const note = document.createElement('p');
+        note.className = 'eko-sub';
+        note.style.margin = '0 0 8px';
+        note.textContent = 'Poster från inläsningen som inte kändes igen i mallen. Välj rätt grupp/underkategori i rullistan "Flytta till" på varje rad - gruppen försvinner när den är tom.';
+        room.appendChild(note);
+      }
 
       const addPostBtn = (ukId) => {
         const btn = document.createElement('button');
@@ -4033,20 +4425,9 @@ document.getElementById('nyaProjektFileInput').addEventListener('change', async 
       data.finansiering = data.finansieringsforslag;
       delete data.finansieringsforslag;
     }
-    const row = {
-      id: uid(),
-      share_id: uid() + uid() + uid(),
-      name: data.projektnamn,
-      data: migrateNyaProjektData(data),
-      is_public: false,
-      status: 'candidate',
-      created_by: myPersonId,
-      created_by_name: myName
-    };
-    const saved = await DB.insertNyaProjekt(row);
-    nyaProjektList.unshift(saved);
-    renderNyaProjektList();
-    setNyaProjektUploadStatus('Kalkylen inläst: ' + data.projektnamn, 'ok');
+    const saved = await createNyaProjektFromData(data.projektnamn, data);
+    const opl = saved.data.kostnadsgrupper.find(g => g.oplacerade);
+    setNyaProjektUploadStatus('Kalkylen inläst: ' + data.projektnamn + (opl ? ' · ' + opl.poster.length + ' poster kunde inte placeras i mallen - de ligger under "Oplacerade kostnader" längst ner.' : ' · alla poster placerade enligt mallen.'), 'ok');
     openNyaProjektDetail(saved.id);
   }catch(err){
     setNyaProjektUploadStatus(err.message || 'Något gick fel.', 'err');
@@ -4120,8 +4501,13 @@ function buildPropaEkonomiHtml(candidate){
   return '<div class="home-grid" style="margin-bottom:36px;">' +
       '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + (boa != null ? boa.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter</div></div>' +
-      '<div class="home-card"><div class="home-card-title">' + kr(foreningslan) + '</div>' + perKvmLine(foreningslan) + '<div class="home-card-sub">Föreningslån</div></div>' +
+      // Intäkter: totalen som rubrik, varje intäktspost (Insatser, Föreningslån ...) som rad under.
+      '<div class="home-card"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter totalt</div>' +
+        ((d.intakter || []).filter(r => r.namn || r.belopp != null).length ?
+          '<div class="home-card-figures">' + (d.intakter || []).filter(r => r.namn || r.belopp != null).map(r =>
+            '<div class="figure-row"><span>' + escapeHtml(r.namn || 'Intäkt') + '</span><strong>' + kr(r.belopp) + (nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) ? '<span style="font-weight:400; color:var(--ink-soft); font-size:11px; margin-left:6px;">' + nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) + '</span>' : '') + '</strong></div>'
+          ).join('') + '</div>' : '') +
+      '</div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(totalKostnader) + '</div>' + perKvmLine(totalKostnader) + '<div class="home-card-sub">Kostnad</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + kr(resultat) + '</div>' + perKvmLine(resultat) + '<div class="home-card-sub">Resultat</div></div>' +
       '<div class="home-card"><div class="home-card-title">' + pct(marginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
@@ -4457,7 +4843,6 @@ function buildPropaTidsplanHtml(candidate, opts){
     html += '<div style="position:relative; margin-bottom:' + (compact ? '16px' : '24px') + ';">' +
       '<div style="position:absolute; left:-30px; top:3px; width:14px; height:14px; border-radius:50%; background:' + (kapital ? 'var(--ink)' : '#fff') + '; border:2px solid var(--ink);"></div>' +
       '<div style="font-family:\'Fraunces\',serif; font-weight:700; font-size:' + (compact ? '14px' : '17px') + '; margin-bottom:6px;">' + escapeHtml(g.label) +
-      (kapital ? '<span style="font-family:\'JetBrains Mono\',monospace; font-weight:400; font-size:11.5px; color:var(--ink-soft); margin-left:10px;">Kapitalbehov ' + kr(kapital) + (totalKapital && groups.length > 1 ? ' · ackumulerat ' + kr(ack) : '') + '</span>' : '') +
       '</div>';
     g.items.forEach(it => {
       const isKap = it.typ === 'kapital';
@@ -4471,9 +4856,6 @@ function buildPropaTidsplanHtml(candidate, opts){
     html += '</div>';
   });
   html += '</div>';
-  if(!compact && totalKapital){
-    html = '<p class="eko-sub" style="margin:0 0 16px;">Totalt kapitalbehov enligt finansieringsplanen: ' + kr(totalKapital) + '. Fyllda punkter = månader då kapital behövs.</p>' + html;
-  }
   return html;
 }
 

@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20260929154359">
+<meta name="app-build" content="20260930115144">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1090,7 +1090,7 @@
             <tr>
               <th style="text-align:left;">Brf</th>
               <th>Budget</th>
-              <th>Utfall</th>
+              <th>Tagna kostnader</th>
               <th>Differens</th>
             </tr>
           </thead>
@@ -1103,7 +1103,15 @@
       <div class="home-grid" style="margin-bottom:20px;">
         <div class="home-card">
           <div class="home-card-title" id="ekoMarkKpiForvarvspris">—</div>
-          <div class="home-card-sub">Totalt förvärv (fastighet + aktier)</div>
+          <div class="home-card-sub">Markförvärv totalt (fastighet + aktier)</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiForvarvPagaende">—</div>
+          <div class="home-card-sub">Markförvärv pågående projekt</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiForvarvAvslutade">—</div>
+          <div class="home-card-sub">Markförvärv avslutade projekt</div>
         </div>
         <div class="home-card">
           <div class="home-card-title" id="ekoMarkKpiGatukostnad">—</div>
@@ -1119,6 +1127,7 @@
           <thead>
             <tr>
               <th style="text-align:left;">Brf</th>
+              <th style="text-align:left;">Status</th>
               <th>Antal fastigheter</th>
               <th>Förvärv (fastighet + aktier)</th>
               <th>Vattenanslutning</th>
@@ -1126,6 +1135,36 @@
             </tr>
           </thead>
           <tbody id="ekonomiMarkBody"></tbody>
+        </table>
+      </div>
+
+      <h3 style="margin:32px 0 6px;">Ackumulerade kostnader hittills</h3>
+      <p class="eko-sub" style="margin:0 0 10px;">Tagna kostnader per projekt, hämtade från Budget-fliken (kategoriserade reskontraposter). Markkolumnerna visar de kostnadsposter som hör till marken; "Alla tagna kostnader" är projektets hela summa.</p>
+      <div class="home-grid" style="margin-bottom:16px;">
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiTagnaMark">—</div>
+          <div class="home-card-sub">Tagna markkostnader (alla projekt)</div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-title" id="ekoMarkKpiTagnaAlla">—</div>
+          <div class="home-card-sub">Alla tagna kostnader (alla projekt)</div>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Brf</th>
+              <th>Markförvärv</th>
+              <th>Markarbete</th>
+              <th>VA anslutningar</th>
+              <th>Kommun avgifter</th>
+              <th>Summa mark</th>
+              <th>Alla tagna kostnader</th>
+            </tr>
+          </thead>
+          <tbody id="ekonomiMarkTagnaBody"></tbody>
+          <tfoot id="ekonomiMarkTagnaFoot"></tfoot>
         </table>
       </div>
     </div>
@@ -1173,8 +1212,10 @@
       <div class="contract-upload-row">
         <button type="button" id="nyaProjektUploadBtn" class="upload-btn">📄 Läs in projektkalkyl (Excel)</button>
         <input type="file" id="nyaProjektFileInput" accept=".xlsx,.xls" style="display:none;">
+        <button type="button" id="nyaProjektNewFromMallBtn" class="upload-btn" style="background:none; color:var(--ink); border:1px solid var(--line-soft);">＋ Ny kalkyl från mall</button>
         <span id="nyaProjektUploadStatus" class="contract-upload-status"></span>
       </div>
+      <p class="eko-sub" id="nyaProjektMallInfo" style="margin:0 0 12px;"></p>
       <div class="table-scroll">
         <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
           <thead>
@@ -1202,6 +1243,7 @@
       <div class="material-toolbar" style="margin-bottom:20px;">
         <button id="nyaProjektPromoteBtn" class="material-pdf-btn">✓ Gör till projekt</button>
         <button id="nyaProjektShareBtn">Dela med investerare</button>
+        <button id="nyaProjektSaveMallBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink);" title="Gruppernas, underkategoriernas och posternas namn sparas som mall - inga belopp.">Spara struktur som mall</button>
         <button id="nyaProjektDeleteBtn" style="background:none; border:1px solid var(--line-soft); color:var(--danger);">Ta bort</button>
       </div>
       <div id="nyaProjektShareBox" style="display:none; margin-bottom:20px; padding:12px 14px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px;">
@@ -1349,7 +1391,7 @@
           <div class="home-card-sub">Totalkostnad</div>
           <div class="home-card-figures">
             <div class="figure-row"><span>Budget</span><strong id="ekoBudgetTotalkostnadBudget">—</strong></div>
-            <div class="figure-row"><span>Utfall</span><strong id="ekoBudgetTotalkostnadUtfall">—</strong></div>
+            <div class="figure-row"><span>Tagna kostnader</span><strong id="ekoBudgetTotalkostnadUtfall">—</strong></div>
           </div>
         </div>
         <div class="home-card">
@@ -1357,7 +1399,7 @@
           <div class="home-card-sub">Vinst</div>
           <div class="home-card-figures">
             <div class="figure-row"><span>Budget</span><strong id="ekoBudgetVinstBudget">—</strong></div>
-            <div class="figure-row"><span>Utfall</span><strong id="ekoBudgetVinstUtfall">—</strong></div>
+            <div class="figure-row"><span>Tagna kostnader</span><strong id="ekoBudgetVinstUtfall">—</strong></div>
           </div>
         </div>
       </div>
@@ -1369,8 +1411,8 @@
               <th style="text-align:left;">Kostnadspost</th>
               <th>Budget</th>
               <th>Budget kr/kvm</th>
-              <th>Utfall</th>
-              <th>Utfall kr/kvm</th>
+              <th>Tagna kostnader</th>
+              <th>Tagna kostnader kr/kvm</th>
               <th>Differens</th>
             </tr>
           </thead>
@@ -1604,6 +1646,26 @@
       <div class="modal-actions" style="margin-top:14px;">
         <button id="nyaProjektBeloppModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
         <button id="nyaProjektBeloppModalSave" style="background:var(--ink);color:#fff;">Spara</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="nyaProjektIntaktModalOverlay" class="modal-overlay">
+    <div class="modal-box">
+      <h3 id="nyaProjektIntaktModalTitle">Intäkt</h3>
+      <p class="modal-sub">Ange totalbeloppet direkt, eller specificera antal enheter, kvm per enhet och kr per kvm så räknas totalen ut. Kr/kvm för posten beräknas på posternas egna kvm.</p>
+      <label class="field-label" for="nyaProjektIntaktEnheter">Antal enheter</label>
+      <input type="number" step="any" id="nyaProjektIntaktEnheter" class="nya-projekt-modal-input" placeholder="T.ex. 22">
+      <label class="field-label" for="nyaProjektIntaktKvm">Kvm per enhet</label>
+      <input type="number" step="any" id="nyaProjektIntaktKvm" class="nya-projekt-modal-input" placeholder="T.ex. 98">
+      <label class="field-label" for="nyaProjektIntaktKrKvm">Kr per kvm</label>
+      <input type="number" step="any" id="nyaProjektIntaktKrKvm" class="nya-projekt-modal-input" placeholder="T.ex. 52 000">
+      <div id="nyaProjektIntaktFormel" style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft); margin:-6px 0 14px;"></div>
+      <label class="field-label" for="nyaProjektIntaktTotal">Totalbelopp (kr)</label>
+      <input type="number" step="any" id="nyaProjektIntaktTotal" class="nya-projekt-modal-input" style="font-weight:700;">
+      <div class="modal-actions" style="margin-top:14px;">
+        <button id="nyaProjektIntaktModalCancel" style="background:none;border:1px solid var(--line-soft);color:var(--ink-soft);">Avbryt</button>
+        <button id="nyaProjektIntaktModalSave" style="background:var(--ink);color:#fff;">Spara</button>
       </div>
     </div>
   </div>
