@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930124108';
+const APP_BUILD = '20260930142304';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2897,7 +2897,67 @@ function nyaProjektApplyMall(data, mall){
       data.finansiering.push({ id: uid(), namn, belopp: null, period: '', part: '' });
     }
   });
+  nyaProjektApplyStandardbelopp(data);
   return data;
+}
+// Standardbelopp som alltid förifylls när en kalkyl skapas från mallen.
+// Fasta belopp eller belopp per bostad (× antal enheter). Inläst belopp från
+// Excel har företräde - standardbeloppet sätts bara där posten är tom.
+// Saknas posten i mallen läggs den till i angiven grupp/underkategori.
+const NYA_PROJEKT_STANDARDBELOPP = [
+  { namn: 'Renderingar', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Säljbroschyr', belopp: 75000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Försäljningsansvarig', perBostad: 40000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Marknadsföring', perBostad: 20000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Hemsida projekt', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Ekonomisk plan', belopp: 300000, grupp: 'Byggherrekostnader', uk: 'Ekonomi' },
+  { namn: 'Kassa BRF', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Ekonomi' },
+  { namn: 'Styrelse - Bolevo', belopp: 150000, grupp: 'Byggherrekostnader', uk: 'Ekonomi', alias: ['Styrelse Bolevo'] },
+  { namn: 'Kontrollansvarig', perBostad: 4000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Slutstädning', perBostad: 6500, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Slutbesiktning', perBostad: 5000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Eftermarknad', perBostad: 25000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Projektledning', perBostad: 50000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Geogrund', belopp: 75000, grupp: 'Byggherrekostnader', uk: 'Övriga kostnader' }
+];
+function nyaProjektApplyStandardbelopp(data){
+  const antal = data.antalBostader != null && data.antalBostader > 0 ? data.antalBostader : null;
+  const allPosts = [];
+  data.kostnadsgrupper.filter(g => !g.oplacerade).forEach(g => g.poster.forEach(p => allPosts.push(p)));
+  NYA_PROJEKT_STANDARDBELOPP.forEach(std => {
+    const names = [std.namn].concat(std.alias || []).map(nyaProjektNormName);
+    let post = allPosts.find(p => names.includes(nyaProjektNormName(p.namn)));
+    if(!post){
+      // Lös matchning (t.ex. "Slutstädning bostäder") - bara om träffen är entydig.
+      const loose = allPosts.filter(p => { const t = nyaProjektNormName(p.namn); return names.some(n => t.includes(n) || (n.length >= 6 && n.includes(t) && t.length >= 5)); });
+      if(loose.length === 1) post = loose[0];
+    }
+    if(!post){
+      let group = data.kostnadsgrupper.find(g => !g.oplacerade && nyaProjektNormName(g.grupp) === nyaProjektNormName(std.grupp));
+      if(!group) group = data.kostnadsgrupper.find(g => !g.oplacerade) || null;
+      if(!group){
+        group = { id: uid(), grupp: std.grupp, underkategorier: [], poster: [] };
+        data.kostnadsgrupper.push(group);
+      }
+      if(!Array.isArray(group.underkategorier)) group.underkategorier = [];
+      let uk = group.underkategorier.find(u => nyaProjektNormName(u.namn) === nyaProjektNormName(std.uk));
+      if(!uk && group.underkategorier.length){
+        uk = { id: uid(), namn: std.uk };
+        group.underkategorier.push(uk);
+      }
+      post = { id: uid(), namn: std.namn, belopp: null, underkategori: uk ? uk.id : null };
+      group.poster.push(post);
+      allPosts.push(post);
+    }
+    if(post.belopp != null) return; // inläst/ifyllt belopp har företräde
+    if(std.perBostad != null){
+      post.perBostad = std.perBostad;
+      post.perBostadAntal = antal;
+      post.belopp = antal ? std.perBostad * antal : null;
+    } else {
+      post.belopp = std.belopp;
+    }
+  });
 }
 async function createNyaProjektFromData(name, data){
   const row = {
@@ -2918,8 +2978,10 @@ async function createNyaProjektFromData(name, data){
 document.getElementById('nyaProjektNewFromMallBtn').onclick = async () => {
   const name = prompt('Namn på den nya kalkylen:');
   if(!name || !name.trim()) return;
+  const antalRaw = prompt('Antal bostäder/enheter (används för standardbelopp per enhet, t.ex. kontrollansvarig 4 000 kr × antal). Lämna tomt om du inte vet än:', '');
+  const antal = antalRaw && !isNaN(parseInt(antalRaw, 10)) ? parseInt(antalRaw, 10) : null;
   try{
-    const saved = await createNyaProjektFromData(name.trim(), {});
+    const saved = await createNyaProjektFromData(name.trim(), antal ? { antalBostader: antal } : {});
     openNyaProjektDetail(saved.id);
   }catch(e){
     showDebugError('Kunde inte skapa kalkylen', e);
@@ -4263,6 +4325,15 @@ function nyaProjektSyncBostader(data){
   const kvmRows = rows.filter(r => r.kvm != null);
   const prisRows = rows.filter(r => r.pris != null);
   if(rows.length) data.antalBostader = rows.length;
+  // Poster med standardbelopp per bostad som väntat på ett antal räknas ut nu.
+  if(data.antalBostader){
+    (data.kostnadsgrupper || []).forEach(g => (g.poster || []).forEach(p => {
+      if(p.perBostad != null && p.belopp == null){
+        p.perBostadAntal = data.antalBostader;
+        p.belopp = Math.round(p.perBostad * data.antalBostader * 100) / 100;
+      }
+    }));
+  }
   if(kvmRows.length) data.boaTotal = Math.round(kvmRows.reduce((s, r) => s + r.kvm, 0) * 100) / 100;
   if(prisRows.length){
     if(!Array.isArray(data.intakter)) data.intakter = [];
