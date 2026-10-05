@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005142616';
+const APP_BUILD = '20261005143645';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1709,6 +1709,19 @@ async function openEkonomiProjektBudget(project){
   if(detail._strukturNy){
     delete detail._strukturNy;
     try{ await saveEkonomiBudgetDetalj(); }catch(e){}
+  }
+  // Reskontrarader som matchar en faktura i Mark kategoriseras automatiskt
+  // på samma post (gatukostnad/vattenanslutning) - de räknas ändå bara en gång.
+  let autoKat = 0;
+  (companyEkonomiData.reskontra[project.id] || []).forEach(line => {
+    if(line.kategori) return;
+    const dub = ekonomiReskontraMarkDubblett(project.id, line);
+    if(!dub) return;
+    const post = ekonomiMarkPostFor(project.id, dub.typ === 'vattenanslutning' ? 'vattenanslutning' : 'gatukostnad', true);
+    if(post){ line.kategori = post.namn; autoKat++; }
+  });
+  if(autoKat){
+    try{ await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); await saveEkonomiBudgetDetalj(); }catch(e){}
   }
   renderEkonomiProjektBudget();
 }
