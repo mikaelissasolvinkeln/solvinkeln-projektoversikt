@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005142146';
+const APP_BUILD = '20261005142616';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1502,22 +1502,98 @@ function ekonomiMarkPostFor(pid, key, create){
   return post;
 }
 // Tagna kostnader per post-id: reskontra (kategoriserade rader) + Mark.
+// Fakturor som lästs in under Mark (gatukostnad/vattenanslutning). En
+// reskontrarad med exakt samma belopp (±1 kr) räknas som samma faktura och
+// tas inte med en gång till i tagna kostnader.
+function ekonomiMarkFakturor(pid){
+  const out = [];
+  (companyEkonomiData.mark[pid] || []).forEach(f => (f.fakturor || []).forEach(fk => {
+    out.push({ belopp: fk.belopp || 0, fakturanummer: fk.fakturanummer || '', leverantor: fk.leverantor || '', typ: fk.typ, fastighet: f.fastighetsbeteckning || '' });
+  }));
+  return out;
+}
+function ekonomiReskontraMarkDubblett(pid, line){
+  const v = ekonomiLedgerAmount(line);
+  if(!v) return null;
+  return ekonomiMarkFakturor(pid).find(fk => Math.abs((fk.belopp || 0) - v) <= 1) || null;
+}
+// Tagna kostnader per post-id: {reskontra, mark, items[]} där items är
+// specifikationen (varje reskontrarad och varje Mark-belopp) som ligger bakom.
 function ekonomiBudgetTagna(pid){
   const map = {};
-  const add = (post, key, v) => {
-    if(!post || !v) return;
-    if(!map[post.id]) map[post.id] = { reskontra: 0, mark: 0 };
-    map[post.id][key] += v;
+  const entry = post => {
+    if(!map[post.id]) map[post.id] = { reskontra: 0, mark: 0, items: [] };
+    return map[post.id];
   };
   (companyEkonomiData.reskontra[pid] || []).forEach(line => {
     if(!line.kategori) return;
-    add(ekonomiBudgetFindPost(pid, line.kategori), 'reskontra', ekonomiLedgerAmount(line));
+    const post = ekonomiBudgetFindPost(pid, line.kategori);
+    if(!post) return;
+    const v = ekonomiLedgerAmount(line);
+    const dub = ekonomiReskontraMarkDubblett(pid, line);
+    const e = entry(post);
+    if(dub){
+      e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—'), belopp: v, dubblett: 'Finns även i Mark (faktura ' + (dub.fakturanummer || '?') + ', ' + (dub.fastighet || '') + ') - räknas en gång' });
+      return;
+    }
+    e.reskontra += v;
+    e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—') + (line.justeratBelopp != null ? ' · justerat från ' + formatKrFull(line.belopp || 0) : ''), belopp: v });
   });
+  const fastigheter = companyEkonomiData.mark[pid] || [];
   const ms = ekonomiMarkSums(pid);
-  add(ekonomiMarkPostFor(pid, 'forvarv', !!ms.forvarv), 'mark', ms.forvarv);
-  add(ekonomiMarkPostFor(pid, 'gatukostnad', !!ms.gatukostnad), 'mark', ms.gatukostnad);
-  add(ekonomiMarkPostFor(pid, 'vattenanslutning', !!ms.vattenanslutning), 'mark', ms.vattenanslutning);
+  const addMark = (key, total, describe) => {
+    if(!total) return;
+    const post = ekonomiMarkPostFor(pid, key, true);
+    if(!post) return;
+    const e = entry(post);
+    e.mark += total;
+    fastigheter.forEach(f => describe(f).forEach(it => e.items.push(it)));
+  };
+  addMark('forvarv', ms.forvarv, f => {
+    const v = (f.forvarvspris || 0) + (f.aktiekop || 0);
+    return v ? [{ typ: 'mark', text: 'Förvärv ' + (f.fastighetsbeteckning || 'fastighet') + ((f.aktiekop || 0) ? ' (fastighet ' + formatKrFull(f.forvarvspris || 0) + ' + aktier ' + formatKrFull(f.aktiekop || 0) + ')' : ''), belopp: v }] : [];
+  });
+  addMark('gatukostnad', ms.gatukostnad, f => {
+    const fakt = (f.fakturor || []).filter(fk => fk.typ === 'gatukostnad');
+    if(fakt.length) return fakt.map(fk => ({ typ: 'mark', text: 'Gatukostnad ' + (f.fastighetsbeteckning || '') + ' · faktura ' + (fk.fakturanummer || '?') + (fk.leverantor ? ' · ' + fk.leverantor : ''), belopp: fk.belopp || 0 }));
+    return (f.gatukostnad || 0) ? [{ typ: 'mark', text: 'Gatukostnad ' + (f.fastighetsbeteckning || '') + ' (inlagt belopp)', belopp: f.gatukostnad }] : [];
+  });
+  addMark('vattenanslutning', ms.vattenanslutning, f => {
+    const fakt = (f.fakturor || []).filter(fk => fk.typ === 'vattenanslutning');
+    if(fakt.length) return fakt.map(fk => ({ typ: 'mark', text: 'Vattenanslutning ' + (f.fastighetsbeteckning || '') + ' · faktura ' + (fk.fakturanummer || '?') + (fk.leverantor ? ' · ' + fk.leverantor : ''), belopp: fk.belopp || 0 }));
+    return (f.vattenanslutning || 0) ? [{ typ: 'mark', text: 'Vattenanslutning ' + (f.fastighetsbeteckning || '') + ' (inlagt belopp)', belopp: f.vattenanslutning }] : [];
+  });
   return map;
+}
+// Popup med specifikationen bakom en posts tagna kostnader.
+function showEkonomiTagnaSpec(postNamn, t){
+  const old = document.getElementById('ekoTagnaSpecPopup');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ekoTagnaSpecPopup';
+  overlay.className = 'modal-overlay open';
+  const items = (t && t.items) || [];
+  const rowsHtml = items.length ? items.map(it =>
+    '<div style="display:flex; justify-content:space-between; gap:14px; padding:7px 0; border-bottom:1px solid var(--line-soft);' + (it.dubblett ? ' opacity:0.55;' : '') + '">' +
+      '<div style="min-width:0;"><div style="font-size:13px;">' + (it.typ === 'mark' ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Mark</span>' : '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--ink); color:#fff; margin-right:6px;">Reskontra' + (it.lopnr ? ' ' + escapeHtml(String(it.lopnr)) : '') + '</span>') + escapeHtml(it.text) + '</div>' +
+      (it.dubblett ? '<div style="font-size:11px; color:var(--danger);">' + escapeHtml(it.dubblett) + '</div>' : '') + '</div>' +
+      '<div style="font-family:\'JetBrains Mono\',monospace; white-space:nowrap; font-size:13px;' + (it.dubblett ? ' text-decoration:line-through;' : '') + '">' + formatKrFull(it.belopp || 0) + '</div>' +
+    '</div>'
+  ).join('') : '<p class="eko-sub">Inga fakturor eller Mark-belopp bakom den här posten.</p>';
+  const total = (t ? t.reskontra + t.mark : 0);
+  overlay.innerHTML = '<div class="modal-box" style="max-width:600px;">' +
+    '<h3>' + escapeHtml(postNamn) + '</h3>' +
+    '<p class="modal-sub">Specifikation av tagna kostnader: reskontrarader kategoriserade på posten samt belopp från Mark-fliken.</p>' +
+    '<div style="max-height:50vh; overflow:auto;">' + rowsHtml + '</div>' +
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:10px 0 0; font-weight:700;"><span>Tagna kostnader' + (t && t.reskontra && t.mark ? ' <span style="font-weight:400; font-size:11px; color:var(--ink-soft);">(reskontra ' + formatKrFull(t.reskontra) + ' + Mark ' + formatKrFull(t.mark) + ')</span>' : '') + '</span><span style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(total) + '</span></div>' +
+    '<div class="modal-actions" style="margin-top:14px;"><button type="button" id="ekoTagnaSpecClose" style="background:var(--ink); color:#fff;">Stäng</button></div>' +
+  '</div>';
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  document.getElementById('ekoTagnaSpecClose').onclick = close;
 }
 function ekonomiProjectBudgetTotals(projectId){
   const posts = ekonomiBudgetPosts(projectId).map(x => x.post);
@@ -1972,11 +2048,27 @@ function renderEkonomiProjektBudget(){
       '<td style="text-align:left; padding-left:' + indent + 'px; color:var(--ink);"></td>' +
       '<td style="color:var(--ink);"></td>' +
       '<td style="color:var(--ink-soft);">' + formatKrPerKvm(budget, kvm) + '</td>' +
-      '<td style="color:var(--ink);">' + formatKrFull(utfall) + (t.mark ? '<div style="font-size:10px; color:var(--ink-soft);">varav från Mark ' + formatKrFull(t.mark) + '</div>' : '') + '</td>' +
+      '<td style="color:var(--ink);"></td>' +
       '<td style="color:var(--ink-soft);">' + formatKrPerKvm(utfall, kvm) + '</td>' +
       diffCell(budget, utfall);
     // Underposter ett steg mindre än grupprubrikerna (cellernas egen CSS slår annars igenom).
     [...row.children].forEach(td => { td.style.fontSize = '12px'; td.style.fontWeight = '400'; });
+    // Tagna kostnader: klick visar specifikationen (fakturor + Mark-belopp).
+    const tagnaSpan = document.createElement('span');
+    tagnaSpan.textContent = formatKrFull(utfall);
+    if(utfall || (t.items && t.items.length)){
+      tagnaSpan.className = 'editable';
+      tagnaSpan.style.cursor = 'pointer';
+      tagnaSpan.title = 'Klicka för specifikation';
+      tagnaSpan.onclick = () => showEkonomiTagnaSpec(post.namn, t);
+    }
+    row.children[3].appendChild(tagnaSpan);
+    if(t.mark){
+      const m = document.createElement('div');
+      m.style.cssText = 'font-size:10px; color:var(--ink-soft);';
+      m.textContent = 'varav från Mark ' + formatKrFull(t.mark);
+      row.children[3].appendChild(m);
+    }
     const nameWrap = row.children[0];
     const nameSpan = document.createElement('span');
     nameSpan.textContent = post.namn;
@@ -2208,25 +2300,41 @@ function renderEkonomiReskontraTable(){
       '<td>' + escapeHtml(line.lopnr || '') + '</td>' +
       '<td>' + escapeHtml(line.leverantor || '—') + '</td>' +
       '<td>' + escapeHtml(line.fakturadatum || '—') + '</td>' +
-      '<td>' + formatMSEK(line.belopp || 0) + '</td>' +
       '<td></td>' +
       '<td></td>';
 
+    // En beloppskolumn i kr: redigerbar (justerat belopp). Är beloppet justerat
+    // visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
     const adjustInput = document.createElement('input');
     adjustInput.type = 'number';
     adjustInput.className = 'eko-inline-input';
-    adjustInput.placeholder = String(line.belopp || 0);
-    adjustInput.value = line.justeratBelopp != null ? line.justeratBelopp : '';
-    adjustInput.onchange = () => saveEkonomiReskontraLine(line.lopnr, {
-      justeratBelopp: adjustInput.value === '' ? null : (parseFloat(adjustInput.value) || 0)
-    });
-    row.children[4].appendChild(adjustInput);
+    adjustInput.value = ekonomiLedgerAmount(line);
+    adjustInput.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Ändra här om bara en del ska räknas (t.ex. utan amortering).';
+    adjustInput.onchange = () => {
+      const raw = adjustInput.value.trim();
+      const v = raw === '' ? null : (parseFloat(raw.replace(',', '.')) || 0);
+      saveEkonomiReskontraLine(line.lopnr, { justeratBelopp: (v == null || v === (line.belopp || 0)) ? null : v });
+    };
+    row.children[3].appendChild(adjustInput);
+    if(line.justeratBelopp != null){
+      const orig = document.createElement('div');
+      orig.style.cssText = 'font-size:10px; color:var(--ink-soft); text-align:right;';
+      orig.textContent = 'inläst ' + formatKrFull(line.belopp || 0);
+      row.children[3].appendChild(orig);
+    }
+    const dub = ekonomiReskontraMarkDubblett(pid, line);
+    if(dub){
+      const d = document.createElement('div');
+      d.style.cssText = 'font-size:10px; color:var(--danger); text-align:right;';
+      d.textContent = 'även i Mark (faktura ' + (dub.fakturanummer || '?') + ') - räknas en gång';
+      row.children[3].appendChild(d);
+    }
 
     const select = document.createElement('select');
     select.className = 'eko-inline-select';
     select.innerHTML = ekonomiBudgetKategoriOptions(pid, line.kategori);
     select.onchange = () => saveEkonomiReskontraLine(line.lopnr, { kategori: select.value || null });
-    row.children[5].appendChild(select);
+    row.children[4].appendChild(select);
 
     tbody.appendChild(row);
   });
