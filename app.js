@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005163151';
+const APP_BUILD = '20261005163544';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2682,7 +2682,11 @@ function ekoVerExcelParse(wb){
       });
       const ok = cols.ver >= 0 && (cols.belopp >= 0 || cols.debet >= 0);
       if(!ok) continue;
-      const byVer = new Map();
+      // En rad i filen = en kostnadsrad i listan (så varje rad kan sorteras och
+      // kategoriseras för sig). Upprepas ett verifikationsnummer får raderna
+      // suffix #2, #3 ... så att de får unika nummer och inte läses in dubbelt.
+      const list = [];
+      const seen = {};
       for(let i = r + 1; i < grid.length; i++){
         const rr = grid[i] || [];
         const ver = rr[cols.ver] != null ? String(rr[cols.ver]).trim() : '';
@@ -2695,15 +2699,16 @@ function ekoVerExcelParse(wb){
         } else {
           amount = num(rr[cols.belopp]);
         }
-        if(amount == null) continue;
-        const e = byVer.get(ver) || { vernr: ver, datum: '', leverantor: '', pos: 0, neg: 0, rows: 0 };
-        if(!e.datum && cols.datum >= 0) e.datum = toDate(rr[cols.datum]);
-        if(!e.leverantor && cols.lev >= 0 && rr[cols.lev] != null) e.leverantor = String(rr[cols.lev]).trim();
-        if(amount > 0) e.pos += amount; else e.neg += -amount;
-        e.rows++;
-        byVer.set(ver, e);
+        if(amount == null || amount === 0) continue;
+        seen[ver] = (seen[ver] || 0) + 1;
+        list.push({
+          vernr: ver,
+          key: ver + (seen[ver] > 1 ? '#' + seen[ver] : ''),
+          datum: cols.datum >= 0 ? toDate(rr[cols.datum]) : '',
+          leverantor: cols.lev >= 0 && rr[cols.lev] != null ? String(rr[cols.lev]).trim() : '',
+          belopp: Math.round(amount * 100) / 100
+        });
       }
-      const list = [...byVer.values()].map(e => ({ vernr: e.vernr, datum: e.datum, leverantor: e.leverantor, belopp: Math.round((e.rows > 1 ? e.pos : (e.pos - e.neg)) * 100) / 100, rader: e.rows }));
       if(list.length && (!best || list.length > best.list.length)) best = { list, cols, sheet: name };
       break;
     }
@@ -2726,13 +2731,13 @@ document.getElementById('ekoVerExcelInput').addEventListener('change', async (e)
     if(!parsed || !parsed.list.length) throw new Error('Hittade inga verifikationer. Kontrollera att filen har kolumner för verifikationsnummer och belopp (eller debet/kredit).');
     const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
     const existing = new Set(lines.map(l => String(l.lopnr)));
-    const bySupplierName = new Set(lines.filter(l => l.manuell).map(l => l.vernr));
     let added = 0, skipped = 0, zero = 0;
     parsed.list.forEach(v => {
-      const lopnr = 'M:' + v.vernr;
-      if(existing.has(lopnr) || bySupplierName.has(v.vernr)){ skipped++; return; }
+      const lopnr = 'M:' + v.key;
+      if(existing.has(lopnr)){ skipped++; return; }
       if(!v.belopp){ zero++; return; }
-      lines.push({ lopnr, vernr: v.vernr, manuell: true, leverantor: v.leverantor || '', fakturadatum: v.datum || '', forfallodatum: v.datum || '', belopp: v.belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name });
+      lines.push({ lopnr, vernr: v.key, manuell: true, leverantor: v.leverantor || '', fakturadatum: v.datum || '', forfallodatum: v.datum || '', belopp: v.belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name });
+      existing.add(lopnr);
       added++;
     });
     await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
