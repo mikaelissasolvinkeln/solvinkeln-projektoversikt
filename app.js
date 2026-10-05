@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005145443';
+const APP_BUILD = '20261005153653';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2413,7 +2413,8 @@ function renderEkonomiReskontraTable(){
       const rest = ekonomiLedgerAmount(line) - sum;
       const box = document.createElement('div');
       box.style.cssText = 'font-size:12px; line-height:1.4;';
-      box.innerHTML = parts.map(p => '<div>' + escapeHtml(p.kategori) + ' <span style="font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + formatKrFull(p.belopp) + '</span></div>').join('') +
+      const exOf = p => { const src = (line.fordelning || []).find(f => f.kategori === p.kategori && f.belopp === p.belopp); return src && src.exMoms != null ? src.exMoms : null; };
+      box.innerHTML = parts.map(p => '<div>' + escapeHtml(p.kategori) + ' <span style="font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + formatKrFull(p.belopp) + (exOf(p) != null ? ' <span style="font-size:10px;">(' + formatKrFull(exOf(p)) + ' ex moms)</span>' : '') + '</span></div>').join('') +
         (Math.abs(rest) > 0.5 ? '<div style="color:var(--danger);">Ej fördelat ' + formatKrFull(rest) + '</div>' : '');
       katTd.appendChild(box);
     } else {
@@ -2462,13 +2463,18 @@ function openEkonomiFordelaModal(pid, line){
   const old = document.getElementById('ekoFordelaPopup');
   if(old) old.remove();
   const total = ekonomiLedgerAmount(line);
-  let rows = ekonomiLineIsSplit(line) ? line.fordelning.map(p => ({ kategori: p.kategori || '', belopp: p.belopp })) : [{ kategori: line.kategori || '', belopp: total }, { kategori: '', belopp: null }];
+  const MOMS = 1.25;
+  const r2 = v => Math.round(v * 100) / 100;
+  let rows = ekonomiLineIsSplit(line)
+    ? line.fordelning.map(p => ({ kategori: p.kategori || '', belopp: p.belopp, exMoms: p.exMoms != null ? p.exMoms : (p.belopp != null ? r2(p.belopp / MOMS) : null) }))
+    : [{ kategori: line.kategori || '', belopp: total, exMoms: r2(total / MOMS) }, { kategori: '', belopp: null, exMoms: null }];
   const overlay = document.createElement('div');
   overlay.id = 'ekoFordelaPopup';
   overlay.className = 'modal-overlay open';
   overlay.innerHTML = '<div class="modal-box" style="max-width:620px;">' +
     '<h3>Fördela faktura ' + escapeHtml(String(line.lopnr || '')) + '</h3>' +
-    '<p class="modal-sub">' + escapeHtml(line.leverantor || '') + ' · ' + escapeHtml(line.fakturadatum || '') + ' · ' + formatKrFull(total) + '. Välj post och belopp per rad tills hela fakturan är fördelad.</p>' +
+    '<p class="modal-sub">' + escapeHtml(line.leverantor || '') + ' · ' + escapeHtml(line.fakturadatum || '') + ' · ' + formatKrFull(total) + ' inkl. moms. Skriv beloppet exkl. moms per post så läggs 25 % moms på automatiskt (eller skriv inkl. moms direkt), tills hela fakturan är fördelad.</p>' +
+    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:4px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft);"><span style="flex:1;">Post</span><span style="width:120px; text-align:right;">Exkl. moms</span><span style="width:120px; text-align:right;">Inkl. moms</span><span style="width:46px;"></span><span style="width:22px;"></span></div>' +
     '<div id="ekoFordelaRows"></div>' +
     '<button type="button" id="ekoFordelaAdd" class="add-inline-btn" style="margin-top:6px;">+ Lägg till rad</button>' +
     '<div id="ekoFordelaRest" style="margin-top:12px; font-family:\'JetBrains Mono\',monospace; font-size:13px;"></div>' +
@@ -2495,25 +2501,46 @@ function openEkonomiFordelaModal(pid, line){
       sel.style.flex = '1';
       sel.innerHTML = ekonomiBudgetKategoriOptions(pid, r.kategori, 'Välj post…');
       sel.onchange = () => { r.kategori = sel.value; };
+      const numStyle = 'width:120px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-family:\'JetBrains Mono\',monospace;';
+      // Exkl. moms: det man oftast har framför sig - momsen (25 %) läggs på automatiskt.
+      const exInp = document.createElement('input');
+      exInp.type = 'number';
+      exInp.step = 'any';
+      exInp.placeholder = 'exkl. moms';
+      exInp.value = r.exMoms != null ? r.exMoms : '';
+      exInp.style.cssText = numStyle;
       const inp = document.createElement('input');
       inp.type = 'number';
       inp.step = 'any';
-      inp.placeholder = 'kr';
+      inp.placeholder = 'inkl. moms';
       inp.value = r.belopp != null ? r.belopp : '';
-      inp.style.cssText = 'width:140px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-family:\'JetBrains Mono\',monospace;';
-      inp.oninput = () => { const raw = inp.value.trim(); r.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.')); updateRest(); };
+      inp.style.cssText = numStyle + ' font-weight:700;';
+      exInp.oninput = () => {
+        const raw = exInp.value.trim();
+        r.exMoms = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        r.belopp = r.exMoms != null && !isNaN(r.exMoms) ? r2(r.exMoms * MOMS) : null;
+        inp.value = r.belopp != null ? r.belopp : '';
+        updateRest();
+      };
+      inp.oninput = () => {
+        const raw = inp.value.trim();
+        r.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        r.exMoms = r.belopp != null && !isNaN(r.belopp) ? r2(r.belopp / MOMS) : null;
+        exInp.value = r.exMoms != null ? r.exMoms : '';
+        updateRest();
+      };
       const restBtn = document.createElement('button');
       restBtn.type = 'button';
       restBtn.textContent = 'resten';
-      restBtn.title = 'Lägg det som är kvar på den här raden';
-      restBtn.style.cssText = 'font-size:11px; padding:3px 7px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
-      restBtn.onclick = () => { const other = rows.reduce((s, x, j) => s + (j === i ? 0 : (x.belopp || 0)), 0); r.belopp = Math.round((total - other) * 100) / 100; inp.value = r.belopp; updateRest(); };
+      restBtn.title = 'Lägg det som är kvar (inkl. moms) på den här raden';
+      restBtn.style.cssText = 'font-size:11px; padding:3px 7px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft); width:46px;';
+      restBtn.onclick = () => { const other = rows.reduce((s, x, j) => s + (j === i ? 0 : (x.belopp || 0)), 0); r.belopp = r2(total - other); r.exMoms = r2(r.belopp / MOMS); inp.value = r.belopp; exInp.value = r.exMoms; updateRest(); };
       const del = document.createElement('button');
       del.type = 'button';
       del.textContent = '✕';
-      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
-      del.onclick = () => { rows.splice(i, 1); if(!rows.length) rows.push({ kategori: '', belopp: null }); render(); };
-      div.appendChild(sel); div.appendChild(inp); div.appendChild(restBtn); div.appendChild(del);
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; width:22px; padding:0;';
+      del.onclick = () => { rows.splice(i, 1); if(!rows.length) rows.push({ kategori: '', belopp: null, exMoms: null }); render(); };
+      div.appendChild(sel); div.appendChild(exInp); div.appendChild(inp); div.appendChild(restBtn); div.appendChild(del);
       rowsEl.appendChild(div);
     });
     updateRest();
@@ -2523,7 +2550,7 @@ function openEkonomiFordelaModal(pid, line){
   const onKey = e => { if(e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
-  overlay.querySelector('#ekoFordelaAdd').onclick = () => { rows.push({ kategori: '', belopp: null }); render(); };
+  overlay.querySelector('#ekoFordelaAdd').onclick = () => { rows.push({ kategori: '', belopp: null, exMoms: null }); render(); };
   overlay.querySelector('#ekoFordelaCancel').onclick = close;
   overlay.querySelector('#ekoFordelaRemove').onclick = async () => {
     close();
@@ -2539,7 +2566,7 @@ function openEkonomiFordelaModal(pid, line){
     if(valid.length === 1 && Math.abs(rest) <= 0.5){
       await saveEkonomiReskontraLine(line.lopnr, { kategori: valid[0].kategori, fordelning: null });
     } else {
-      await saveEkonomiReskontraLine(line.lopnr, { kategori: null, fordelning: valid.map(r => ({ kategori: r.kategori, belopp: r.belopp })) });
+      await saveEkonomiReskontraLine(line.lopnr, { kategori: null, fordelning: valid.map(r => ({ kategori: r.kategori, belopp: r.belopp, exMoms: r.exMoms != null ? r.exMoms : r2(r.belopp / MOMS) })) });
     }
   };
 }
