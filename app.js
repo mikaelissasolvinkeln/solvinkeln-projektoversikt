@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005094747';
+const APP_BUILD = '20261005095805';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3999,6 +3999,23 @@ function renderNyaProjektDetail(){
   if(data.bild && data.bild.base64){
     bildWrap.style.display = 'block';
     document.getElementById('nyaProjektBildPreview').src = 'data:' + data.bild.mimetype + ';base64,' + data.bild.base64;
+    // Äldre, stora bilder minskas automatiskt en gång när kalkylen öppnas.
+    if(nyaProjektBildBytes(data.bild) > NYA_PROJEKT_BILD_MAL_BYTES * 2 && !data.bild.__minskas){
+      data.bild.__minskas = true;
+      const before = nyaProjektBildBytes(data.bild);
+      nyaProjektCompressImage('data:' + data.bild.mimetype + ';base64,' + data.bild.base64).then(async packed => {
+        const c = nyaProjektList.find(x => x.id === candidate.id);
+        if(!c || !c.data.bild) return;
+        c.data.bild = { mimetype: packed.mimetype, base64: packed.base64, namn: (c.data.bild.namn || 'bild').replace(/\.[^.]+$/, '') + '.jpg' };
+        await DB.updateNyaProjekt(c.id, { data: c.data });
+        const statusEl = document.getElementById('nyaProjektBildStatus');
+        if(statusEl && currentNyaProjektId === c.id){
+          statusEl.textContent = 'Bilden minskades automatiskt: ' + formatKB(before) + ' → ' + formatKB(packed.bytes) + '.';
+          statusEl.className = 'contract-upload-status ok';
+          document.getElementById('nyaProjektBildPreview').src = 'data:' + packed.mimetype + ';base64,' + packed.base64;
+        }
+      }).catch(() => { delete data.bild.__minskas; });
+    }
   } else {
     bildWrap.style.display = 'none';
   }
@@ -4117,6 +4134,46 @@ document.getElementById('nyaProjektBildUploadBtn').onclick = () => {
 };
 // Bilden kan komma från filväljaren, dras och släppas på rutan, eller
 // klistras in (Ctrl+V) - alla vägar går via samma funktion.
+// Bilder minskas i webbläsaren innan de sparas: max 1600 px på längsta sidan,
+// JPEG med sänkt kvalitet tills de ryms under ~350 kB. Propån visar dem i
+// max ~800 px bredd, så inget syns på skärmen men databasraden hålls liten.
+const NYA_PROJEKT_BILD_MAX_SIDA = 1600;
+const NYA_PROJEKT_BILD_MAL_BYTES = 350 * 1024;
+const NYA_PROJEKT_BILD_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+function nyaProjektLoadImage(src){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Kunde inte läsa bilden'));
+    img.src = src;
+  });
+}
+async function nyaProjektCompressImage(src){
+  const img = await nyaProjektLoadImage(src);
+  const scale = Math.min(1, NYA_PROJEKT_BILD_MAX_SIDA / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  let quality = 0.85;
+  let dataUrl = canvas.toDataURL('image/jpeg', quality);
+  // Sänk kvaliteten stegvis tills bilden ryms under målstorleken.
+  while(dataUrl.length * 0.75 > NYA_PROJEKT_BILD_MAL_BYTES && quality > 0.5){
+    quality -= 0.1;
+    dataUrl = canvas.toDataURL('image/jpeg', quality);
+  }
+  return { mimetype: 'image/jpeg', base64: dataUrl.split(',')[1], width: w, height: h, bytes: Math.round(dataUrl.length * 0.75) };
+}
+function nyaProjektBildBytes(bild){
+  return bild && bild.base64 ? Math.round(bild.base64.length * 0.75) : 0;
+}
+function formatKB(bytes){
+  return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' MB' : Math.round(bytes / 1024) + ' kB';
+}
 async function nyaProjektHandleBildFile(file){
   if(!file) return;
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
@@ -4127,18 +4184,20 @@ async function nyaProjektHandleBildFile(file){
     statusEl.className = 'contract-upload-status err';
     return;
   }
-  if(file.size > NYA_PROJEKT_FILE_MAX_BYTES){
-    statusEl.textContent = 'Bilden är för stor (max 4 MB).';
+  if(file.size > NYA_PROJEKT_BILD_UPLOAD_MAX_BYTES){
+    statusEl.textContent = 'Bilden är för stor (max 25 MB).';
     statusEl.className = 'contract-upload-status err';
     return;
   }
-  statusEl.textContent = 'Laddar upp…';
+  statusEl.textContent = 'Minskar och laddar upp…';
   statusEl.className = 'contract-upload-status';
   try{
-    const base64 = await fileToBase64(file);
-    candidate.data.bild = { mimetype: file.type || 'image/jpeg', base64, namn: file.name || 'bild' };
+    const original = await fileToBase64(file);
+    const packed = await nyaProjektCompressImage('data:' + (file.type || 'image/jpeg') + ';base64,' + original);
+    candidate.data.bild = { mimetype: packed.mimetype, base64: packed.base64, namn: (file.name || 'bild').replace(/\.[^.]+$/, '') + '.jpg' };
     await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
-    statusEl.textContent = '';
+    statusEl.textContent = 'Bilden sparad: ' + formatKB(file.size) + ' → ' + formatKB(packed.bytes) + ' (' + packed.width + '×' + packed.height + ' px).';
+    statusEl.className = 'contract-upload-status ok';
     renderNyaProjektDetail();
   }catch(err){
     statusEl.textContent = 'Kunde inte ladda upp bilden: ' + (err && err.message ? err.message : err);
