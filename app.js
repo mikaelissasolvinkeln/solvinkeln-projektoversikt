@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005141635';
+const APP_BUILD = '20261005141841';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1964,7 +1964,6 @@ function renderEkonomiProjektBudget(){
       diffCell(budget, utfall);
     // Underposter ett steg mindre än grupprubrikerna (cellernas egen CSS slår annars igenom).
     [...row.children].forEach(td => { td.style.fontSize = '12px'; td.style.fontWeight = '400'; });
-    row.appendChild(actTd);
     const nameWrap = row.children[0];
     const nameSpan = document.createElement('span');
     nameSpan.textContent = post.namn;
@@ -1998,7 +1997,8 @@ function renderEkonomiProjektBudget(){
     nameWrap.appendChild(nameSpan);
     // ✕ i kolumnen längst till höger.
     const actTd = document.createElement('td');
-    actTd.style.cssText = 'text-align:right; white-space:nowrap;';
+    actTd.style.cssText = 'text-align:right; white-space:nowrap; font-size:12px;';
+    row.appendChild(actTd);
     const del = document.createElement('button');
     del.type = 'button';
     del.textContent = '✕';
