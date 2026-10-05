@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005132645';
+const APP_BUILD = '20261005132833';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1472,13 +1472,34 @@ function ekonomiMarkSums(pid){
     return acc;
   }, { forvarv: 0, gatukostnad: 0, vattenanslutning: 0 });
 }
-function ekonomiMarkPostFor(pid, key){
+// Posten som Mark-flikens belopp ska landa på. Generiska namn ("Mark",
+// "Markförvärv", "Gatukostnad", "VA-anslutning") föredras; projektspecifika
+// namn från mallen (t.ex. "Mark - Stensättningen 5") används inte för andra
+// projekt - då skapas en egen post i rätt grupp i stället.
+function ekonomiMarkPostFor(pid, key, create){
+  const struktur = ekonomiBudgetStruktur(pid);
   const posts = ekonomiBudgetPosts(pid).map(x => x.post);
-  const re = EKONOMI_MARK_POST_REGEX[key];
-  if(key === 'forvarv'){
-    return posts.find(p => re.test(p.namn) && !/arbete|entreprenad|finansiering/i.test(p.namn)) || null;
+  const n = s => nyaProjektNormName(s);
+  const exactNames = key === 'forvarv' ? ['mark', 'markförvärv', 'markforvarv', 'anskaffningskostnad mark', 'fastighet', 'fastighetsförvärv']
+    : key === 'gatukostnad' ? ['gatukostnad', 'gatukostnadsersättning', 'gatukostnader', 'kommun avgifter']
+    : ['va-anslutning', 'vaanslutning', 'va anslutningar', 'vattenanslutning', 'va'];
+  let hit = posts.find(p => exactNames.map(n).includes(n(p.namn)));
+  if(!hit && key !== 'forvarv'){
+    const re = EKONOMI_MARK_POST_REGEX[key];
+    hit = posts.find(p => re.test(p.namn) && !/ - /.test(p.namn)) || null;
   }
-  return posts.find(p => re.test(p.namn)) || null;
+  if(hit || !create) return hit || null;
+  // Skapa posten: förvärv i markgruppen, övriga under Byggherrekostnader › Anslutningar om den finns.
+  const namn = key === 'forvarv' ? 'Markförvärv' : key === 'gatukostnad' ? 'Gatukostnad' : 'VA-anslutning';
+  let group = struktur.kostnadsgrupper.find(g => (key === 'forvarv' ? /anskaffning|^mark/i : /byggherre/i).test(g.grupp)) || struktur.kostnadsgrupper[0];
+  if(!group){
+    group = { id: uid(), grupp: key === 'forvarv' ? 'Anskaffningskostnad mark' : 'Byggherrekostnader', underkategorier: [], poster: [] };
+    struktur.kostnadsgrupper.push(group);
+  }
+  const uk = key === 'forvarv' ? null : (group.underkategorier || []).find(u => /anslutning/i.test(u.namn)) || null;
+  const post = { id: uid(), namn, budget: null, underkategori: uk ? uk.id : null, franMark: true };
+  group.poster.push(post);
+  return post;
 }
 // Tagna kostnader per post-id: reskontra (kategoriserade rader) + Mark.
 function ekonomiBudgetTagna(pid){
@@ -1493,9 +1514,9 @@ function ekonomiBudgetTagna(pid){
     add(ekonomiBudgetFindPost(pid, line.kategori), 'reskontra', ekonomiLedgerAmount(line));
   });
   const ms = ekonomiMarkSums(pid);
-  add(ekonomiMarkPostFor(pid, 'forvarv'), 'mark', ms.forvarv);
-  add(ekonomiMarkPostFor(pid, 'gatukostnad'), 'mark', ms.gatukostnad);
-  add(ekonomiMarkPostFor(pid, 'vattenanslutning'), 'mark', ms.vattenanslutning);
+  add(ekonomiMarkPostFor(pid, 'forvarv', !!ms.forvarv), 'mark', ms.forvarv);
+  add(ekonomiMarkPostFor(pid, 'gatukostnad', !!ms.gatukostnad), 'mark', ms.gatukostnad);
+  add(ekonomiMarkPostFor(pid, 'vattenanslutning', !!ms.vattenanslutning), 'mark', ms.vattenanslutning);
   return map;
 }
 function ekonomiProjectBudgetTotals(projectId){
