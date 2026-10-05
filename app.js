@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005140209';
+const APP_BUILD = '20261005140340';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1955,15 +1955,15 @@ function renderEkonomiProjektBudget(){
     totalBudget += budget;
     totalUtfall += utfall;
     const row = document.createElement('tr');
-    row.style.fontSize = '11.5px';
-    row.style.color = 'var(--ink-soft)';
     row.innerHTML =
       '<td style="text-align:left; padding-left:' + indent + 'px; color:var(--ink);"></td>' +
       '<td style="color:var(--ink);"></td>' +
-      '<td>' + formatKrPerKvm(budget, kvm) + '</td>' +
+      '<td style="color:var(--ink-soft);">' + formatKrPerKvm(budget, kvm) + '</td>' +
       '<td style="color:var(--ink);">' + formatKrFull(utfall) + (t.mark ? '<div style="font-size:10px; color:var(--ink-soft);">varav från Mark ' + formatKrFull(t.mark) + '</div>' : '') + '</td>' +
-      '<td>' + formatKrPerKvm(utfall, kvm) + '</td>' +
+      '<td style="color:var(--ink-soft);">' + formatKrPerKvm(utfall, kvm) + '</td>' +
       diffCell(budget, utfall);
+    // Underposter ett steg mindre än grupprubrikerna (cellernas egen CSS slår annars igenom).
+    [...row.children].forEach(td => { td.style.fontSize = '12px'; td.style.fontWeight = '400'; });
     const nameWrap = row.children[0];
     const nameSpan = document.createElement('span');
     nameSpan.textContent = post.namn;
