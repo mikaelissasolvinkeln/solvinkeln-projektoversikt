@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005155357';
+const APP_BUILD = '20261005163151';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2634,6 +2634,118 @@ document.getElementById('ekonomiReskontraManuellBtn').onclick = () => {
     document.getElementById('ekoManuellVernr').focus();
   }
 };
+// Excel med verifikationer (A-serien) → manuella kostnader. Tolkas utan AI:
+// rubrikraden hittas på namn, en verifikation som är uppdelad på flera
+// konteringsrader slås ihop (belopp = summan av debet- eller positiva belopp).
+function ekoVerExcelParse(wb){
+  const isVer = h => /^ver|verifikat|vernr|ver\.?\s*nr|verifikationsnummer|^nr$|löpnr|serie/i.test(h);
+  const isDatum = h => /datum|date|bokf/i.test(h);
+  const isBelopp = h => /^belopp|summa|amount|totalt/i.test(h);
+  const isDebet = h => /debet|debit/i.test(h);
+  const isKredit = h => /kredit|credit/i.test(h);
+  const isLev = h => /leverant|motpart|text|beskrivning|benämning|namn|företag|kommentar/i.test(h);
+  const num = v => {
+    if(v == null || v === '') return null;
+    if(typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/\s|kr/gi, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  };
+  const toDate = v => {
+    if(v == null || v === '') return '';
+    if(v instanceof Date) return v.toISOString().slice(0, 10);
+    if(typeof v === 'number' && v > 20000 && v < 80000){ // Excel-serienummer
+      const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+      return d.toISOString().slice(0, 10);
+    }
+    const s = String(v).trim();
+    const m = s.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/) || s.match(/(\d{1,2})[-./](\d{1,2})[-./](\d{4})/);
+    if(!m) return s;
+    if(m[1].length === 4) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+    return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  };
+  let best = null;
+  wb.SheetNames.forEach(name => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null, raw: true });
+    for(let r = 0; r < Math.min(grid.length, 30); r++){
+      const row = grid[r] || [];
+      const cols = { ver: -1, datum: -1, belopp: -1, debet: -1, kredit: -1, lev: -1 };
+      row.forEach((cell, c) => {
+        const h = cell == null ? '' : String(cell).trim();
+        if(!h) return;
+        if(cols.ver < 0 && isVer(h)) cols.ver = c;
+        else if(cols.datum < 0 && isDatum(h)) cols.datum = c;
+        else if(cols.debet < 0 && isDebet(h)) cols.debet = c;
+        else if(cols.kredit < 0 && isKredit(h)) cols.kredit = c;
+        else if(cols.belopp < 0 && isBelopp(h)) cols.belopp = c;
+        else if(cols.lev < 0 && isLev(h)) cols.lev = c;
+      });
+      const ok = cols.ver >= 0 && (cols.belopp >= 0 || cols.debet >= 0);
+      if(!ok) continue;
+      const byVer = new Map();
+      for(let i = r + 1; i < grid.length; i++){
+        const rr = grid[i] || [];
+        const ver = rr[cols.ver] != null ? String(rr[cols.ver]).trim() : '';
+        if(!ver) continue;
+        let amount = null;
+        if(cols.debet >= 0){
+          const d = num(rr[cols.debet]) || 0;
+          const k = cols.kredit >= 0 ? (num(rr[cols.kredit]) || 0) : 0;
+          amount = d - k;
+        } else {
+          amount = num(rr[cols.belopp]);
+        }
+        if(amount == null) continue;
+        const e = byVer.get(ver) || { vernr: ver, datum: '', leverantor: '', pos: 0, neg: 0, rows: 0 };
+        if(!e.datum && cols.datum >= 0) e.datum = toDate(rr[cols.datum]);
+        if(!e.leverantor && cols.lev >= 0 && rr[cols.lev] != null) e.leverantor = String(rr[cols.lev]).trim();
+        if(amount > 0) e.pos += amount; else e.neg += -amount;
+        e.rows++;
+        byVer.set(ver, e);
+      }
+      const list = [...byVer.values()].map(e => ({ vernr: e.vernr, datum: e.datum, leverantor: e.leverantor, belopp: Math.round((e.rows > 1 ? e.pos : (e.pos - e.neg)) * 100) / 100, rader: e.rows }));
+      if(list.length && (!best || list.length > best.list.length)) best = { list, cols, sheet: name };
+      break;
+    }
+  });
+  return best;
+}
+document.getElementById('ekoVerExcelBtn').onclick = () => document.getElementById('ekoVerExcelInput').click();
+document.getElementById('ekoVerExcelInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiBudgetProjectId;
+  const statusEl = document.getElementById('ekoVerExcelStatus');
+  const setStatus = (msg, kind) => { statusEl.textContent = msg; statusEl.className = 'contract-upload-status' + (kind ? ' ' + kind : ''); };
+  if(!pid){ e.target.value = ''; return; }
+  setStatus('Läser filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const parsed = ekoVerExcelParse(wb);
+    if(!parsed || !parsed.list.length) throw new Error('Hittade inga verifikationer. Kontrollera att filen har kolumner för verifikationsnummer och belopp (eller debet/kredit).');
+    const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+    const existing = new Set(lines.map(l => String(l.lopnr)));
+    const bySupplierName = new Set(lines.filter(l => l.manuell).map(l => l.vernr));
+    let added = 0, skipped = 0, zero = 0;
+    parsed.list.forEach(v => {
+      const lopnr = 'M:' + v.vernr;
+      if(existing.has(lopnr) || bySupplierName.has(v.vernr)){ skipped++; return; }
+      if(!v.belopp){ zero++; return; }
+      lines.push({ lopnr, vernr: v.vernr, manuell: true, leverantor: v.leverantor || '', fakturadatum: v.datum || '', forfallodatum: v.datum || '', belopp: v.belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name });
+      added++;
+    });
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    const c = parsed.cols;
+    setStatus(added + ' verifikationer inlästa' + (skipped ? ', ' + skipped + ' fanns redan' : '') + (zero ? ', ' + zero + ' utan belopp hoppades över' : '') +
+      '. Kolumner: ver.nr=' + XLSX.utils.encode_col(c.ver) + (c.datum >= 0 ? ', datum=' + XLSX.utils.encode_col(c.datum) : '') + (c.debet >= 0 ? ', debet=' + XLSX.utils.encode_col(c.debet) + (c.kredit >= 0 ? '/kredit=' + XLSX.utils.encode_col(c.kredit) : '') : ', belopp=' + XLSX.utils.encode_col(c.belopp)) + (c.lev >= 0 ? ', leverantör=' + XLSX.utils.encode_col(c.lev) : ', leverantör saknas') + ' (blad ' + parsed.sheet + ').', added ? 'ok' : 'err');
+    renderEkonomiProjektBudget();
+  }catch(err){
+    setStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
+  }finally{
+    e.target.value = '';
+  }
+});
 document.getElementById('ekoManuellAvbryt').onclick = () => {
   document.getElementById('ekonomiReskontraManuellForm').style.display = 'none';
 };
