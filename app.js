@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005144523';
+const APP_BUILD = '20261005144946';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2342,6 +2342,7 @@ function renderEkonomiReskontraTable(){
     // Kryssruta för flerval (sätt kategori på många rader på en gång).
     const cb = document.createElement('input');
     cb.type = 'checkbox';
+    cb.style.cssText = 'width:16px; height:16px; cursor:pointer;';
     cb.checked = ekonomiReskontraSelection.has(key);
     cb.onchange = () => {
       if(cb.checked) ekonomiReskontraSelection.add(key); else ekonomiReskontraSelection.delete(key);
@@ -2349,6 +2350,14 @@ function renderEkonomiReskontraTable(){
       ekonomiReskontraUpdateBulkBar();
     };
     row.children[0].appendChild(cb);
+    // Klick var som helst på raden (utom på fält, rullista, belopp och leverantör)
+    // markerar/avmarkerar raden - kryssrutan är liten att pricka.
+    row.style.cursor = 'pointer';
+    row.onclick = (e) => {
+      if(e.target.closest('input, select, button, .editable')) return;
+      cb.checked = !cb.checked;
+      cb.onchange();
+    };
 
     // Leverantör: klick markerar alla rader från samma leverantör.
     const lev = document.createElement('span');
