@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005163544';
+const APP_BUILD = '20261005172335';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2406,6 +2406,17 @@ function renderEkonomiReskontraTable(){
       d.textContent = 'även i Mark (faktura ' + (dub.fakturanummer || '?') + ') - räknas en gång';
       row.children[4].appendChild(d);
     }
+    // Betalstatus: kryssruta "Obetald" (sätts automatiskt från reskontrans saldo, kan ändras för hand).
+    const obLabel = document.createElement('label');
+    obLabel.style.cssText = 'display:flex; justify-content:flex-end; align-items:center; gap:4px; font-size:10.5px; color:' + (ekonomiLineObetald(line) ? 'var(--danger)' : 'var(--ink-soft)') + '; cursor:pointer; margin-top:2px;';
+    const obCb = document.createElement('input');
+    obCb.type = 'checkbox';
+    obCb.checked = ekonomiLineObetald(line);
+    obCb.title = line.saldo != null ? 'Saldo enligt reskontran: ' + formatKrFull(line.saldo) : 'Ingen saldouppgift - markera för hand';
+    obCb.onchange = () => saveEkonomiReskontraLine(line.lopnr, { obetaldManuell: obCb.checked === (line.saldo != null && Math.abs(line.saldo) > 0.5) ? null : obCb.checked });
+    obLabel.appendChild(obCb);
+    obLabel.appendChild(document.createTextNode(ekonomiLineObetald(line) ? 'Obetald' + (line.saldo != null && Math.abs(line.saldo) > 0.5 ? ' (saldo ' + formatKrFull(line.saldo) + ')' : '') : 'Betald'));
+    row.children[4].appendChild(obLabel);
 
     const katTd = row.children[5];
     if(ekonomiLineIsSplit(line)){
@@ -2463,6 +2474,18 @@ function renderEkonomiReskontraTable(){
   const uncat = lines.filter(l => !ekonomiLineHandled(l));
   selAll.checked = uncat.length > 0 && uncat.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
   ekonomiReskontraUpdateBulkBar();
+}
+// Betalstatus: obetald om saldo > 0 enligt senaste reskontrainläsning, eller
+// om den markerats obetald manuellt (obetaldManuell). Manuell markering vinner.
+function ekonomiLineObetald(line){
+  if(line.obetaldManuell === true) return true;
+  if(line.obetaldManuell === false) return false;
+  return line.saldo != null && Math.abs(line.saldo) > 0.5;
+}
+// Månad (YYYY-MM) då en faktura väntas betalas / blev betald: förfallodatum, annars fakturadatum.
+function ekonomiLineManad(line){
+  const d = line.forfallodatum || line.fakturadatum || '';
+  return /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : null;
 }
 // En reskontrarad kan vara kategoriserad på EN post (kategori) eller fördelad
 // på flera (fordelning: [{kategori, belopp}]). Delarna är det som räknas.
@@ -3070,8 +3093,273 @@ async function renderEkonomiProjektLikviditet(){
       '<td class="' + saldoClass + '">' + formatMSEK(r.saldo) + '</td>';
     tbody.appendChild(row);
   });
+  renderEkonomiPrognos();
   await renderLikviditetsbudget();
 }
+
+// ---------- Likviditetsprognos från budgeten ----------
+// Per projekt: budgetDetalj[pid].prognos = { start:'YYYY-MM', manader:N,
+// celler:{ [postId]: { 'YYYY-MM': belopp } }, oppna:[groupId...] }.
+// IB = betalda tagna kostnader (reskontra ej obetalda + Mark) per post.
+// Prognos per månad = manuellt fördelat belopp + obetalda fakturor med
+// förfallomånad i den månaden. Utfall = kategoriserade betalda fakturor per månad.
+function ekonomiPrognosRec(pid){
+  const d = ekonomiBudgetDetail(pid);
+  if(!d.prognos) d.prognos = { start: '2026-10', manader: 24, celler: {}, oppna: [] };
+  if(!d.prognos.celler) d.prognos.celler = {};
+  if(!Array.isArray(d.prognos.oppna)) d.prognos.oppna = [];
+  if(!/^\d{4}-\d{2}$/.test(d.prognos.start || '')) d.prognos.start = '2026-10';
+  if(!d.prognos.manader || d.prognos.manader < 3) d.prognos.manader = 24;
+  return d.prognos;
+}
+function ekonomiPrognosMonths(start, n){
+  const [y0, m0] = start.split('-').map(Number);
+  const out = [];
+  for(let i = 0; i < n; i++){
+    const idx = (m0 - 1) + i;
+    const y = y0 + Math.floor(idx / 12);
+    const m = (idx % 12) + 1;
+    out.push(y + '-' + String(m).padStart(2, '0'));
+  }
+  return out;
+}
+function ekonomiPrognosShortLabel(m){
+  const [y, mo] = m.split('-').map(Number);
+  return MONTH_NAMES[mo - 1].slice(0, 3) + ' ' + String(y).slice(2);
+}
+// Beräknar per post: ib (betalt före start), obetalt per månad, utfall per månad.
+function ekonomiPrognosData(pid){
+  const prog = ekonomiPrognosRec(pid);
+  const months = ekonomiPrognosMonths(prog.start, prog.manader);
+  const monthSet = new Set(months);
+  const per = {}; // postId -> { ib, obetalt:{m:v}, utfall:{m:v}, obetaltItems:{m:[...]}, ibItems:[] }
+  const entry = id => per[id] || (per[id] = { ib: 0, obetalt: {}, utfall: {}, obetaltItems: {}, ibItems: [] });
+  (companyEkonomiData.reskontra[pid] || []).forEach(line => {
+    const parts = ekonomiLineParts(line);
+    if(!parts.length) return;
+    const split = ekonomiLineIsSplit(line);
+    if(!split && ekonomiReskontraMarkDubblett(pid, line)) return; // räknas via Mark
+    const obetald = ekonomiLineObetald(line);
+    const manad = ekonomiLineManad(line);
+    parts.forEach(part => {
+      const post = ekonomiBudgetFindPost(pid, part.kategori);
+      if(!post) return;
+      const e = entry(post.id);
+      if(obetald){
+        // Obetald: väntas betalas förfallomånaden - om den ligger före start, i startmånaden.
+        const m = manad && manad > prog.start ? manad : prog.start;
+        if(monthSet.has(m)){
+          e.obetalt[m] = (e.obetalt[m] || 0) + part.belopp;
+          (e.obetaltItems[m] = e.obetaltItems[m] || []).push({ lopnr: line.lopnr, text: (line.leverantor || '—') + ' · förfaller ' + (line.forfallodatum || '—'), belopp: part.belopp });
+        }
+      } else if(manad && manad >= prog.start){
+        if(monthSet.has(manad)) e.utfall[manad] = (e.utfall[manad] || 0) + part.belopp;
+      } else {
+        e.ib += part.belopp;
+        e.ibItems.push({ lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—'), belopp: part.belopp });
+      }
+    });
+  });
+  // Mark (förvärv, gatukostnad, vattenanslutning) räknas som betalt = IB.
+  const tagna = ekonomiBudgetTagna(pid);
+  Object.keys(tagna).forEach(postId => {
+    if(!tagna[postId].mark) return;
+    const e = entry(postId);
+    e.ib += tagna[postId].mark;
+    tagna[postId].items.filter(it => it.typ === 'mark').forEach(it => e.ibItems.push({ text: it.text, belopp: it.belopp }));
+  });
+  return { prog, months, per };
+}
+async function saveEkonomiPrognos(){
+  try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara prognosen', e); }
+}
+function renderEkonomiPrognos(){
+  const pid = currentEkonomiLikviditetProjectId;
+  const wrap = document.getElementById('ekoPrognosWrap');
+  if(!wrap || !pid) return;
+  const struktur = ekonomiBudgetStruktur(pid);
+  const { prog, months, per } = ekonomiPrognosData(pid);
+  document.getElementById('ekoPrognosStart').value = prog.start;
+  document.getElementById('ekoPrognosManader').value = prog.manader;
+  const visaUtfall = document.getElementById('ekoPrognosVisaUtfall').checked;
+  const cell = v => v ? formatKrFull(v) : '';
+  const mono = "font-family:'JetBrains Mono',monospace;";
+
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost</th><th>Budget</th><th>Tagna</th><th>Kvar att fördela</th><th>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
+    months.map(m => '<th>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th>Prognos totalt</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+
+  const tagna = ekonomiBudgetTagna(pid);
+  const totals = { budget: 0, tagna: 0, ib: 0, prognos: {}, utfall: {} };
+  months.forEach(m => { totals.prognos[m] = 0; totals.utfall[m] = 0; });
+
+  const postPrognos = post => {
+    const cells = prog.celler[post.id] || {};
+    const e = per[post.id] || { ib: 0, obetalt: {}, utfall: {}, obetaltItems: {}, ibItems: [] };
+    const perMonth = {};
+    months.forEach(m => { perMonth[m] = (cells[m] || 0) + (e.obetalt[m] || 0); });
+    return { cells, e, perMonth, sum: months.reduce((s, m) => s + perMonth[m], 0) };
+  };
+
+  const addRow = (cls, label, indent, values, opts) => {
+    const tr = document.createElement('tr');
+    if(cls) tr.className = cls;
+    const first = document.createElement('td');
+    first.style.cssText = 'text-align:left; padding-left:' + indent + 'px; position:sticky; left:0; background:' + (opts && opts.bg ? opts.bg : 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    if(typeof label === 'string') first.textContent = label; else first.appendChild(label);
+    tr.appendChild(first);
+    values.forEach(v => {
+      const td = document.createElement('td');
+      td.style.cssText = mono + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11px; color:var(--ink-soft);' : '');
+      if(v && v.nodeType) td.appendChild(v); else td.textContent = v == null ? '' : v;
+      tr.appendChild(td);
+    });
+    if(opts && opts.bg) tr.style.background = opts.bg;
+    tbody.appendChild(tr);
+    return tr;
+  };
+
+  struktur.kostnadsgrupper.forEach(group => {
+    const open = prog.oppna.includes(group.id);
+    const g = { budget: 0, tagna: 0, ib: 0, prognos: {}, utfall: {}, sum: 0 };
+    months.forEach(m => { g.prognos[m] = 0; g.utfall[m] = 0; });
+    group.poster.forEach(post => {
+      const t = tagna[post.id] || { reskontra: 0, mark: 0 };
+      const pp = postPrognos(post);
+      g.budget += post.budget || 0;
+      g.tagna += t.reskontra + t.mark;
+      g.ib += pp.e.ib;
+      months.forEach(m => { g.prognos[m] += pp.perMonth[m]; g.utfall[m] += pp.e.utfall[m] || 0; });
+      g.sum += pp.sum;
+    });
+    totals.budget += g.budget; totals.tagna += g.tagna; totals.ib += g.ib;
+    months.forEach(m => { totals.prognos[m] += g.prognos[m]; totals.utfall[m] += g.utfall[m]; });
+
+    const lbl = document.createElement('span');
+    lbl.style.cursor = 'pointer';
+    lbl.textContent = (open ? '▾ ' : '▸ ') + group.grupp;
+    lbl.title = open ? 'Fäll ihop' : 'Visa posterna';
+    lbl.onclick = async () => {
+      prog.oppna = open ? prog.oppna.filter(id => id !== group.id) : prog.oppna.concat([group.id]);
+      await saveEkonomiPrognos();
+      renderEkonomiPrognos();
+    };
+    addRow('', lbl, 6, [cell(g.budget), cell(g.tagna), cell(Math.max(0, g.budget - g.tagna)), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    if(visaUtfall && months.some(m => g.utfall[m])){
+      addRow('', 'Utfall', 18, ['', '', '', ''].concat(months.map(m => cell(g.utfall[m])), ['']), { small: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    }
+    if(!open) return;
+
+    group.poster.forEach(post => {
+      const t = tagna[post.id] || { reskontra: 0, mark: 0, items: [] };
+      const pp = postPrognos(post);
+      const kvar = (post.budget || 0) - (t.reskontra + t.mark);
+      // IB-cell: klick visar specifikationen.
+      const ibSpan = document.createElement('span');
+      ibSpan.textContent = cell(pp.e.ib);
+      if(pp.e.ib){ ibSpan.className = 'editable'; ibSpan.style.cursor = 'pointer'; ibSpan.title = 'Visa vad som ingår'; ibSpan.onclick = () => showEkonomiTagnaSpec(post.namn + ' - IB ' + ekonomiPrognosShortLabel(prog.start), { reskontra: pp.e.ib, mark: 0, items: pp.e.ibItems.map(it => ({ typ: it.lopnr ? 'reskontra' : 'mark', lopnr: it.lopnr, text: it.text, belopp: it.belopp })) }); }
+      // Postens namn + "Fördela jämnt".
+      const nameWrap = document.createElement('span');
+      nameWrap.textContent = post.namn + ' ';
+      const spread = document.createElement('button');
+      spread.type = 'button';
+      spread.textContent = 'Fördela jämnt';
+      spread.title = 'Fördela det som är kvar jämnt över ett antal månader';
+      spread.style.cssText = 'font-size:10px; padding:1px 6px; border:1px solid var(--line-soft); background:#fff; border-radius:4px; cursor:pointer; color:var(--ink-soft); margin-left:4px;';
+      spread.onclick = async () => {
+        const obetaltSum = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
+        const attFordela = Math.max(0, kvar - obetaltSum);
+        const raw = prompt('Fördela ' + formatKrFull(attFordela) + ' (kvar att fördela' + (obetaltSum ? ', efter obetalda fakturor ' + formatKrFull(obetaltSum) : '') + ') jämnt.\n\nAnge från-månad och antal månader, t.ex. "2026-11, 6" (tomt = från startmånaden).', prog.start + ', 6');
+        if(raw === null) return;
+        const mm = raw.match(/(\d{4}-\d{2})?\D*(\d+)\s*$/);
+        const from = mm && mm[1] ? mm[1] : prog.start;
+        const n = mm ? parseInt(mm[2], 10) : NaN;
+        if(!n || n < 1){ showToast('Ange antal månader.'); return; }
+        const startIdx = months.indexOf(from);
+        if(startIdx < 0){ showToast('Från-månaden ligger utanför prognosen.'); return; }
+        const slice = months.slice(startIdx, startIdx + n);
+        const perM = Math.round(attFordela / slice.length);
+        const cells = prog.celler[post.id] = {};
+        slice.forEach((m, i) => { cells[m] = i === slice.length - 1 ? attFordela - perM * (slice.length - 1) : perM; });
+        await saveEkonomiPrognos();
+        renderEkonomiPrognos();
+      };
+      nameWrap.appendChild(spread);
+      const monthCells = months.map(m => {
+        const td = document.createElement('span');
+        const manual = pp.cells[m];
+        const ob = pp.e.obetalt[m] || 0;
+        const wrapEl = document.createElement('div');
+        wrapEl.style.minWidth = '70px';
+        likviditetsbudgetEditableCell(wrapEl, manual != null && manual !== 0 ? manual : null, async (val) => {
+          const cells = prog.celler[post.id] || (prog.celler[post.id] = {});
+          if(val == null || val === 0) delete cells[m]; else cells[m] = val;
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+        });
+        if(ob){
+          const obEl = document.createElement('div');
+          obEl.style.cssText = 'font-size:10px; color:var(--danger); cursor:pointer;';
+          obEl.textContent = '+ faktura ' + formatKrFull(ob);
+          obEl.title = (pp.e.obetaltItems[m] || []).map(it => it.lopnr + ' ' + it.text + ' ' + formatKrFull(it.belopp)).join('\n');
+          obEl.onclick = () => showEkonomiTagnaSpec(post.namn + ' - obetalda fakturor ' + ekonomiPrognosShortLabel(m), { reskontra: ob, mark: 0, items: (pp.e.obetaltItems[m] || []).map(it => ({ typ: 'reskontra', lopnr: it.lopnr, text: it.text, belopp: it.belopp })) });
+          wrapEl.appendChild(obEl);
+        }
+        td.appendChild(wrapEl);
+        return td;
+      });
+      const kvarCell = document.createElement('span');
+      const restEfter = kvar - pp.sum;
+      kvarCell.textContent = cell(Math.max(0, kvar));
+      if(kvar > 0){
+        const r = document.createElement('div');
+        r.style.cssText = 'font-size:10px; color:' + (Math.abs(restEfter) > 0.5 ? 'var(--danger)' : 'var(--ink-soft)') + ';';
+        r.textContent = Math.abs(restEfter) > 0.5 ? 'ofördelat ' + formatKrFull(restEfter) : 'allt fördelat ✓';
+        kvarCell.appendChild(r);
+      }
+      addRow('', nameWrap, 24, [cell(post.budget || 0), cell(t.reskontra + t.mark), kvarCell, ibSpan].concat(monthCells, [cell(pp.sum)]), {});
+      if(visaUtfall && months.some(m => pp.e.utfall[m])){
+        addRow('', 'Utfall', 36, ['', '', '', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true });
+      }
+    });
+  });
+
+  // Summeringar.
+  let ack = totals.ib;
+  const ackRow = months.map(m => { ack += totals.prognos[m]; return cell(ack); });
+  addRow('eko-row-resultat', 'Summa utbetalningar (prognos)', 6, [cell(totals.budget), cell(totals.tagna), cell(Math.max(0, totals.budget - totals.tagna)), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(months.reduce((s, m) => s + totals.prognos[m], 0))]), { bold: true });
+  if(visaUtfall) addRow('', 'Summa utfall', 6, ['', '', '', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(months.reduce((s, m) => s + totals.utfall[m], 0))]), { small: true });
+  addRow('', 'Ackumulerat (IB + prognos)', 6, ['', '', '', cell(totals.ib)].concat(ackRow, ['']), { small: true });
+
+  wrap.innerHTML = '';
+  wrap.appendChild(table);
+}
+document.getElementById('ekoPrognosStart').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const v = document.getElementById('ekoPrognosStart').value;
+  if(/^\d{4}-\d{2}$/.test(v)){ ekonomiPrognosRec(pid).start = v; await saveEkonomiPrognos(); renderEkonomiPrognos(); }
+};
+document.getElementById('ekoPrognosManader').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const n = parseInt(document.getElementById('ekoPrognosManader').value, 10);
+  if(n >= 3 && n <= 60){ ekonomiPrognosRec(pid).manader = n; await saveEkonomiPrognos(); renderEkonomiPrognos(); }
+};
+document.getElementById('ekoPrognosVisaUtfall').onchange = () => renderEkonomiPrognos();
+document.getElementById('ekoPrognosExpandAll').onclick = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const prog = ekonomiPrognosRec(pid);
+  const all = ekonomiBudgetStruktur(pid).kostnadsgrupper.map(g => g.id);
+  prog.oppna = prog.oppna.length === all.length ? [] : all;
+  document.getElementById('ekoPrognosExpandAll').textContent = prog.oppna.length ? 'Fäll ihop alla' : 'Fäll ut alla';
+  await saveEkonomiPrognos();
+  renderEkonomiPrognos();
+};
 
 async function saveEkonomiLikviditetIngaende(value){
   const pid = currentEkonomiLikviditetProjectId;
@@ -6513,14 +6801,26 @@ document.getElementById('reskontraFileInput').addEventListener('change', async (
     if(error) throw error;
     const invoices = (data && data.invoices) || [];
     const existing = companyEkonomiData.reskontra[pid] || [];
-    const existingLopnr = new Set(existing.map(l => l.lopnr));
-    const fresh = invoices.filter(inv => inv.lopnr && !existingLopnr.has(inv.lopnr));
+    const existingByLopnr = new Map(existing.map(l => [String(l.lopnr), l]));
+    // Redan inlästa rader får bara sin betalstatus (saldo) uppdaterad - det är
+    // så avstämningen i likviditetsprognosen ser att en faktura blivit betald.
+    let uppdaterade = 0, blevBetalda = 0;
+    invoices.forEach(inv => {
+      const l = inv.lopnr && existingByLopnr.get(String(inv.lopnr));
+      if(!l || inv.saldo == null) return;
+      const varObetald = ekonomiLineObetald(l);
+      l.saldo = inv.saldo;
+      uppdaterade++;
+      if(varObetald && !ekonomiLineObetald(l)) blevBetalda++;
+    });
+    const fresh = invoices.filter(inv => inv.lopnr && !existingByLopnr.has(String(inv.lopnr)));
     const newLines = fresh.map(inv => ({
       lopnr: inv.lopnr,
       leverantor: inv.leverantor || '',
       fakturadatum: inv.fakturadatum || '',
       forfallodatum: inv.forfallodatum || '',
       belopp: inv.belopp || 0,
+      saldo: inv.saldo != null ? inv.saldo : null,
       kategori: null,
       justeratBelopp: null,
       uppladdadAv: myName,
@@ -6528,7 +6828,8 @@ document.getElementById('reskontraFileInput').addEventListener('change', async (
     }));
     companyEkonomiData.reskontra[pid] = existing.concat(newLines);
     await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
-    setReskontraStatus(newLines.length + ' nya rader inlästa, ' + (invoices.length - newLines.length) + ' fanns redan.', 'ok');
+    const obetaldaNya = newLines.filter(ekonomiLineObetald).length;
+    setReskontraStatus(newLines.length + ' nya rader inlästa' + (obetaldaNya ? ' (' + obetaldaNya + ' obetalda)' : '') + ', ' + (invoices.length - newLines.length) + ' fanns redan' + (uppdaterade ? ' - betalstatus uppdaterad på ' + uppdaterade + (blevBetalda ? ', ' + blevBetalda + ' har blivit betalda' : '') : '') + '.', 'ok');
     renderEkonomiProjektBudget();
   }catch(err){
     setReskontraStatus('Kunde inte läsa reskontran: ' + (err.message || err), 'err');
