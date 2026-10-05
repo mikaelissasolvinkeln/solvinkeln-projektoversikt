@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005140340';
+const APP_BUILD = '20261005141635';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1964,6 +1964,7 @@ function renderEkonomiProjektBudget(){
       diffCell(budget, utfall);
     // Underposter ett steg mindre än grupprubrikerna (cellernas egen CSS slår annars igenom).
     [...row.children].forEach(td => { td.style.fontSize = '12px'; td.style.fontWeight = '400'; });
+    row.appendChild(actTd);
     const nameWrap = row.children[0];
     const nameSpan = document.createElement('span');
     nameSpan.textContent = post.namn;
@@ -1995,11 +1996,14 @@ function renderEkonomiProjektBudget(){
       inp.addEventListener('keydown', e => { if(e.key === 'Enter') inp.blur(); if(e.key === 'Escape'){ done = true; renderEkonomiProjektBudget(); } });
     };
     nameWrap.appendChild(nameSpan);
+    // ✕ i kolumnen längst till höger.
+    const actTd = document.createElement('td');
+    actTd.style.cssText = 'text-align:right; white-space:nowrap;';
     const del = document.createElement('button');
     del.type = 'button';
     del.textContent = '✕';
     del.title = 'Ta bort posten';
-    del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; margin-left:6px; opacity:0.6;';
+    del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; opacity:0.7; padding:2px 6px;';
     del.onclick = async () => {
       if(utfall || budget){
         if(!confirm('Ta bort posten "' + post.namn + '"? Budget ' + formatKrFull(budget) + ', tagna kostnader ' + formatKrFull(utfall) + '. Reskontrarader som pekar på posten blir okategoriserade.')) return;
@@ -2009,7 +2013,7 @@ function renderEkonomiProjektBudget(){
       try{ await saveEkonomiBudgetDetalj(); await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); }catch(e){ showDebugError('Kunde inte spara', e); }
       renderEkonomiProjektBudget();
     };
-    nameWrap.appendChild(del);
+    actTd.appendChild(del);
     // Budgetbeloppet: klick öppnar samma popup som i kalkylerna (belopp direkt,
     // eller belopp per enhet × antal enheter - antalet hämtas från lägenhetslistan).
     const amount = document.createElement('span');
@@ -2040,7 +2044,7 @@ function renderEkonomiProjektBudget(){
   };
   // Grupprubriker: fet text och feta belopp i normal storlek. Posterna under
   // visas ett steg mindre så hierarkin syns direkt.
-  const headRow = (label, level, budgetSum, utfallSum, group) => {
+  const headRow = (label, level, budgetSum, utfallSum, group, ukId) => {
     const row = document.createElement('tr');
     row.style.background = level === 0 ? 'var(--paper-soft, #f6f4ef)' : '';
     const numStyle = level === 0 ? 'font-weight:700; font-size:13.5px;' : 'font-weight:600; font-size:12.5px;';
@@ -2054,21 +2058,25 @@ function renderEkonomiProjektBudget(){
       diffCell(budgetSum, utfallSum);
     row.children[5].style.cssText += numStyle;
     row.children[0].textContent = label;
-    if(group && level === 0){
+    // Kolumnen längst till höger: "+ Lägg till post" på grupp- och underkategorirader.
+    const actTd = document.createElement('td');
+    actTd.style.cssText = 'text-align:right; white-space:nowrap;';
+    if(group){
       const add = document.createElement('button');
       add.type = 'button';
-      add.textContent = '+ post';
-      add.title = 'Lägg till post i gruppen';
-      add.style.cssText = 'margin-left:10px; font-size:11px; padding:1px 7px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;';
+      add.textContent = '+ Lägg till post';
+      add.title = 'Lägg till en post ' + (ukId ? 'under ' + label : 'i ' + group.grupp);
+      add.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink); font-family:Inter,sans-serif; font-weight:500;';
       add.onclick = async () => {
-        const namn = prompt('Namn på den nya posten i ' + group.grupp + ':');
+        const namn = prompt('Namn på den nya posten' + (ukId ? ' under ' + label : ' i ' + group.grupp) + ':');
         if(!namn || !namn.trim()) return;
-        group.poster.push({ id: uid(), namn: namn.trim(), budget: null, underkategori: null });
+        group.poster.push({ id: uid(), namn: namn.trim(), budget: null, underkategori: ukId || null });
         try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
         renderEkonomiProjektBudget();
       };
-      row.children[0].appendChild(add);
+      actTd.appendChild(add);
     }
+    row.appendChild(actTd);
     tbody.appendChild(row);
   };
   const sumOf = posts => posts.reduce((acc, p) => {
@@ -2082,13 +2090,13 @@ function renderEkonomiProjektBudget(){
     if(!uks.length){
       group.poster.forEach(p => postRow(p, group, 24));
     } else {
-      const sections = uks.map(uk => ({ label: uk.namn, rows: group.poster.filter(p => p.underkategori === uk.id) }));
+      const sections = uks.map(uk => ({ label: uk.namn, ukId: uk.id, rows: group.poster.filter(p => p.underkategori === uk.id) }));
       const rest = group.poster.filter(p => !p.underkategori);
-      if(rest.length) sections.push({ label: 'Ej kategoriserade', rows: rest });
+      if(rest.length) sections.push({ label: 'Ej kategoriserade', ukId: null, rows: rest });
       sections.forEach(sec => {
-        if(!sec.rows.length) return;
+        // Underkategorier visas även när de är tomma, så man kan lägga till poster där.
         const ss = sumOf(sec.rows);
-        headRow(sec.label, 1, ss.b, ss.u, null);
+        headRow(sec.label, 1, ss.b, ss.u, group, sec.ukId);
         sec.rows.forEach(p => postRow(p, group, 34));
       });
     }
@@ -2102,7 +2110,8 @@ function renderEkonomiProjektBudget(){
     '<td>' + formatKrPerKvm(totalBudget, kvm) + '</td>' +
     '<td>' + formatKrFull(totalUtfall) + '</td>' +
     '<td>' + formatKrPerKvm(totalUtfall, kvm) + '</td>' +
-    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(totalDiff) + '</td>';
+    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(totalDiff) + '</td>' +
+    '<td></td>';
   tbody.appendChild(totalRow);
 
   // Totalkostnad- och Vinst-korten längst upp - Vinst = Intäkter + Föreningslån - Totalkostnad
