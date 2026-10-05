@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005134924';
+const APP_BUILD = '20261005140209';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1955,11 +1955,13 @@ function renderEkonomiProjektBudget(){
     totalBudget += budget;
     totalUtfall += utfall;
     const row = document.createElement('tr');
+    row.style.fontSize = '11.5px';
+    row.style.color = 'var(--ink-soft)';
     row.innerHTML =
-      '<td style="text-align:left; padding-left:' + indent + 'px;"></td>' +
-      '<td></td>' +
+      '<td style="text-align:left; padding-left:' + indent + 'px; color:var(--ink);"></td>' +
+      '<td style="color:var(--ink);"></td>' +
       '<td>' + formatKrPerKvm(budget, kvm) + '</td>' +
-      '<td>' + formatKrFull(utfall) + (t.mark ? '<div style="font-size:10.5px; color:var(--ink-soft);">varav från Mark ' + formatKrFull(t.mark) + '</div>' : '') + '</td>' +
+      '<td style="color:var(--ink);">' + formatKrFull(utfall) + (t.mark ? '<div style="font-size:10px; color:var(--ink-soft);">varav från Mark ' + formatKrFull(t.mark) + '</div>' : '') + '</td>' +
       '<td>' + formatKrPerKvm(utfall, kvm) + '</td>' +
       diffCell(budget, utfall);
     const nameWrap = row.children[0];
@@ -2036,16 +2038,21 @@ function renderEkonomiProjektBudget(){
     row.children[1].appendChild(amount);
     tbody.appendChild(row);
   };
+  // Grupprubriker: fet text och feta belopp i normal storlek. Posterna under
+  // visas ett steg mindre så hierarkin syns direkt.
   const headRow = (label, level, budgetSum, utfallSum, group) => {
     const row = document.createElement('tr');
     row.style.background = level === 0 ? 'var(--paper-soft, #f6f4ef)' : '';
+    const numStyle = level === 0 ? 'font-weight:700; font-size:13.5px;' : 'font-weight:600; font-size:12.5px;';
+    const subStyle = level === 0 ? 'font-size:12px; font-weight:400; color:var(--ink-soft);' : 'font-size:11.5px; font-weight:400; color:var(--ink-soft);';
     row.innerHTML =
       '<td style="text-align:left; font-weight:' + (level === 0 ? '700' : '600') + '; padding-left:' + (level === 0 ? 8 : 18) + 'px;' + (level === 0 ? ' font-family:\'Fraunces\',serif; font-size:14.5px;' : ' font-size:12.5px;') + '"></td>' +
-      '<td style="font-weight:600;">' + formatKrFull(budgetSum) + '</td>' +
-      '<td>' + formatKrPerKvm(budgetSum, kvm) + '</td>' +
-      '<td style="font-weight:600;">' + formatKrFull(utfallSum) + '</td>' +
-      '<td>' + formatKrPerKvm(utfallSum, kvm) + '</td>' +
+      '<td style="' + numStyle + '">' + formatKrFull(budgetSum) + '</td>' +
+      '<td style="' + subStyle + '">' + formatKrPerKvm(budgetSum, kvm) + '</td>' +
+      '<td style="' + numStyle + '">' + formatKrFull(utfallSum) + '</td>' +
+      '<td style="' + subStyle + '">' + formatKrPerKvm(utfallSum, kvm) + '</td>' +
       diffCell(budgetSum, utfallSum);
+    row.children[5].style.cssText += numStyle;
     row.children[0].textContent = label;
     if(group && level === 0){
       const add = document.createElement('button');
