@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005144946';
+const APP_BUILD = '20261005145137';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2306,7 +2306,12 @@ function renderEkonomiReskontraTable(){
   // kolumnrubrik sorterar på den kolumnen (klick igen vänder ordningen).
   const s = ekonomiReskontraSort;
   const cmpText = (x, y) => String(x || '').localeCompare(String(y || ''), 'sv', { numeric: true, sensitivity: 'base' });
-  const sorted = [...lines].sort((a, b) => {
+  // Filter "Visa ej hanterade": bara okategoriserade rader.
+  const onlyUnhandled = document.getElementById('ekonomiReskontraOnlyUnhandled').checked;
+  const unhandledCount = lines.filter(l => !l.kategori).length;
+  document.getElementById('ekonomiReskontraUnhandledCount').textContent = unhandledCount + ' av ' + lines.length + ' rader är ej hanterade';
+  const visibleLines = onlyUnhandled ? lines.filter(l => !l.kategori) : lines;
+  const sorted = [...visibleLines].sort((a, b) => {
     if(!s.key){
       const aUn = !a.kategori, bUn = !b.kategori;
       if(aUn !== bUn) return aUn ? -1 : 1;
@@ -2443,6 +2448,7 @@ document.getElementById('ekonomiReskontraSelectAll').onchange = (e) => {
   else ekonomiReskontraSelection.clear();
   renderEkonomiReskontraTable();
 };
+document.getElementById('ekonomiReskontraOnlyUnhandled').onchange = () => renderEkonomiReskontraTable();
 document.getElementById('ekonomiReskontraBulkClear').onclick = () => {
   ekonomiReskontraSelection.clear();
   renderEkonomiReskontraTable();
