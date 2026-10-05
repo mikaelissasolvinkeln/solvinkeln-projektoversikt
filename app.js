@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20260930143300';
+const APP_BUILD = '20261005094747';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4025,9 +4025,21 @@ function renderNyaProjektBilagorList(candidate){
     const row = document.createElement('div');
     row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line-soft);';
     const link = document.createElement('a');
-    link.href = 'data:' + b.mimetype + ';base64,' + b.base64;
-    link.download = b.namn;
-    link.textContent = b.namn;
+    if(b.url){
+      // Länkbilaga (t.ex. Google Drive) - öppnas i ny flik, tar ingen plats i databasen.
+      link.href = b.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = '🔗 ' + b.namn;
+    } else {
+      link.href = 'data:' + b.mimetype + ';base64,' + b.base64;
+      link.download = b.namn;
+      link.textContent = '📎 ' + b.namn;
+      const size = document.createElement('span');
+      size.style.cssText = 'font-size:11px; color:var(--ink-soft); margin-left:8px;';
+      size.textContent = b.base64 ? Math.round(b.base64.length * 0.75 / 1024) + ' kB i databasen' : '';
+      link.appendChild(size);
+    }
     link.style.flex = '1';
     row.appendChild(link);
     const delBtn = document.createElement('button');
@@ -4044,6 +4056,42 @@ function renderNyaProjektBilagorList(candidate){
 }
 
 const NYA_PROJEKT_FILE_MAX_BYTES = 4 * 1024 * 1024;
+// Bilagor lagras i kalkylens databasrad - stora filer gjorde raden flera MB och
+// databasen hängde sig. Större dokument delas som Drive-länkar i stället.
+const NYA_PROJEKT_BILAGA_MAX_BYTES = 1 * 1024 * 1024;
+
+// Länkbilaga: namn + URL (t.ex. Google Drive), sparas som {id, namn, url}.
+document.getElementById('nyaProjektBilagaLankBtn').onclick = () => {
+  const form = document.getElementById('nyaProjektBilagaLankForm');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if(form.style.display === 'block') document.getElementById('nyaProjektBilagaLankNamn').focus();
+};
+document.getElementById('nyaProjektBilagaLankCancelBtn').onclick = () => {
+  document.getElementById('nyaProjektBilagaLankForm').style.display = 'none';
+};
+async function nyaProjektSaveBilagaLank(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const statusEl = document.getElementById('nyaProjektBilagaStatus');
+  const namnEl = document.getElementById('nyaProjektBilagaLankNamn');
+  const urlEl = document.getElementById('nyaProjektBilagaLankUrl');
+  let url = urlEl.value.trim();
+  const namn = namnEl.value.trim() || url;
+  if(!url){ statusEl.textContent = 'Klistra in en länk.'; statusEl.className = 'contract-upload-status err'; urlEl.focus(); return; }
+  if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  try{ new URL(url); }catch(e){ statusEl.textContent = 'Länken ser inte giltig ut.'; statusEl.className = 'contract-upload-status err'; return; }
+  candidate.data.bilagor.push({ id: uid(), namn, url, uppladdadAt: new Date().toISOString() });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  namnEl.value = ''; urlEl.value = '';
+  document.getElementById('nyaProjektBilagaLankForm').style.display = 'none';
+  statusEl.textContent = 'Länken är tillagd.';
+  statusEl.className = 'contract-upload-status ok';
+  renderNyaProjektBilagorList(candidate);
+}
+document.getElementById('nyaProjektBilagaLankSaveBtn').onclick = nyaProjektSaveBilagaLank;
+['nyaProjektBilagaLankNamn', 'nyaProjektBilagaLankUrl'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); nyaProjektSaveBilagaLank(); } });
+});
 
 // Fritextfälten (allmän information, marknadsläge, risker) sparas en kort
 // stund efter att man slutat skriva.
@@ -4143,8 +4191,8 @@ document.getElementById('nyaProjektBilagaFileInput').addEventListener('change', 
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate) return;
   const statusEl = document.getElementById('nyaProjektBilagaStatus');
-  if(file.size > NYA_PROJEKT_FILE_MAX_BYTES){
-    statusEl.textContent = 'Filen är för stor (max 4 MB).';
+  if(file.size > NYA_PROJEKT_BILAGA_MAX_BYTES){
+    statusEl.textContent = 'Filen är för stor (max 1 MB). Lägg den på Drive och lägg till en länk i stället.';
     statusEl.className = 'contract-upload-status err';
     e.target.value = '';
     return;
@@ -4931,7 +4979,9 @@ function buildPropaBilagorHtml(candidate){
   if(!rows.length) return '<p class="eko-sub">Inga bilagor tillagda än.</p>';
   return '<div>' + rows.map(b =>
     '<div style="padding:10px 0; border-bottom:1px solid var(--line-soft);">' +
-      '<a href="data:' + b.mimetype + ';base64,' + b.base64 + '" download="' + escapeHtml(b.namn) + '" style="font-size:14px;">📎 ' + escapeHtml(b.namn) + '</a>' +
+      (b.url
+        ? '<a href="' + escapeHtml(b.url).replace(/"/g, '&quot;') + '" target="_blank" rel="noopener" style="font-size:14px;">🔗 ' + escapeHtml(b.namn) + '</a><span style="font-size:11px; color:var(--ink-soft); margin-left:8px;">öppnas i ny flik</span>'
+        : '<a href="data:' + b.mimetype + ';base64,' + b.base64 + '" download="' + escapeHtml(b.namn) + '" style="font-size:14px;">📎 ' + escapeHtml(b.namn) + '</a>') +
     '</div>'
   ).join('') + '</div>';
 }

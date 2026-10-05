@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20260930143300">
+<meta name="app-build" content="20261005094747">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1331,9 +1331,19 @@
       <h3 style="margin-bottom:10px;">Bilagor</h3>
       <p class="eko-sub" style="margin:0 0 10px;">Delas i en egen flik i investeringspropån.</p>
       <div style="margin-bottom:10px;">
-        <button type="button" id="nyaProjektBilagaUploadBtn" class="upload-btn">📎 Ladda upp bilaga</button>
+        <button type="button" id="nyaProjektBilagaLankBtn" class="upload-btn">🔗 Lägg till länk (t.ex. Google Drive)</button>
+        <button type="button" id="nyaProjektBilagaUploadBtn" class="upload-btn" style="background:none; color:var(--ink); border:1px solid var(--line-soft);">📎 Ladda upp liten fil (max 1 MB)</button>
         <input type="file" id="nyaProjektBilagaFileInput" style="display:none;">
         <span id="nyaProjektBilagaStatus" class="contract-upload-status"></span>
+      </div>
+      <p class="eko-sub" style="margin:0 0 10px;">Dela större dokument via en Drive-länk (Dela → Alla med länken kan visa) i stället för att ladda upp filen. Uppladdade filer lagras i databasen och gör kalkylen tung.</p>
+      <div id="nyaProjektBilagaLankForm" style="display:none; margin-bottom:10px; padding:10px 12px; border:1px dashed var(--line-soft); border-radius:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <input type="text" id="nyaProjektBilagaLankNamn" placeholder="Namn, t.ex. Bofaktablad" style="flex:1; min-width:180px; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:13px;">
+          <input type="url" id="nyaProjektBilagaLankUrl" placeholder="https://drive.google.com/…" style="flex:2; min-width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:13px;">
+          <button type="button" id="nyaProjektBilagaLankSaveBtn" class="upload-btn">Spara länk</button>
+          <button type="button" id="nyaProjektBilagaLankCancelBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>
+        </div>
       </div>
       <div id="nyaProjektBilagorList"></div>
     </div>
