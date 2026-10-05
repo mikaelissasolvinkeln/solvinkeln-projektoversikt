@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005141841';
+const APP_BUILD = '20261005142146';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1547,6 +1547,19 @@ function ekonomiBudgetKategoriOptions(pid, current, emptyLabel){
   }
   return html;
 }
+// Budgeterad intäkt för projektet: sparat värde, annars kalkylens intäkter
+// (Insatser + Föreningslån m.m.) om projektet omvandlats från en kalkyl.
+function ekonomiBudgetIntakt(pid){
+  const detail = ekonomiBudgetDetail(pid);
+  if(detail.budgetIntakt != null) return detail.budgetIntakt;
+  const cand = nyaProjektList.find(c => c.promoted_project_id === pid);
+  if(cand){
+    const d = migrateNyaProjektData(cand.data);
+    const t = nyaProjektTotals(d).totalIntakter;
+    return t || null;
+  }
+  return null;
+}
 async function saveEkonomiBudgetDetalj(){
   await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
 }
@@ -2114,15 +2127,26 @@ function renderEkonomiProjektBudget(){
     '<td></td>';
   tbody.appendChild(totalRow);
 
-  // Totalkostnad- och Vinst-korten längst upp - Vinst = Intäkter + Föreningslån - Totalkostnad
+  // Korten längst upp.
+  // Budgeterad vinst = budgeterad intäkt (inkl. föreningslån) − budgeterad kostnad.
+  // Utfall vinst = intäkter enligt lägenhetsförteckningen + föreningslån − tagna kostnader.
   document.getElementById('ekoBudgetTotalkostnad').textContent = formatKrFull(totalBudget);
   document.getElementById('ekoBudgetTotalkostnadBudget').textContent = formatKrFull(totalBudget);
   document.getElementById('ekoBudgetTotalkostnadUtfall').textContent = formatKrFull(totalUtfall);
-  const vinstBudget = intakter + foreningslan - totalBudget;
+  const budgetIntakt = ekonomiBudgetIntakt(pid);
+  const candForIntakt = nyaProjektList.find(c => c.promoted_project_id === pid);
+  document.getElementById('ekoBudgetIntaktBudget').textContent = budgetIntakt != null ? formatKrFull(budgetIntakt) : '—';
+  document.getElementById('ekoBudgetIntaktBudgetPerKvm').textContent = budgetIntakt != null ? formatKrPerKvm(budgetIntakt, kvm) : '—';
+  document.getElementById('ekoBudgetIntaktBudgetKalla').textContent = detail.budgetIntakt != null ? 'Eget värde' : (candForIntakt && budgetIntakt != null ? 'Från kalkylen ' + candForIntakt.name : 'Inget värde än');
+  const vinstBudget = budgetIntakt != null ? budgetIntakt - totalBudget : null;
   const vinstUtfall = intakter + foreningslan - totalUtfall;
-  document.getElementById('ekoBudgetVinst').textContent = formatKrFull(vinstBudget);
-  document.getElementById('ekoBudgetVinstBudget').textContent = formatKrFull(vinstBudget);
+  document.getElementById('ekoBudgetVinst').textContent = vinstBudget != null ? formatKrFull(vinstBudget) : '—';
+  document.getElementById('ekoBudgetVinstIntakt').textContent = budgetIntakt != null ? formatKrFull(budgetIntakt) : '—';
+  document.getElementById('ekoBudgetVinstBudget').textContent = formatKrFull(totalBudget);
   document.getElementById('ekoBudgetVinstUtfall').textContent = formatKrFull(vinstUtfall);
+  document.getElementById('ekoBudgetVinstUtfallIntakt').textContent = formatKrFull(intakter);
+  document.getElementById('ekoBudgetVinstUtfallLan').textContent = formatKrFull(foreningslan);
+  document.getElementById('ekoBudgetVinstUtfallKostnad').textContent = formatKrFull(totalUtfall);
 
   renderEkonomiReskontraTable();
 }
@@ -5860,6 +5884,20 @@ document.getElementById('ekonomiBudgetFromKalkylBtn').onclick = async () => {
   renderEkonomiProjektBudget();
 };
 document.getElementById('ekoBudgetForeningslanCard').onclick = openEkonomiForeningslanModal;
+// Budgeterad intäkt: eget värde per projekt. Förifylls från kalkylens intäkter
+// (inkl. föreningslån) när projektet omvandlats från en kalkyl.
+document.getElementById('ekoBudgetIntaktBudgetCard').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const detail = ekonomiBudgetDetail(pid);
+  const current = ekonomiBudgetIntakt(pid);
+  const raw = prompt('Budgeterad intäkt (kr), inklusive föreningslån:', current != null ? String(Math.round(current)) : '');
+  if(raw === null) return;
+  const n = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'));
+  detail.budgetIntakt = raw.trim() === '' || isNaN(n) ? null : n;
+  try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+  renderEkonomiProjektBudget();
+};
 document.getElementById('ekoForeningslanModalCancel').onclick = () => {
   document.getElementById('ekonomiForeningslanModalOverlay').classList.remove('open');
 };
