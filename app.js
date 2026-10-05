@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005143645';
+const APP_BUILD = '20261005143827';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2318,17 +2318,11 @@ function renderEkonomiReskontraTable(){
 
     // En beloppskolumn i kr: redigerbar (justerat belopp). Är beloppet justerat
     // visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
-    const adjustInput = document.createElement('input');
-    adjustInput.type = 'number';
-    adjustInput.className = 'eko-inline-input';
-    adjustInput.value = ekonomiLedgerAmount(line);
-    adjustInput.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Ändra här om bara en del ska räknas (t.ex. utan amortering).';
-    adjustInput.onchange = () => {
-      const raw = adjustInput.value.trim();
-      const v = raw === '' ? null : (parseFloat(raw.replace(',', '.')) || 0);
-      saveEkonomiReskontraLine(line.lopnr, { justeratBelopp: (v == null || v === (line.belopp || 0)) ? null : v });
-    };
-    row.children[3].appendChild(adjustInput);
+    // Visas som "411 500 kr"; klick ger ett fält att justera i.
+    likviditetsbudgetEditableCell(row.children[3], ekonomiLedgerAmount(line), async (v) => {
+      await saveEkonomiReskontraLine(line.lopnr, { justeratBelopp: (v == null || v === (line.belopp || 0)) ? null : v });
+    });
+    row.children[3].firstChild.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Klicka för att justera om bara en del ska räknas (t.ex. utan amortering).';
     if(line.justeratBelopp != null){
       const orig = document.createElement('div');
       orig.style.cssText = 'font-size:10px; color:var(--ink-soft); text-align:right;';
