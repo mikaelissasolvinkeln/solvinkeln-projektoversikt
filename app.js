@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005132833';
+const APP_BUILD = '20261005134924';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1394,7 +1394,7 @@ function ekonomiBudgetBuildStruktur(pid){
         id: uid(), grupp: g.grupp, underkategorier: uks.map(u => ({ id: u.id, namn: u.namn })),
         poster: g.poster.filter(p => (p.namn || '').trim()).map(p => {
           const uk = uks.find(u => u._old === p.underkategori);
-          return { id: uid(), namn: p.namn.trim(), budget: p.belopp != null ? p.belopp : null, underkategori: uk ? uk.id : null };
+          const bp = { id: uid(), namn: p.namn.trim(), budget: p.belopp != null ? p.belopp : null, underkategori: uk ? uk.id : null }; if(p.perBostad != null){ bp.perBostad = p.perBostad; bp.perBostadAntal = p.perBostadAntal; } return bp;
         })
       };
     });
@@ -1590,9 +1590,9 @@ async function computeProjectAreaRevenue(projectId){
       const n = parseInt(String(a.totalpris || '').replace(/[^0-9]/g, ''), 10);
       return s + (isNaN(n) ? 0 : n);
     }, 0);
-    return { kvm, intakter };
+    return { kvm, intakter, antal: apts.length };
   }catch(e){
-    return { kvm: 0, intakter: 0 };
+    return { kvm: 0, intakter: 0, antal: 0 };
   }
 }
 
@@ -2008,18 +2008,32 @@ function renderEkonomiProjektBudget(){
       renderEkonomiProjektBudget();
     };
     nameWrap.appendChild(del);
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.className = 'eko-inline-input';
-    input.value = post.budget != null ? post.budget : '';
-    input.placeholder = '0';
-    input.onchange = async () => {
-      const raw = input.value.trim();
-      post.budget = raw === '' ? null : (parseFloat(raw.replace(',', '.')) || 0);
-      try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara budget', e); }
-      renderEkonomiProjektBudget();
+    // Budgetbeloppet: klick öppnar samma popup som i kalkylerna (belopp direkt,
+    // eller belopp per enhet × antal enheter - antalet hämtas från lägenhetslistan).
+    const amount = document.createElement('span');
+    amount.className = 'editable';
+    amount.style.cursor = 'pointer';
+    amount.title = 'Klicka för att ändra (direkt belopp eller per enhet × antal)';
+    amount.textContent = post.budget != null ? formatKrFull(post.budget) : '—';
+    if(post.perBostad != null && post.budget != null){
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft);";
+      spec.textContent = formatKrFull(post.perBostad) + ' × ' + (post.perBostadAntal != null ? post.perBostadAntal : '?');
+      amount.appendChild(spec);
+    }
+    amount.onclick = () => {
+      const proxy = { namn: post.namn, belopp: post.budget, perBostad: post.perBostad, perBostadAntal: post.perBostadAntal };
+      openNyaProjektBeloppModal(null, proxy, ekonomiBudgetAreaRevenue.antal || null, {
+        onSave: async (res) => {
+          post.budget = res.belopp;
+          if(res.perBostad != null){ post.perBostad = res.perBostad; post.perBostadAntal = res.perBostadAntal; }
+          else { delete post.perBostad; delete post.perBostadAntal; }
+          try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara budget', e); }
+          renderEkonomiProjektBudget();
+        }
+      });
     };
-    row.children[1].appendChild(input);
+    row.children[1].appendChild(amount);
     tbody.appendChild(row);
   };
   const headRow = (label, level, budgetSum, utfallSum, group) => {
@@ -3559,8 +3573,10 @@ function nyaProjektActionButton(btn, action){
 // och totalen räknas ut. Uppdelningen sparas på raden (perBostad/perBostadAntal)
 // så den syns under beloppet och kan justeras nästa gång.
 let nyaProjektBeloppModalCtx = null;
-function openNyaProjektBeloppModal(candidate, row, antalBostader){
-  nyaProjektBeloppModalCtx = { candidate, row };
+// opts.onSave(result) används av Budget-fliken: då sparas inte via kalkylen
+// utan anroparen får {belopp, perBostad, perBostadAntal} och sparar själv.
+function openNyaProjektBeloppModal(candidate, row, antalBostader, opts){
+  nyaProjektBeloppModalCtx = { candidate, row, onSave: opts && opts.onSave };
   const per = document.getElementById('nyaProjektBeloppPerBostad');
   const antal = document.getElementById('nyaProjektBeloppAntal');
   const total = document.getElementById('nyaProjektBeloppTotal');
@@ -3624,6 +3640,14 @@ document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
   const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
   const total = nyaProjektBeloppModalNum('nyaProjektBeloppTotal');
   const { candidate, row } = ctx;
+  closeNyaProjektBeloppModal();
+  if(ctx.onSave){
+    const result = (per != null && antal != null)
+      ? { belopp: Math.round(per * antal * 100) / 100, perBostad: per, perBostadAntal: antal }
+      : { belopp: total, perBostad: null, perBostadAntal: null };
+    await ctx.onSave(result);
+    return;
+  }
   if(per != null && antal != null){
     row.perBostad = per;
     row.perBostadAntal = antal;
@@ -3633,7 +3657,6 @@ document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
     delete row.perBostadAntal;
     row.belopp = total;
   }
-  closeNyaProjektBeloppModal();
   try{
     await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
   }catch(e){
