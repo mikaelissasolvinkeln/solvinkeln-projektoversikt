@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005153653';
+const APP_BUILD = '20261005155357';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2344,7 +2344,9 @@ function renderEkonomiReskontraTable(){
     if(ekonomiReskontraSelection.has(key)) row.style.background = 'var(--blue-soft)';
     row.innerHTML =
       '<td style="text-align:center;"></td>' +
-      '<td>' + escapeHtml(line.lopnr || '') + '</td>' +
+      '<td>' + (line.manuell
+        ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Manuell</span>' + escapeHtml(line.vernr || '')
+        : escapeHtml(line.lopnr || '')) + '</td>' +
       '<td></td>' +
       '<td>' + escapeHtml(line.fakturadatum || '—') + '</td>' +
       '<td></td>' +
@@ -2433,9 +2435,26 @@ function renderEkonomiReskontraTable(){
     splitBtn.style.cssText = 'display:block; margin-top:3px; background:none; border:none; padding:0; color:var(--blue); cursor:pointer; font-size:11px;';
     splitBtn.onclick = () => openEkonomiFordelaModal(pid, line);
     katTd.appendChild(splitBtn);
+    if(line.manuell){
+      // Manuella kostnader kan tas bort (inlästa reskontrarader kan det inte).
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.textContent = '✕ Ta bort';
+      delBtn.style.cssText = 'display:block; margin-top:3px; background:none; border:none; padding:0; color:var(--danger); cursor:pointer; font-size:11px;';
+      delBtn.onclick = async () => {
+        if(!confirm('Ta bort den manuella kostnaden ' + (line.vernr || '') + ' på ' + formatKrFull(ekonomiLedgerAmount(line)) + '?')) return;
+        companyEkonomiData.reskontra[pid] = (companyEkonomiData.reskontra[pid] || []).filter(l => l.lopnr !== line.lopnr);
+        try{ await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); }catch(e){ showDebugError('Kunde inte spara', e); }
+        renderEkonomiProjektBudget();
+      };
+      katTd.appendChild(delBtn);
+    }
 
     tbody.appendChild(row);
   });
+  // Rullistan i formuläret för manuella kostnader.
+  const manSel = document.getElementById('ekoManuellKategori');
+  if(manSel && !manSel.options.length) manSel.innerHTML = ekonomiBudgetKategoriOptions(pid, '', 'Ej kategoriserad');
   // Flervalsraden: rullista med budgetens poster + antal markerade.
   const bulkSel = document.getElementById('ekonomiReskontraBulkSelect');
   const keep = bulkSel.value;
@@ -2603,6 +2622,49 @@ document.getElementById('ekonomiReskontraSelectAll').onchange = (e) => {
   renderEkonomiReskontraTable();
 };
 document.getElementById('ekonomiReskontraOnlyUnhandled').onchange = () => renderEkonomiReskontraTable();
+// Manuell kostnad utanför reskontran: verifikationsnummer, datum, belopp, leverantör.
+document.getElementById('ekonomiReskontraManuellBtn').onclick = () => {
+  const form = document.getElementById('ekonomiReskontraManuellForm');
+  const show = form.style.display === 'none';
+  form.style.display = show ? 'block' : 'none';
+  if(show){
+    const pid = currentEkonomiBudgetProjectId;
+    document.getElementById('ekoManuellKategori').innerHTML = ekonomiBudgetKategoriOptions(pid, '', 'Ej kategoriserad');
+    document.getElementById('ekoManuellDatum').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('ekoManuellVernr').focus();
+  }
+};
+document.getElementById('ekoManuellAvbryt').onclick = () => {
+  document.getElementById('ekonomiReskontraManuellForm').style.display = 'none';
+};
+document.getElementById('ekoManuellSpara').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const vernr = document.getElementById('ekoManuellVernr').value.trim();
+  const datum = document.getElementById('ekoManuellDatum').value;
+  const beloppRaw = document.getElementById('ekoManuellBelopp').value.trim();
+  const leverantor = document.getElementById('ekoManuellLeverantor').value.trim();
+  const kategori = document.getElementById('ekoManuellKategori').value || null;
+  const belopp = parseFloat(beloppRaw.replace(',', '.'));
+  if(!vernr){ showToast('Ange verifikationsnummer.'); return; }
+  if(!datum){ showToast('Ange datum.'); return; }
+  if(isNaN(belopp)){ showToast('Ange belopp.'); return; }
+  if(!leverantor){ showToast('Ange leverantör.'); return; }
+  const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+  const lopnr = 'M:' + vernr;
+  if(lines.some(l => l.lopnr === lopnr)){ showToast('Verifikationsnummer ' + vernr + ' finns redan.'); return; }
+  lines.push({ lopnr, vernr, manuell: true, leverantor, fakturadatum: datum, forfallodatum: datum, belopp, kategori, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString() });
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+    return;
+  }
+  ['ekoManuellVernr', 'ekoManuellBelopp', 'ekoManuellLeverantor'].forEach(id => { document.getElementById(id).value = ''; });
+  showToast('Kostnad ' + vernr + ' tillagd.');
+  renderEkonomiProjektBudget();
+  document.getElementById('ekoManuellVernr').focus();
+};
 document.getElementById('ekonomiReskontraBulkClear').onclick = () => {
   ekonomiReskontraSelection.clear();
   renderEkonomiReskontraTable();

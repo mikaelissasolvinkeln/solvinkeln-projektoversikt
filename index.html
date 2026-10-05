@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261005153653">
+<meta name="app-build" content="20261005155357">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1463,6 +1463,26 @@
         <span id="reskontraUploadStatus" class="contract-upload-status"></span>
       </div>
 
+      <div style="margin:10px 0 0;">
+        <button type="button" id="ekonomiReskontraManuellBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink);">＋ Lägg till kostnad utanför reskontran</button>
+      </div>
+      <div id="ekonomiReskontraManuellForm" style="display:none; margin:10px 0; padding:10px 12px; border:1px dashed var(--line-soft); border-radius:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px;">Verifikationsnummer
+            <input type="text" id="ekoManuellVernr" placeholder="T.ex. A123" style="width:130px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px;"></label>
+          <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px;">Datum
+            <input type="date" id="ekoManuellDatum" style="width:150px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px;"></label>
+          <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px;">Belopp (kr, inkl. moms)
+            <input type="number" step="any" id="ekoManuellBelopp" placeholder="0" style="width:150px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px; text-align:right;"></label>
+          <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px; flex:1; min-width:200px;">Leverantör
+            <input type="text" id="ekoManuellLeverantor" placeholder="T.ex. Huddinge kommun" style="border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px;"></label>
+          <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px; min-width:200px;">Kategori (valfritt)
+            <select id="ekoManuellKategori" class="eko-inline-select"></select></label>
+          <button type="button" id="ekoManuellSpara" class="upload-btn">Lägg till</button>
+          <button type="button" id="ekoManuellAvbryt" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>
+        </div>
+        <p class="eko-sub" style="margin:8px 0 0;">Kostnaden hamnar i listan nedan märkt "Manuell" och räknas som tagen kostnad på vald post, precis som en reskontrarad.</p>
+      </div>
       <label style="display:inline-flex; align-items:center; gap:8px; margin:10px 0 0; font-size:13px; cursor:pointer;">
         <input type="checkbox" id="ekonomiReskontraOnlyUnhandled" style="width:16px; height:16px; cursor:pointer;">
         Visa ej hanterade <span class="eko-sub" style="margin:0;">(döljer kategoriserade rader)</span>
@@ -1481,7 +1501,7 @@
           <thead>
             <tr>
               <th style="width:34px;"><input type="checkbox" id="ekonomiReskontraSelectAll" title="Markera/avmarkera alla okategoriserade rader"></th>
-              <th style="text-align:left; cursor:pointer;" class="reskontra-sort" data-sort="lopnr" title="Sortera">Löpnr</th>
+              <th style="text-align:left; cursor:pointer;" class="reskontra-sort" data-sort="lopnr" title="Sortera">Löpnr / ver.nr</th>
               <th style="text-align:left; cursor:pointer;" class="reskontra-sort" data-sort="leverantor" title="Sortera">Leverantör</th>
               <th style="text-align:left; cursor:pointer;" class="reskontra-sort" data-sort="fakturadatum" title="Sortera">Fakturadatum</th>
               <th style="cursor:pointer;" class="reskontra-sort" data-sort="belopp" title="Sortera">Belopp (kr)</th>
@@ -2482,7 +2502,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261005153653"></script>
-<script src="app.js?v=20261005153653"></script>
+<script src="db.js?v=20261005155357"></script>
+<script src="app.js?v=20261005155357"></script>
 </body>
 </html>
