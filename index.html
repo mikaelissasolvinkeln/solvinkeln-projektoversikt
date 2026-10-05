@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261005143827">
+<meta name="app-build" content="20261005144112">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1463,10 +1463,19 @@
         <span id="reskontraUploadStatus" class="contract-upload-status"></span>
       </div>
 
+      <div id="ekonomiReskontraBulkBar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; padding:8px 12px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px;">
+        <span id="ekonomiReskontraBulkCount" style="font-size:13px; min-width:120px;">0 markerade</span>
+        <select id="ekonomiReskontraBulkSelect" class="eko-inline-select" style="min-width:220px;"></select>
+        <button type="button" id="ekonomiReskontraBulkApply" class="upload-btn">Sätt kategori på markerade</button>
+        <button type="button" id="ekonomiReskontraBulkClear" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avmarkera</button>
+        <span class="eko-sub" style="margin:0;">Tips: klicka på en leverantör i listan för att markera alla rader från samma leverantör.</span>
+      </div>
+
       <div class="table-scroll">
         <table class="eko-compare-table" style="width:100%;">
           <thead>
             <tr>
+              <th style="width:34px;"><input type="checkbox" id="ekonomiReskontraSelectAll" title="Markera/avmarkera alla okategoriserade rader"></th>
               <th style="text-align:left;">Löpnr</th>
               <th style="text-align:left;">Leverantör</th>
               <th style="text-align:left;">Fakturadatum</th>
@@ -2468,7 +2477,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261005143827"></script>
-<script src="app.js?v=20261005143827"></script>
+<script src="db.js?v=20261005144112"></script>
+<script src="app.js?v=20261005144112"></script>
 </body>
 </html>

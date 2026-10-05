@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005143827';
+const APP_BUILD = '20261005144112';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1703,6 +1703,7 @@ async function openEkonomiProjektBudget(project){
   if(!nyaProjektList.length){
     try{ nyaProjektList = await DB.listNyaProjekt(); nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); }); }catch(e){}
   }
+  ekonomiReskontraSelection.clear();
   ekonomiBudgetAreaRevenue = await computeProjectAreaRevenue(project.id);
   const detail = ekonomiBudgetDetail(project.id);
   ekonomiBudgetStruktur(project.id);
@@ -2309,43 +2310,117 @@ function renderEkonomiReskontraTable(){
   sorted.forEach(line => {
     const row = document.createElement('tr');
     if(!line.kategori) row.className = 'eko-row-uncategorized';
+    const key = String(line.lopnr);
+    if(ekonomiReskontraSelection.has(key)) row.style.background = 'var(--blue-soft)';
     row.innerHTML =
+      '<td style="text-align:center;"></td>' +
       '<td>' + escapeHtml(line.lopnr || '') + '</td>' +
-      '<td>' + escapeHtml(line.leverantor || '—') + '</td>' +
+      '<td></td>' +
       '<td>' + escapeHtml(line.fakturadatum || '—') + '</td>' +
       '<td></td>' +
       '<td></td>';
 
-    // En beloppskolumn i kr: redigerbar (justerat belopp). Är beloppet justerat
-    // visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
-    // Visas som "411 500 kr"; klick ger ett fält att justera i.
-    likviditetsbudgetEditableCell(row.children[3], ekonomiLedgerAmount(line), async (v) => {
+    // Kryssruta för flerval (sätt kategori på många rader på en gång).
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = ekonomiReskontraSelection.has(key);
+    cb.onchange = () => {
+      if(cb.checked) ekonomiReskontraSelection.add(key); else ekonomiReskontraSelection.delete(key);
+      row.style.background = cb.checked ? 'var(--blue-soft)' : '';
+      ekonomiReskontraUpdateBulkBar();
+    };
+    row.children[0].appendChild(cb);
+
+    // Leverantör: klick markerar alla rader från samma leverantör.
+    const lev = document.createElement('span');
+    lev.textContent = line.leverantor || '—';
+    lev.className = 'editable';
+    lev.style.cursor = 'pointer';
+    lev.title = 'Markera alla rader från ' + (line.leverantor || 'leverantören');
+    lev.onclick = () => {
+      const name = (line.leverantor || '').trim().toLowerCase();
+      const same = lines.filter(l => (l.leverantor || '').trim().toLowerCase() === name);
+      const allSelected = same.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
+      same.forEach(l => { if(allSelected) ekonomiReskontraSelection.delete(String(l.lopnr)); else ekonomiReskontraSelection.add(String(l.lopnr)); });
+      renderEkonomiReskontraTable();
+    };
+    row.children[2].appendChild(lev);
+
+    // En beloppskolumn i kr: visas som "411 500 kr"; klick ger ett fält att justera i.
+    // Är beloppet justerat visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
+    likviditetsbudgetEditableCell(row.children[4], ekonomiLedgerAmount(line), async (v) => {
       await saveEkonomiReskontraLine(line.lopnr, { justeratBelopp: (v == null || v === (line.belopp || 0)) ? null : v });
     });
-    row.children[3].firstChild.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Klicka för att justera om bara en del ska räknas (t.ex. utan amortering).';
+    row.children[4].firstChild.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Klicka för att justera om bara en del ska räknas (t.ex. utan amortering).';
     if(line.justeratBelopp != null){
       const orig = document.createElement('div');
       orig.style.cssText = 'font-size:10px; color:var(--ink-soft); text-align:right;';
       orig.textContent = 'inläst ' + formatKrFull(line.belopp || 0);
-      row.children[3].appendChild(orig);
+      row.children[4].appendChild(orig);
     }
     const dub = ekonomiReskontraMarkDubblett(pid, line);
     if(dub){
       const d = document.createElement('div');
       d.style.cssText = 'font-size:10px; color:var(--danger); text-align:right;';
       d.textContent = 'även i Mark (faktura ' + (dub.fakturanummer || '?') + ') - räknas en gång';
-      row.children[3].appendChild(d);
+      row.children[4].appendChild(d);
     }
 
     const select = document.createElement('select');
     select.className = 'eko-inline-select';
     select.innerHTML = ekonomiBudgetKategoriOptions(pid, line.kategori);
     select.onchange = () => saveEkonomiReskontraLine(line.lopnr, { kategori: select.value || null });
-    row.children[4].appendChild(select);
+    row.children[5].appendChild(select);
 
     tbody.appendChild(row);
   });
+  // Flervalsraden: rullista med budgetens poster + antal markerade.
+  const bulkSel = document.getElementById('ekonomiReskontraBulkSelect');
+  const keep = bulkSel.value;
+  bulkSel.innerHTML = ekonomiBudgetKategoriOptions(pid, keep, 'Välj kategori…');
+  const selAll = document.getElementById('ekonomiReskontraSelectAll');
+  const uncat = lines.filter(l => !l.kategori);
+  selAll.checked = uncat.length > 0 && uncat.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
+  ekonomiReskontraUpdateBulkBar();
 }
+// Flerval i reskontran: markerade löpnummer för det öppna projektet.
+const ekonomiReskontraSelection = new Set();
+function ekonomiReskontraUpdateBulkBar(){
+  const n = ekonomiReskontraSelection.size;
+  const el = document.getElementById('ekonomiReskontraBulkCount');
+  if(el) el.textContent = n + ' markerad' + (n === 1 ? '' : 'e');
+  const bar = document.getElementById('ekonomiReskontraBulkBar');
+  if(bar) bar.style.opacity = n ? '1' : '0.75';
+}
+document.getElementById('ekonomiReskontraSelectAll').onchange = (e) => {
+  const pid = currentEkonomiBudgetProjectId;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const uncat = lines.filter(l => !l.kategori);
+  if(e.target.checked) uncat.forEach(l => ekonomiReskontraSelection.add(String(l.lopnr)));
+  else ekonomiReskontraSelection.clear();
+  renderEkonomiReskontraTable();
+};
+document.getElementById('ekonomiReskontraBulkClear').onclick = () => {
+  ekonomiReskontraSelection.clear();
+  renderEkonomiReskontraTable();
+};
+document.getElementById('ekonomiReskontraBulkApply').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  const kat = document.getElementById('ekonomiReskontraBulkSelect').value || null;
+  if(!ekonomiReskontraSelection.size){ showToast('Markera först de rader som ska kategoriseras.'); return; }
+  if(!kat){ showToast('Välj en kategori i rullistan.'); return; }
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  let n = 0;
+  lines.forEach(l => { if(ekonomiReskontraSelection.has(String(l.lopnr))){ l.kategori = kat; n++; } });
+  ekonomiReskontraSelection.clear();
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    showToast(n + ' rader satta till "' + kat + '".');
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+  renderEkonomiProjektBudget();
+};
 
 async function saveEkonomiReskontraLine(lopnr, patch){
   const pid = currentEkonomiBudgetProjectId;
