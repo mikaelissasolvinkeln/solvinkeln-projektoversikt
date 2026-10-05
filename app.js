@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005145137';
+const APP_BUILD = '20261005145443';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1526,18 +1526,23 @@ function ekonomiBudgetTagna(pid){
     return map[post.id];
   };
   (companyEkonomiData.reskontra[pid] || []).forEach(line => {
-    if(!line.kategori) return;
-    const post = ekonomiBudgetFindPost(pid, line.kategori);
-    if(!post) return;
-    const v = ekonomiLedgerAmount(line);
-    const dub = ekonomiReskontraMarkDubblett(pid, line);
-    const e = entry(post);
-    if(dub){
-      e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—'), belopp: v, dubblett: 'Finns även i Mark (faktura ' + (dub.fakturanummer || '?') + ', ' + (dub.fastighet || '') + ') - räknas en gång' });
-      return;
-    }
-    e.reskontra += v;
-    e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—') + (line.justeratBelopp != null ? ' · justerat från ' + formatKrFull(line.belopp || 0) : ''), belopp: v });
+    const parts = ekonomiLineParts(line);
+    if(!parts.length) return;
+    const split = ekonomiLineIsSplit(line);
+    // Mark-dubblettkontrollen gäller bara hela, ofördelade fakturor.
+    const dub = split ? null : ekonomiReskontraMarkDubblett(pid, line);
+    parts.forEach(part => {
+      const post = ekonomiBudgetFindPost(pid, part.kategori);
+      if(!post) return;
+      const e = entry(post);
+      const base = (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—');
+      if(dub){
+        e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: base, belopp: part.belopp, dubblett: 'Finns även i Mark (faktura ' + (dub.fakturanummer || '?') + ', ' + (dub.fastighet || '') + ') - räknas en gång' });
+        return;
+      }
+      e.reskontra += part.belopp;
+      e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: base + (split ? ' · del av faktura på ' + formatKrFull(ekonomiLedgerAmount(line)) : '') + (!split && line.justeratBelopp != null ? ' · justerat från ' + formatKrFull(line.belopp || 0) : ''), belopp: part.belopp });
+    });
   });
   const fastigheter = companyEkonomiData.mark[pid] || [];
   const ms = ekonomiMarkSums(pid);
@@ -1715,7 +1720,7 @@ async function openEkonomiProjektBudget(project){
   // på samma post (gatukostnad/vattenanslutning) - de räknas ändå bara en gång.
   let autoKat = 0;
   (companyEkonomiData.reskontra[project.id] || []).forEach(line => {
-    if(line.kategori) return;
+    if(ekonomiLineHandled(line)) return;
     const dub = ekonomiReskontraMarkDubblett(project.id, line);
     if(!dub) return;
     const post = ekonomiMarkPostFor(project.id, dub.typ === 'vattenanslutning' ? 'vattenanslutning' : 'gatukostnad', true);
@@ -2308,9 +2313,9 @@ function renderEkonomiReskontraTable(){
   const cmpText = (x, y) => String(x || '').localeCompare(String(y || ''), 'sv', { numeric: true, sensitivity: 'base' });
   // Filter "Visa ej hanterade": bara okategoriserade rader.
   const onlyUnhandled = document.getElementById('ekonomiReskontraOnlyUnhandled').checked;
-  const unhandledCount = lines.filter(l => !l.kategori).length;
+  const unhandledCount = lines.filter(l => !ekonomiLineHandled(l)).length;
   document.getElementById('ekonomiReskontraUnhandledCount').textContent = unhandledCount + ' av ' + lines.length + ' rader är ej hanterade';
-  const visibleLines = onlyUnhandled ? lines.filter(l => !l.kategori) : lines;
+  const visibleLines = onlyUnhandled ? lines.filter(l => !ekonomiLineHandled(l)) : lines;
   const sorted = [...visibleLines].sort((a, b) => {
     if(!s.key){
       const aUn = !a.kategori, bUn = !b.kategori;
@@ -2320,8 +2325,9 @@ function renderEkonomiReskontraTable(){
     let r = 0;
     if(s.key === 'belopp') r = ekonomiLedgerAmount(a) - ekonomiLedgerAmount(b);
     else if(s.key === 'kategori'){
-      const aUn = !a.kategori, bUn = !b.kategori;
-      if(aUn !== bUn) r = aUn ? -1 : 1; else r = cmpText(a.kategori, b.kategori);
+      const aUn = !ekonomiLineHandled(a), bUn = !ekonomiLineHandled(b);
+      const label = l => ekonomiLineIsSplit(l) ? 'Fördelad: ' + l.fordelning.map(p => p.kategori).join(', ') : (l.kategori || '');
+      if(aUn !== bUn) r = aUn ? -1 : 1; else r = cmpText(label(a), label(b));
     }
     else r = cmpText(a[s.key], b[s.key]);
     if(r === 0) r = cmpText(a.lopnr, b.lopnr);
@@ -2333,7 +2339,7 @@ function renderEkonomiReskontraTable(){
   });
   sorted.forEach(line => {
     const row = document.createElement('tr');
-    if(!line.kategori) row.className = 'eko-row-uncategorized';
+    if(!ekonomiLineHandled(line)) row.className = 'eko-row-uncategorized';
     const key = String(line.lopnr);
     if(ekonomiReskontraSelection.has(key)) row.style.background = 'var(--blue-soft)';
     row.innerHTML =
@@ -2399,11 +2405,33 @@ function renderEkonomiReskontraTable(){
       row.children[4].appendChild(d);
     }
 
-    const select = document.createElement('select');
-    select.className = 'eko-inline-select';
-    select.innerHTML = ekonomiBudgetKategoriOptions(pid, line.kategori);
-    select.onchange = () => saveEkonomiReskontraLine(line.lopnr, { kategori: select.value || null });
-    row.children[5].appendChild(select);
+    const katTd = row.children[5];
+    if(ekonomiLineIsSplit(line)){
+      // Fördelad faktura: visa fördelningen i stället för rullistan.
+      const parts = ekonomiLineParts(line);
+      const sum = parts.reduce((s, p) => s + p.belopp, 0);
+      const rest = ekonomiLedgerAmount(line) - sum;
+      const box = document.createElement('div');
+      box.style.cssText = 'font-size:12px; line-height:1.4;';
+      box.innerHTML = parts.map(p => '<div>' + escapeHtml(p.kategori) + ' <span style="font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + formatKrFull(p.belopp) + '</span></div>').join('') +
+        (Math.abs(rest) > 0.5 ? '<div style="color:var(--danger);">Ej fördelat ' + formatKrFull(rest) + '</div>' : '');
+      katTd.appendChild(box);
+    } else {
+      const select = document.createElement('select');
+      select.className = 'eko-inline-select';
+      select.innerHTML = ekonomiBudgetKategoriOptions(pid, line.kategori);
+      select.onchange = () => saveEkonomiReskontraLine(line.lopnr, { kategori: select.value || null, fordelning: null });
+      katTd.appendChild(select);
+    }
+    // "Fördela": dela upp fakturan på flera poster (t.ex. samlingsfakturor
+    // från Solvinkeln Fastigheter AB med många leverantörer).
+    const splitBtn = document.createElement('button');
+    splitBtn.type = 'button';
+    splitBtn.textContent = ekonomiLineIsSplit(line) ? '⇄ Ändra fördelning' : '⇄ Fördela';
+    splitBtn.title = 'Dela upp fakturan på flera poster';
+    splitBtn.style.cssText = 'display:block; margin-top:3px; background:none; border:none; padding:0; color:var(--blue); cursor:pointer; font-size:11px;';
+    splitBtn.onclick = () => openEkonomiFordelaModal(pid, line);
+    katTd.appendChild(splitBtn);
 
     tbody.appendChild(row);
   });
@@ -2412,9 +2440,108 @@ function renderEkonomiReskontraTable(){
   const keep = bulkSel.value;
   bulkSel.innerHTML = ekonomiBudgetKategoriOptions(pid, keep, 'Välj kategori…');
   const selAll = document.getElementById('ekonomiReskontraSelectAll');
-  const uncat = lines.filter(l => !l.kategori);
+  const uncat = lines.filter(l => !ekonomiLineHandled(l));
   selAll.checked = uncat.length > 0 && uncat.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
   ekonomiReskontraUpdateBulkBar();
+}
+// En reskontrarad kan vara kategoriserad på EN post (kategori) eller fördelad
+// på flera (fordelning: [{kategori, belopp}]). Delarna är det som räknas.
+function ekonomiLineIsSplit(line){
+  return Array.isArray(line.fordelning) && line.fordelning.some(p => p.kategori && p.belopp);
+}
+function ekonomiLineParts(line){
+  if(ekonomiLineIsSplit(line)) return line.fordelning.filter(p => p.kategori && p.belopp).map(p => ({ kategori: p.kategori, belopp: p.belopp }));
+  if(line.kategori) return [{ kategori: line.kategori, belopp: ekonomiLedgerAmount(line) }];
+  return [];
+}
+function ekonomiLineHandled(line){
+  return ekonomiLineParts(line).length > 0;
+}
+// Popup: fördela en faktura på flera poster tills hela beloppet är bokat.
+function openEkonomiFordelaModal(pid, line){
+  const old = document.getElementById('ekoFordelaPopup');
+  if(old) old.remove();
+  const total = ekonomiLedgerAmount(line);
+  let rows = ekonomiLineIsSplit(line) ? line.fordelning.map(p => ({ kategori: p.kategori || '', belopp: p.belopp })) : [{ kategori: line.kategori || '', belopp: total }, { kategori: '', belopp: null }];
+  const overlay = document.createElement('div');
+  overlay.id = 'ekoFordelaPopup';
+  overlay.className = 'modal-overlay open';
+  overlay.innerHTML = '<div class="modal-box" style="max-width:620px;">' +
+    '<h3>Fördela faktura ' + escapeHtml(String(line.lopnr || '')) + '</h3>' +
+    '<p class="modal-sub">' + escapeHtml(line.leverantor || '') + ' · ' + escapeHtml(line.fakturadatum || '') + ' · ' + formatKrFull(total) + '. Välj post och belopp per rad tills hela fakturan är fördelad.</p>' +
+    '<div id="ekoFordelaRows"></div>' +
+    '<button type="button" id="ekoFordelaAdd" class="add-inline-btn" style="margin-top:6px;">+ Lägg till rad</button>' +
+    '<div id="ekoFordelaRest" style="margin-top:12px; font-family:\'JetBrains Mono\',monospace; font-size:13px;"></div>' +
+    '<div class="modal-actions" style="margin-top:14px;">' +
+      '<button type="button" id="ekoFordelaRemove" style="background:none; border:1px solid var(--line-soft); color:var(--danger); margin-right:auto;">Ta bort fördelning</button>' +
+      '<button type="button" id="ekoFordelaCancel" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>' +
+      '<button type="button" id="ekoFordelaSave" style="background:var(--ink); color:#fff;">Spara</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  const rowsEl = overlay.querySelector('#ekoFordelaRows');
+  const restEl = overlay.querySelector('#ekoFordelaRest');
+  const updateRest = () => {
+    const sum = rows.reduce((s, r) => s + (r.belopp || 0), 0);
+    const rest = Math.round((total - sum) * 100) / 100;
+    restEl.innerHTML = 'Fördelat ' + formatKrFull(sum) + ' av ' + formatKrFull(total) + ' · <span style="color:' + (Math.abs(rest) > 0.5 ? 'var(--danger)' : 'var(--ok, #2e7d32)') + ';">' + (Math.abs(rest) > 0.5 ? 'Kvar att fördela ' + formatKrFull(rest) : 'Hela beloppet fördelat ✓') + '</span>';
+  };
+  const render = () => {
+    rowsEl.innerHTML = '';
+    rows.forEach((r, i) => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex; gap:8px; align-items:center; margin-bottom:8px;';
+      const sel = document.createElement('select');
+      sel.className = 'eko-inline-select';
+      sel.style.flex = '1';
+      sel.innerHTML = ekonomiBudgetKategoriOptions(pid, r.kategori, 'Välj post…');
+      sel.onchange = () => { r.kategori = sel.value; };
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.step = 'any';
+      inp.placeholder = 'kr';
+      inp.value = r.belopp != null ? r.belopp : '';
+      inp.style.cssText = 'width:140px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-family:\'JetBrains Mono\',monospace;';
+      inp.oninput = () => { const raw = inp.value.trim(); r.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.')); updateRest(); };
+      const restBtn = document.createElement('button');
+      restBtn.type = 'button';
+      restBtn.textContent = 'resten';
+      restBtn.title = 'Lägg det som är kvar på den här raden';
+      restBtn.style.cssText = 'font-size:11px; padding:3px 7px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
+      restBtn.onclick = () => { const other = rows.reduce((s, x, j) => s + (j === i ? 0 : (x.belopp || 0)), 0); r.belopp = Math.round((total - other) * 100) / 100; inp.value = r.belopp; updateRest(); };
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '✕';
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+      del.onclick = () => { rows.splice(i, 1); if(!rows.length) rows.push({ kategori: '', belopp: null }); render(); };
+      div.appendChild(sel); div.appendChild(inp); div.appendChild(restBtn); div.appendChild(del);
+      rowsEl.appendChild(div);
+    });
+    updateRest();
+  };
+  render();
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  overlay.querySelector('#ekoFordelaAdd').onclick = () => { rows.push({ kategori: '', belopp: null }); render(); };
+  overlay.querySelector('#ekoFordelaCancel').onclick = close;
+  overlay.querySelector('#ekoFordelaRemove').onclick = async () => {
+    close();
+    await saveEkonomiReskontraLine(line.lopnr, { fordelning: null });
+  };
+  overlay.querySelector('#ekoFordelaSave').onclick = async () => {
+    const valid = rows.filter(r => r.kategori && r.belopp);
+    if(!valid.length){ showToast('Välj minst en post med belopp.'); return; }
+    const sum = valid.reduce((s, r) => s + r.belopp, 0);
+    const rest = Math.round((total - sum) * 100) / 100;
+    if(Math.abs(rest) > 0.5 && !confirm('Fördelningen täcker ' + formatKrFull(sum) + ' av ' + formatKrFull(total) + '. ' + formatKrFull(rest) + ' förblir ofördelat. Spara ändå?')) return;
+    close();
+    if(valid.length === 1 && Math.abs(rest) <= 0.5){
+      await saveEkonomiReskontraLine(line.lopnr, { kategori: valid[0].kategori, fordelning: null });
+    } else {
+      await saveEkonomiReskontraLine(line.lopnr, { kategori: null, fordelning: valid.map(r => ({ kategori: r.kategori, belopp: r.belopp })) });
+    }
+  };
 }
 // Flerval i reskontran: markerade löpnummer för det öppna projektet.
 const ekonomiReskontraSelection = new Set();
@@ -2443,7 +2570,7 @@ function ekonomiReskontraUpdateBulkBar(){
 document.getElementById('ekonomiReskontraSelectAll').onchange = (e) => {
   const pid = currentEkonomiBudgetProjectId;
   const lines = companyEkonomiData.reskontra[pid] || [];
-  const uncat = lines.filter(l => !l.kategori);
+  const uncat = lines.filter(l => !ekonomiLineHandled(l));
   if(e.target.checked) uncat.forEach(l => ekonomiReskontraSelection.add(String(l.lopnr)));
   else ekonomiReskontraSelection.clear();
   renderEkonomiReskontraTable();
@@ -2460,7 +2587,7 @@ document.getElementById('ekonomiReskontraBulkApply').onclick = async () => {
   if(!kat){ showToast('Välj en kategori i rullistan.'); return; }
   const lines = companyEkonomiData.reskontra[pid] || [];
   let n = 0;
-  lines.forEach(l => { if(ekonomiReskontraSelection.has(String(l.lopnr))){ l.kategori = kat; n++; } });
+  lines.forEach(l => { if(ekonomiReskontraSelection.has(String(l.lopnr))){ l.kategori = kat; l.fordelning = null; n++; } });
   ekonomiReskontraSelection.clear();
   try{
     await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
@@ -2678,12 +2805,13 @@ async function computeLikviditetsplan(pid){
   // Kategoriserade reskontraposter (Budget-fliken), räknade på förfallodatum
   const ledger = companyEkonomiData.reskontra[pid] || [];
   ledger.forEach(line => {
-    if(!line.kategori) return;
+    const parts = ekonomiLineParts(line);
+    if(!parts.length) return;
     const dateStr = line.forfallodatum || line.fakturadatum;
     if(!dateStr) return;
     const key = dateStr.slice(0, 7);
     if(!(key in outflow)) return;
-    outflow[key] += ekonomiLedgerAmount(line);
+    outflow[key] += parts.reduce((s, p) => s + p.belopp, 0);
   });
 
   const ingaende = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
@@ -2790,11 +2918,12 @@ async function likviditetsbudgetUtfallMap(pid, rows, months){
   const ledger = companyEkonomiData.reskontra[pid] || [];
   const ledgerByKategoriMonth = {};
   ledger.forEach(line => {
-    if(!line.kategori) return;
     const dateStr = line.forfallodatum || line.fakturadatum;
     if(!dateStr) return;
-    const key = line.kategori + '|' + dateStr.slice(0, 7);
-    ledgerByKategoriMonth[key] = (ledgerByKategoriMonth[key] || 0) + ekonomiLedgerAmount(line);
+    ekonomiLineParts(line).forEach(part => {
+      const key = part.kategori + '|' + dateStr.slice(0, 7);
+      ledgerByKategoriMonth[key] = (ledgerByKategoriMonth[key] || 0) + part.belopp;
+    });
   });
 
   rows.forEach(row => {
