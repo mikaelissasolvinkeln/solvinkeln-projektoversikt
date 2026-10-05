@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261005144112';
+const APP_BUILD = '20261005144523';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2302,10 +2302,29 @@ function renderEkonomiReskontraTable(){
   const empty = document.getElementById('ekonomiReskontraEmptyState');
   tbody.innerHTML = '';
   empty.style.display = lines.length ? 'none' : 'block';
+  // Sortering: standard = okategoriserade först, sedan löpnummer. Klick på en
+  // kolumnrubrik sorterar på den kolumnen (klick igen vänder ordningen).
+  const s = ekonomiReskontraSort;
+  const cmpText = (x, y) => String(x || '').localeCompare(String(y || ''), 'sv', { numeric: true, sensitivity: 'base' });
   const sorted = [...lines].sort((a, b) => {
-    const aUn = !a.kategori, bUn = !b.kategori;
-    if(aUn !== bUn) return aUn ? -1 : 1;
-    return String(a.lopnr || '').localeCompare(String(b.lopnr || ''), undefined, { numeric: true });
+    if(!s.key){
+      const aUn = !a.kategori, bUn = !b.kategori;
+      if(aUn !== bUn) return aUn ? -1 : 1;
+      return cmpText(a.lopnr, b.lopnr);
+    }
+    let r = 0;
+    if(s.key === 'belopp') r = ekonomiLedgerAmount(a) - ekonomiLedgerAmount(b);
+    else if(s.key === 'kategori'){
+      const aUn = !a.kategori, bUn = !b.kategori;
+      if(aUn !== bUn) r = aUn ? -1 : 1; else r = cmpText(a.kategori, b.kategori);
+    }
+    else r = cmpText(a[s.key], b[s.key]);
+    if(r === 0) r = cmpText(a.lopnr, b.lopnr);
+    return s.dir === 'desc' ? -r : r;
+  });
+  document.querySelectorAll('th.reskontra-sort').forEach(th => {
+    const base = th.textContent.replace(/\s*[▲▼]$/, '');
+    th.textContent = base + (s.key === th.dataset.sort ? (s.dir === 'desc' ? ' ▼' : ' ▲') : '');
   });
   sorted.forEach(line => {
     const row = document.createElement('tr');
@@ -2385,6 +2404,21 @@ function renderEkonomiReskontraTable(){
 }
 // Flerval i reskontran: markerade löpnummer för det öppna projektet.
 const ekonomiReskontraSelection = new Set();
+// Vald sortering i reskontran (key = kolumn, dir = asc/desc; key null = standard).
+const ekonomiReskontraSort = { key: null, dir: 'asc' };
+document.querySelectorAll('th.reskontra-sort').forEach(th => {
+  th.onclick = () => {
+    const key = th.dataset.sort;
+    if(ekonomiReskontraSort.key === key){
+      if(ekonomiReskontraSort.dir === 'asc') ekonomiReskontraSort.dir = 'desc';
+      else { ekonomiReskontraSort.key = null; ekonomiReskontraSort.dir = 'asc'; } // tredje klicket = standard
+    } else {
+      ekonomiReskontraSort.key = key;
+      ekonomiReskontraSort.dir = 'asc';
+    }
+    renderEkonomiReskontraTable();
+  };
+});
 function ekonomiReskontraUpdateBulkBar(){
   const n = ekonomiReskontraSelection.size;
   const el = document.getElementById('ekonomiReskontraBulkCount');
