@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261005095949">
+<meta name="app-build" content="20261005132645">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1157,8 +1157,8 @@
               <th style="text-align:left;">Brf</th>
               <th>Markförvärv</th>
               <th>Markarbete</th>
-              <th>VA anslutningar</th>
-              <th>Kommun avgifter</th>
+              <th>VA-anslutning</th>
+              <th>Gatukostnad / kommun</th>
               <th>Summa mark</th>
               <th>Alla tagna kostnader</th>
             </tr>
@@ -1416,8 +1416,13 @@
         </div>
       </div>
 
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <p class="eko-sub" id="ekonomiBudgetStrukturInfo" style="margin:0; flex:1; min-width:260px;"></p>
+        <button type="button" id="ekonomiBudgetFromKalkylBtn" style="display:none; background:none; border:1px solid var(--line-soft); color:var(--ink); white-space:nowrap;">Hämta budget från kalkylen</button>
+      </div>
       <div class="table-scroll" style="margin-bottom:24px;">
         <table class="eko-compare-table" style="width:100%;">
+          <colgroup><col style="width:30%;"><col><col><col><col><col></colgroup>
           <thead>
             <tr>
               <th style="text-align:left;">Kostnadspost</th>
@@ -2446,7 +2451,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261005095949"></script>
-<script src="app.js?v=20261005095949"></script>
+<script src="db.js?v=20261005132645"></script>
+<script src="app.js?v=20261005132645"></script>
 </body>
 </html>
