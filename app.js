@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006142026';
+const APP_BUILD = '20261006142236';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3982,7 +3982,7 @@ function ekonomiPrognosPdf(){
   const proj = projects.find(p => p.id === M.pid) || {};
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const fmt = v => (v === '' || v == null) ? '' : (!v ? '' : (M.tkr ? Math.round(v / 1000).toLocaleString('sv-SE') : Math.round(v).toLocaleString('sv-SE')));
+  const fmt = v => (v === '' || v == null) ? '' : (!v ? '' : (M.tkr ? Math.round(v / 1000) : Math.round(v)).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-'));
   const chunks = [];
   for(let i = 0; i < M.months.length; i += 12) chunks.push(M.months.slice(i, i + 12));
   chunks.forEach((chunk, ci) => {
@@ -4004,7 +4004,7 @@ function ekonomiPrognosPdf(){
       head: [head],
       body,
       styles: { fontSize: 6.5, cellPadding: 1.2, halign: 'center', textColor: 30 },
-      headStyles: { fillColor: [58, 44, 32], halign: 'center', fontSize: 6.5 },
+      headStyles: { fillColor: [58, 44, 32], textColor: 255, halign: 'center', fontSize: 6.5 },
       columnStyles: { 0: { halign: 'left', cellWidth: 52 } },
       margin: { left: 12, right: 12 },
       didParseCell: h => {
