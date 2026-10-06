@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006154808';
+const APP_BUILD = '20261006162029';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -359,6 +359,8 @@ function normalizeApartment(apt){
   ['onskatDatumKund', 'byggdatum', 'bekraftatDatumKund'].forEach(f => {
     if(typeof apt.inflyttningPlan[f] !== 'string') apt.inflyttningPlan[f] = '';
   });
+  if(!apt.inflyttningBekraftat || typeof apt.inflyttningBekraftat !== 'object') apt.inflyttningBekraftat = { date: '', by: '', at: '' };
+  if(typeof apt.inflyttningBekraftat.date !== 'string') apt.inflyttningBekraftat.date = '';
   if(!apt.upplatelse || typeof apt.upplatelse !== 'object') apt.upplatelse = { date: '', by: '', at: '', typ: '' };
   if(typeof apt.upplatelse.date !== 'string') apt.upplatelse.date = '';
   if(typeof apt.upplatelse.typ !== 'string') apt.upplatelse.typ = '';
@@ -376,6 +378,12 @@ function normalizeApartment(apt){
 // överlåtelse går alltid före allt annat, annars bekräftat datum till kund,
 // annars byggdatum, annars önskat datum från kund.
 function effectiveInflyttningDate(apt){
+  if(apt.inflyttningBekraftat && apt.inflyttningBekraftat.date) return apt.inflyttningBekraftat.date;
+  return preliminarInflyttningDate(apt);
+}
+// Preliminärt inflyttningsdatum (allt utom det bekräftade): upplåtelse, bekräftat
+// byggdatum till kund, byggdatum, önskat datum.
+function preliminarInflyttningDate(apt){
   if(apt.upplatelse && apt.upplatelse.date) return apt.upplatelse.date;
   const plan = apt.inflyttningPlan;
   if(plan){
@@ -3333,11 +3341,16 @@ async function ekonomiSaveApartments(pid, apts){
 }
 // Vilken månad en bostads insats väntas (inflyttningsdagen) eller kom in
 // (slutbetalningsdatumet i projektöversikten går alltid före).
-function ekonomiInsatsManad(apt){
-  if(apt.slutbetald && apt.slutbetald.date) return apt.slutbetald.date.slice(0, 7);
-  const d = effectiveInflyttningDate(apt);
-  return d ? d.slice(0, 7) : '';
+function ekonomiInsatsManad(apt, prog){
+  if(apt.slutbetald && apt.slutbetald.date) return { m: apt.slutbetald.date.slice(0, 7), fast: true };
+  const bek = apt.inflyttningBekraftat && apt.inflyttningBekraftat.date;
+  if(bek) return { m: bek.slice(0, 7), fast: true };
+  const vald = prog && prog.insatsManad && prog.insatsManad[apt.id];
+  if(vald) return { m: vald, fast: false };
+  const pre = preliminarInflyttningDate(apt);
+  return { m: pre ? pre.slice(0, 7) : '', fast: false };
 }
+
 function ekonomiInsatsBelopp(apt){
   return parseKr(apt.slutbetald && apt.slutbetald.amount) || parseKr(apt.totalpris) || 0;
 }
@@ -3363,10 +3376,10 @@ function ekonomiPrognosInbetalningar(pid, start, months){
     const amount = ekonomiInsatsBelopp(a);
     if(!amount) return;
     insatser.budget += amount;
-    // Utan inflyttningsdag: en preliminärt vald månad (prog.insatsManad) gäller tills datumet fylls i.
-    const realM = ekonomiInsatsManad(a);
-    const m = realM || ((prog.insatsManad || {})[a.id] || '');
-    const item = { apt: a, belopp: amount, betald: !!(a.slutbetald && a.slutbetald.done), manad: m, prel: !realM };
+    // Månad: slutbetalning > bekräftat datum > månad vald i prognosen > preliminärt datum.
+    const im = ekonomiInsatsManad(a, prog);
+    const m = im.m;
+    const item = { apt: a, belopp: amount, betald: !!(a.slutbetald && a.slutbetald.done), manad: m, fast: im.fast };
     if(!m){ insatser.utanDatum.push(item); return; }
     if(m < start){ insatser.ib += amount; insatser.ibItems.push(item); }
     else if(monthSet.has(m)){ insatser.per[m] = (insatser.per[m] || 0) + amount; (insatser.items[m] = insatser.items[m] || []).push(item); }
@@ -3617,75 +3630,100 @@ function ekoAptLabel(apt){
 // Markeringen skriver slutbetald i projektöversikten (samma fält), så beloppet
 // flyttar till inbetalningsmånaden om kunden betalade en annan månad.
 function showEkonomiInsatserPopup(pid, title, items){
-  const p = ekoPopup({ title, sub: 'Insatser enligt lägenheternas inflyttningsdag. Bostäder utan datum kan läggas på en preliminär månad tills datumet fylls i. Markera när inbetalningen skett – då flyttas beloppet till den månaden och Slutbetald fylls i projektöversikten.', maxWidth: 820 });
+  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 860 });
   if(!items.length){ p.body.innerHTML = '<p class="eko-sub">Inga bostäder.</p>'; return; }
   const today = new Date().toISOString().slice(0, 10);
+  const prog = ekonomiPrognosRec(pid);
+  const pending = {}; // aptId -> 'YYYY-MM' | '' (ändringar som sparas med "Applicera ändringar")
+  const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:100%; white-space:nowrap;';
-  table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Inflyttningsdag</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
-  let sum = 0;
-  const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
-  sorted.forEach(it => {
-    sum += it.belopp;
-    const apt = it.apt;
-    const paid = !!(apt.slutbetald && apt.slutbetald.done);
-    const tr = document.createElement('tr');
-    const tdStyle = 'padding:6px 8px; font-size:12.5px; text-align:left;';
-    tr.innerHTML = '<td style="' + tdStyle + ' font-weight:600;">' + escapeHtml(apt.lgh || '—') + '</td>' +
-      '<td style="' + tdStyle + '">' + escapeHtml(effectiveInflyttningDate(apt) || '—') + '</td>' +
-      '<td style="padding:6px 8px; font-size:12.5px;"></td><td style="' + tdStyle + '"></td>';
-    const amtTd = tr.children[2], stTd = tr.children[3];
-    if(!effectiveInflyttningDate(apt)){
-      // Ingen inflyttningsdag: välj preliminär månad (byts ut när datumet fylls i).
-      const dtd = tr.children[1]; dtd.innerHTML = '';
-      const mi = document.createElement('input');
-      mi.type = 'month'; mi.value = it.manad || ''; mi.title = 'Preliminär månad tills inflyttningsdag finns';
-      mi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
-      mi.onchange = async () => { const prog = ekonomiPrognosRec(pid); prog.insatsManad = prog.insatsManad || {}; if(mi.value) prog.insatsManad[apt.id] = mi.value; else delete prog.insatsManad[apt.id]; await saveEkonomiPrognos(); p.close(); renderEkonomiPrognos(); };
-      dtd.appendChild(mi);
-      const lbl = document.createElement('span'); lbl.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; lbl.textContent = 'prel.'; dtd.appendChild(lbl);
-    }
-    if(paid){
-      amtTd.textContent = formatKrFull(it.belopp);
-      const st = document.createElement('span');
-      st.style.cssText = 'color:var(--good, #2e7d32); margin-right:8px;';
-      st.textContent = 'Inbetald ' + (apt.slutbetald.date || '');
-      stTd.appendChild(st);
-      stTd.appendChild(ekoSmallBtn('Ångra', async () => {
-        if(!confirm('Ta bort markeringen "inbetald" för LGH ' + (apt.lgh || '') + '?')) return;
-        apt.slutbetald.done = false; apt.slutbetald.by = ''; apt.slutbetald.at = ''; apt.slutbetald.date = '';
-        await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
-        p.close(); renderEkonomiPrognos();
-      }, true));
-    } else {
-      const amt = document.createElement('input');
-      amt.type = 'number'; amt.value = it.belopp; amt.title = 'Faktiskt inbetalt belopp';
-      amt.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px; color:var(--danger);';
-      amtTd.appendChild(amt);
-      const date = document.createElement('input');
-      date.type = 'date'; date.value = it.manad && it.manad > today.slice(0, 7) ? it.manad + '-01' : today;
-      date.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; margin-right:6px;';
-      stTd.appendChild(date);
-      stTd.appendChild(ekoSmallBtn('Markera inbetald', async () => {
-        if(!date.value){ showToast('Ange datum.'); return; }
-        apt.slutbetald.done = true; apt.slutbetald.by = myName || ''; apt.slutbetald.at = new Date().toISOString();
-        apt.slutbetald.date = date.value;
-        const ab = parseFloat(String(amt.value).replace(',', '.'));
-        apt.slutbetald.amount = String(ab > 0 ? Math.round(ab) : it.belopp);
-        await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
-        showToast('LGH ' + (apt.lgh || '') + ' markerad som inbetald ' + date.value);
-        p.close(); renderEkonomiPrognos();
-      }));
-    }
-    tbody.appendChild(tr);
-  });
-  const sumTr = document.createElement('tr');
-  sumTr.className = 'eko-row-resultat';
-  sumTr.innerHTML = '<td style="padding:8px; text-align:left;">Summa (' + sorted.length + ' bostäder)</td><td></td><td style="padding:8px; font-size:12.5px;">' + formatKrFull(sum) + '</td><td></td>';
-  tbody.appendChild(sumTr);
+  const render = () => {
+    tbody.innerHTML = '';
+    let sum = 0;
+    sorted.forEach(it => {
+      sum += it.belopp;
+      const apt = it.apt;
+      const paid = !!(apt.slutbetald && apt.slutbetald.done);
+      const bek = apt.inflyttningBekraftat && apt.inflyttningBekraftat.date;
+      const fast = paid || !!bek;
+      const tr = document.createElement('tr');
+      const tdStyle = 'padding:6px 8px; font-size:12.5px; text-align:left;';
+      tr.innerHTML = '<td style="' + tdStyle + ' font-weight:600;">' + escapeHtml(apt.lgh || '—') + '</td>' +
+        '<td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td>' +
+        '<td style="padding:6px 8px; font-size:12.5px;"></td><td style="' + tdStyle + '"></td>';
+      const mTd = tr.children[1], dTd = tr.children[2], amtTd = tr.children[3], stTd = tr.children[4];
+      if(fast){
+        const m = paid && apt.slutbetald.date ? apt.slutbetald.date.slice(0, 7) : bek.slice(0, 7);
+        mTd.textContent = ekonomiPrognosShortLabel(m);
+        dTd.innerHTML = paid ? '' : '<span style="color:var(--good, #2e7d32);">Bekräftat ' + escapeHtml(bek) + '</span>';
+      } else {
+        const mi = document.createElement('input');
+        mi.type = 'month';
+        mi.value = pending[apt.id] != null ? pending[apt.id] : (it.manad || '');
+        mi.title = 'Månad i likviditetsprognosen (påverkar inte Inflyttningsinformation)';
+        mi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
+        mi.onchange = () => { pending[apt.id] = mi.value; applyBtn.disabled = false; applyBtn.style.opacity = '1'; };
+        mTd.appendChild(mi);
+        const pre = preliminarInflyttningDate(apt);
+        dTd.innerHTML = pre ? '<span style="color:var(--ink-soft);">Prel. ' + escapeHtml(pre) + '</span>' : '<span style="color:var(--ink-soft);">Inget datum</span>';
+      }
+      if(paid){
+        amtTd.textContent = formatKrFull(it.belopp);
+        const st = document.createElement('span');
+        st.style.cssText = 'color:var(--good, #2e7d32); margin-right:8px;';
+        st.textContent = 'Inbetald ' + (apt.slutbetald.date || '');
+        stTd.appendChild(st);
+        stTd.appendChild(ekoSmallBtn('Ångra', async () => {
+          if(!confirm('Ta bort markeringen "inbetald" för LGH ' + (apt.lgh || '') + '?')) return;
+          apt.slutbetald.done = false; apt.slutbetald.by = ''; apt.slutbetald.at = ''; apt.slutbetald.date = '';
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          render(); renderEkonomiPrognos();
+        }, true));
+      } else {
+        const amt = document.createElement('input');
+        amt.type = 'number'; amt.value = it.belopp; amt.title = 'Faktiskt inbetalt belopp';
+        amt.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px; color:var(--danger);';
+        amtTd.appendChild(amt);
+        const date = document.createElement('input');
+        date.type = 'date'; date.value = it.manad && it.manad > today.slice(0, 7) ? it.manad + '-01' : today;
+        date.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; margin-right:6px;';
+        stTd.appendChild(date);
+        stTd.appendChild(ekoSmallBtn('Markera inbetald', async () => {
+          if(!date.value){ showToast('Ange datum.'); return; }
+          apt.slutbetald.done = true; apt.slutbetald.by = myName || ''; apt.slutbetald.at = new Date().toISOString();
+          apt.slutbetald.date = date.value;
+          const ab = parseFloat(String(amt.value).replace(',', '.'));
+          apt.slutbetald.amount = String(ab > 0 ? Math.round(ab) : it.belopp);
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          showToast('LGH ' + (apt.lgh || '') + ' markerad som inbetald ' + date.value);
+          render(); renderEkonomiPrognos();
+        }));
+      }
+      tbody.appendChild(tr);
+    });
+    const sumTr = document.createElement('tr');
+    sumTr.className = 'eko-row-resultat';
+    sumTr.innerHTML = '<td style="padding:8px; text-align:left;">Summa (' + sorted.length + ' bostäder)</td><td></td><td></td><td style="padding:8px; font-size:12.5px;">' + formatKrFull(sum) + '</td><td></td>';
+    tbody.appendChild(sumTr);
+  };
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button'; applyBtn.textContent = 'Applicera ändringar';
+  applyBtn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  applyBtn.disabled = true; applyBtn.style.opacity = '0.5';
+  applyBtn.onclick = async () => {
+    prog.insatsManad = prog.insatsManad || {};
+    Object.keys(pending).forEach(id => { if(pending[id]) prog.insatsManad[id] = pending[id]; else delete prog.insatsManad[id]; });
+    await saveEkonomiPrognos();
+    showToast('Månader uppdaterade i likviditetsprognosen.');
+    p.close(); renderEkonomiPrognos();
+  };
+  p.actions.insertBefore(applyBtn, p.actions.firstChild);
+  render();
   p.body.appendChild(table);
 }
 // Lånets rörelser en viss månad: bokningar från Lån-fliken och preliminärt bokad
@@ -8313,6 +8351,34 @@ function renderInflyttningsinfo(){
     inflyttningSpan.onclick = () => openInflyttningPlanModal(apt);
     inflyttningTd.appendChild(inflyttningSpan);
     tr.appendChild(inflyttningTd);
+
+    // Bekräftat inflyttningsdatum: gäller före det preliminära i Checklistan, Kalendern
+    // och likviditetsprognosen.
+    const bekTd = document.createElement('td');
+    bekTd.style.textAlign = 'left';
+    if(apt.inflyttningBekraftat.date) bekTd.style.backgroundColor = '#EEF6F0';
+    const bekInput = document.createElement('input');
+    bekInput.type = 'date';
+    bekInput.value = apt.inflyttningBekraftat.date || '';
+    bekInput.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px; font-size:12.5px; background:#fff;';
+    bekInput.onchange = async () => {
+      if(!myName){ showToast('Ange ditt namn först'); return; }
+      apt.inflyttningBekraftat = { date: bekInput.value, by: bekInput.value ? myName : '', at: bekInput.value ? new Date().toISOString() : '' };
+      const newDate = effectiveInflyttningDate(apt);
+      if(newDate !== apt.inflyttning.date){ apt.inflyttning.by = myName || ''; apt.inflyttning.at = new Date().toISOString(); }
+      apt.inflyttning.date = newDate;
+      renderTable();
+      renderInflyttningsinfo();
+      await persistApartments();
+    };
+    bekTd.appendChild(bekInput);
+    if(apt.inflyttningBekraftat.date && apt.inflyttningBekraftat.by){
+      const stamp = document.createElement('div');
+      stamp.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;';
+      stamp.textContent = apt.inflyttningBekraftat.by + ' · ' + timeAgo(apt.inflyttningBekraftat.at);
+      bekTd.appendChild(stamp);
+    }
+    tr.appendChild(bekTd);
 
     tr.appendChild(makeKommentarCell(apt, 'kommentarInflyttning'));
 
