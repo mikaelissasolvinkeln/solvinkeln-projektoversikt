@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006122621';
+const APP_BUILD = '20261006131502';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -73,6 +73,7 @@ const EKONOMI_TAB_CONFIG = {
       { key: 'fastighetsvarde', label: 'Fastighetsvärde (kr) - från Mark', computed: true },
       { key: 'lanKameo', label: 'Lån Kameo (kr)', dated: true },
       { key: 'lanSparbanken', label: 'Lån Sparbanken (kr)', dated: true },
+      { key: 'lanTriol', label: 'Lån Triol (kr)', dated: true },
       { key: 'lanSolvinkeln', label: 'Lån Solvinkeln (kr)', dated: true },
       { key: 'lanNBE', label: 'Lån NBE (kr)', dated: true },
       { key: 'lanDerome', label: 'Lån Derome (kr)', dated: true },
@@ -4051,7 +4052,7 @@ function renderEkonomiOversikt(){
     breakdown.map(b => b.count + ' ' + b.label).join(' · ');
   document.getElementById('ekoKpiLikviditet').textContent = formatMSEK(sumField('likviditet', 'belopp'));
   const sumLan = key => projects.reduce((s, p) => s + ekonomiLanSaldo(p.id, key), 0);
-  document.getElementById('ekoKpiLanevolym').textContent = formatMSEK(sumLan('lanKameo') + sumLan('lanSparbanken'));
+  document.getElementById('ekoKpiLanevolym').textContent = formatMSEK(sumLan('lanKameo') + sumLan('lanSparbanken') + sumLan('lanTriol'));
   document.getElementById('ekoKpiLanSolvinkeln').textContent = formatMSEK(sumLan('lanSolvinkeln'));
   document.getElementById('ekoKpiLanNBE').textContent = formatMSEK(sumLan('lanNBE'));
   document.getElementById('ekoKpiLanDerome').textContent = formatMSEK(sumLan('lanDerome'));
