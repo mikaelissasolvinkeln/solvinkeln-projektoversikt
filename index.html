@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261006103852">
+<meta name="app-build" content="20261006122621">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1658,58 +1658,15 @@
         <h2 id="ekonomiProjektLikviditetTitle" class="project-header-name"></h2>
       </div>
 
-      <div style="max-width:260px; margin-bottom:20px;">
-        <label style="display:block;font-size:12.5px;color:var(--ink-soft);margin-bottom:4px;">Ingående likviditet (kr)</label>
-        <input type="number" id="ekoLikviditetIngaendeInput" class="eko-inline-input" style="text-align:left; border:1px solid var(--line-soft); background:#fff;">
-      </div>
-
-      <p class="eko-sub" style="margin:0 0 10px;">
-        Inbetalningar = slutbetalningar från lägenhetslistan + lån bokade på sin inbetalningsmånad (Lån-fliken).
-        Utbetalningar = kategoriserade reskontraposter (Budget-fliken), räknade på förfallodatum.
-      </p>
-
-      <div class="table-scroll">
-        <table class="eko-compare-table" style="width:100%;">
-          <thead>
-            <tr>
-              <th style="text-align:left;">Månad</th>
-              <th>Inbetalningar</th>
-              <th>Utbetalningar</th>
-              <th>Netto</th>
-              <th>Saldo</th>
-            </tr>
-          </thead>
-          <tbody id="ekonomiLikviditetPlanBody"></tbody>
-        </table>
-      </div>
-
-      <h3 style="margin:36px 0 6px;">Likviditetsprognos (från budgeten)</h3>
-      <p class="eko-sub" style="margin:0 0 10px;">
-        IB = betalda tagna kostnader fram till startmånaden (reskontra + Mark), per kostnadspost. Kvar = budget − tagna kostnader.
-        Fördela det som är kvar per månad (skriv i cellerna eller använd "Fördela jämnt"). Obetalda fakturor i reskontran läggs automatiskt på sin förfallomånad.
-        Utfall-raden visar kategoriserade fakturor per månad efter en ny inläsning av reskontran, så att prognosen kan stämmas av.
-      </p>
-      <div class="contract-upload-row" style="margin-bottom:10px;">
+      <h3 style="margin:8px 0 10px;">Likviditetsprognos</h3>
+      <div class="contract-upload-row" style="margin-bottom:10px; flex-wrap:wrap; gap:14px;">
+        <label style="font-size:12.5px; color:var(--ink-soft);">Ingående likviditet (kr) <input type="number" id="ekoLikviditetIngaendeInput" style="width:140px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; margin-left:4px;"></label>
         <label style="font-size:12.5px; color:var(--ink-soft);">Startmånad (IB) <input type="month" id="ekoPrognosStart" style="border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; margin-left:4px;"></label>
         <label style="font-size:12.5px; color:var(--ink-soft);">Antal månader <input type="number" id="ekoPrognosManader" min="3" max="60" style="width:70px; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; margin-left:4px;"></label>
         <label style="font-size:12.5px; color:var(--ink-soft); display:inline-flex; align-items:center; gap:6px;"><input type="checkbox" id="ekoPrognosVisaUtfall" checked> Visa utfall-rader</label>
         <button type="button" id="ekoPrognosExpandAll" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Fäll ut alla</button>
       </div>
       <div id="ekoPrognosWrap" class="table-scroll" style="margin-bottom:36px;"></div>
-
-      <h3 style="margin:36px 0 10px;">Likviditetsbudget (hela projektet)</h3>
-      <p class="eko-sub" style="margin:0 0 10px;">
-        Kostnadsrader jämförs mot kategoriserade reskontraposter (Budget-fliken) om en kategori väljs.
-        Intäktsrader som heter Insatser/Tillträde jämförs automatiskt mot lägenheternas slutbetalningar.
-        Övriga rader kan fyllas i manuellt under Utfall.
-      </p>
-      <div style="margin-bottom:12px;">
-        <button type="button" id="likviditetsbudgetUploadBtn" class="upload-btn">📄 Läs in likviditetsbudget (Excel)</button>
-        <input type="file" id="likviditetsbudgetFileInput" accept=".xlsx,.xls" style="display:none;">
-        <span id="likviditetsbudgetUploadStatus" class="contract-upload-status"></span>
-      </div>
-      <div class="table-scroll" id="likviditetsbudgetTableWrap" style="margin-bottom:10px;"></div>
-      <button id="likviditetsbudgetAddRowBtn" class="add-inline-btn">+ Lägg till rad</button>
     </div>
   </div>
 
@@ -2552,7 +2509,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261006103852"></script>
-<script src="app.js?v=20261006103852"></script>
+<script src="db.js?v=20261006122621"></script>
+<script src="app.js?v=20261006122621"></script>
 </body>
 </html>
