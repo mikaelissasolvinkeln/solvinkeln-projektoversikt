@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006144808';
+const APP_BUILD = '20261006145033';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4003,12 +4003,9 @@ function renderEkonomiPrognos(){
       nameWrap.appendChild(nameSpan);
       const obetaltSum = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
       const restEfter = kvar - pp.sum;
-      if(kvar > 0 && Math.abs(restEfter) > 0.5){
-        const dot = document.createElement('span');
-        dot.title = 'Ofördelat ' + formatKrFull(restEfter);
-        dot.style.cssText = 'display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--danger); margin-left:6px; vertical-align:middle;';
-        nameWrap.appendChild(dot);
-      }
+      // Status: gul = inte helt fördelad enligt budget, grön = helt fördelad, röd = över budget (visas inte i PDF).
+      const statusBg = (!(post.budget || 0) && !(t.reskontra + t.mark) && !pp.sum) ? '' : (restEfter < -0.5 ? '#f8d7da' : (restEfter > 0.5 ? '#fff3bf' : '#d9f2dc'));
+      nameSpan.title = restEfter < -0.5 ? 'Över budget med ' + formatKrFull(-restEfter) : (restEfter > 0.5 ? 'Kvar att fördela ' + formatKrFull(restEfter) : 'Helt fördelad enligt budget');
       const spread = document.createElement('button');
       spread.type = 'button';
       spread.textContent = 'Fördela jämnt';
@@ -4056,7 +4053,8 @@ function renderEkonomiPrognos(){
         td.appendChild(wrapEl);
         return td;
       });
-      addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.e.ib + pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.e.ib + pp.sum]));
+      const postTr = addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.e.ib + pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.e.ib + pp.sum]));
+      if(statusBg) postTr.firstChild.style.background = statusBg;
       if(visaUtfall && months.some(m => pp.e.utfall[m])){
         addRow('', 'Utfall', 36, ['', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true }, ['', ''].concat(months.map(m => pp.e.utfall[m] || 0), [months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0)]));
       }
