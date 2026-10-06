@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006142236';
+const APP_BUILD = '20261006142739';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3718,6 +3718,7 @@ function renderEkonomiPrognos(){
   const thc = 'style="text-align:center;"';
   thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost' + (tkr ? ' <span style="font-weight:400; text-transform:none;">(tkr)</span>' : '') + '</th><th ' + thc + '>Budget</th><th ' + thc + '>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
     months.map(m => '<th ' + thc + '>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th ' + thc + '>Prognos totalt</th></tr>';
+  thead.querySelector('th:last-child').title = 'IB + alla månader i prognosen';
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
@@ -3775,7 +3776,7 @@ function renderEkonomiPrognos(){
   months.forEach(m => { inbTot.per[m] += inb.insatser.per[m] || 0; });
   inbRows.push({ namn: 'Insatser', ib: inb.insatser.ib, per: inb.insatser.per });
   addRow('', insLbl, 6, [cell(inb.insatser.budget), clickable(cell(inb.insatser.ib), 'Visa bostäderna', inb.insatser.ib ? () => showEkonomiInsatserPopup(pid, 'Insatser före ' + ekonomiPrognosShortLabel(prog.start) + ' (IB)', inb.insatser.ibItems) : null)]
-    .concat(months.map(m => clickable(cell(inb.insatser.per[m] || 0), 'Visa bostäderna och markera inbetalt', inb.insatser.per[m] ? () => showEkonomiInsatserPopup(pid, 'Insatser ' + ekonomiPrognosShortLabel(m), inb.insatser.items[m] || []) : null)), [cell(sumPer(inb.insatser.per))]), { bg: 'var(--blue-soft)', pdfLabel: 'Insatser' }, [inb.insatser.budget, inb.insatser.ib].concat(months.map(m => inb.insatser.per[m] || 0), [sumPer(inb.insatser.per)]));
+    .concat(months.map(m => clickable(cell(inb.insatser.per[m] || 0), 'Visa bostäderna och markera inbetalt', inb.insatser.per[m] ? () => showEkonomiInsatserPopup(pid, 'Insatser ' + ekonomiPrognosShortLabel(m), inb.insatser.items[m] || []) : null)), [cell(inb.insatser.ib + sumPer(inb.insatser.per))]), { bg: 'var(--blue-soft)', pdfLabel: 'Insatser' }, [inb.insatser.budget, inb.insatser.ib].concat(months.map(m => inb.insatser.per[m] || 0), [inb.insatser.ib + sumPer(inb.insatser.per)]));
 
   // Lån: bokningar i Lån-fliken + preliminär finansiering.
   inb.lan.forEach(l => {
@@ -3795,7 +3796,7 @@ function renderEkonomiPrognos(){
       }
       return wrapEl;
     });
-    addRow('', l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : ''), 6, ['', cell(l.ib)].concat(cells, [cell(sumPer(l.per))]), { bg: 'var(--blue-soft)' }, ['', l.ib].concat(months.map(m => l.per[m] || 0), [sumPer(l.per)]));
+    addRow('', l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : ''), 6, ['', cell(l.ib)].concat(cells, [cell(l.ib + sumPer(l.per))]), { bg: 'var(--blue-soft)' }, ['', l.ib].concat(months.map(m => l.per[m] || 0), [l.ib + sumPer(l.per)]));
   });
 
   // Föreningslån: preliminärt, fyll i beloppet den månad det väntas komma in.
@@ -3817,7 +3818,7 @@ function renderEkonomiPrognos(){
   flLbl.textContent = 'Föreningslån';
   flLbl.title = 'Preliminärt: klicka i cellen för den månad lånet väntas betalas ut och fyll i beloppet.' + (inb.foreningslan.budget ? ' Enligt kalkylen ' + formatKrFull(inb.foreningslan.budget) + '.' : '');
   addRow('', flLbl, 6, [cell(inb.foreningslan.budget || 0), ''].concat(flCells, [cell(sumPer(flPer))]), { bg: 'var(--blue-soft)', pdfLabel: 'Föreningslån' }, [inb.foreningslan.budget || 0, ''].concat(months.map(m => flPer[m] || 0), [sumPer(flPer)]));
-  addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(sumPer(inbTot.per))]), { bold: true }, ['', inbTot.ib].concat(months.map(m => inbTot.per[m]), [sumPer(inbTot.per)]));
+  addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(inbTot.ib + sumPer(inbTot.per))]), { bold: true }, ['', inbTot.ib].concat(months.map(m => inbTot.per[m]), [inbTot.ib + sumPer(inbTot.per)]));
 
   // ----- Utbetalningar (budgetens struktur) -----
   sectionRow('Utbetalningar');
@@ -3858,7 +3859,7 @@ function renderEkonomiPrognos(){
       await saveEkonomiPrognos();
       renderEkonomiPrognos();
     };
-    addRow('', lbl, 6, [cell(g.budget), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', pdfLabel: group.grupp }, [g.budget, g.ib].concat(months.map(m => g.prognos[m]), [g.sum]));
+    addRow('', lbl, 6, [cell(g.budget), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.ib + g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', pdfLabel: group.grupp }, [g.budget, g.ib].concat(months.map(m => g.prognos[m]), [g.ib + g.sum]));
     if(visaUtfall && months.some(m => g.utfall[m])){
       addRow('', 'Utfall', 18, ['', ''].concat(months.map(m => cell(g.utfall[m])), ['']), { small: true, bg: 'var(--paper-soft, #f6f4ef)' }, ['', ''].concat(months.map(m => g.utfall[m]), ['']));
     }
@@ -3935,18 +3936,18 @@ function renderEkonomiPrognos(){
         td.appendChild(wrapEl);
         return td;
       });
-      addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.sum]));
+      addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.e.ib + pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.e.ib + pp.sum]));
       if(visaUtfall && months.some(m => pp.e.utfall[m])){
         addRow('', 'Utfall', 36, ['', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true }, ['', ''].concat(months.map(m => pp.e.utfall[m] || 0), [months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0)]));
       }
     });
   });
 
-  addRow('eko-row-resultat', 'Summa utbetalningar', 6, [cell(totals.budget), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(sumPer(totals.prognos))]), { bold: true }, [totals.budget, totals.ib].concat(months.map(m => totals.prognos[m]), [sumPer(totals.prognos)]));
+  addRow('eko-row-resultat', 'Summa utbetalningar', 6, [cell(totals.budget), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(totals.ib + sumPer(totals.prognos))]), { bold: true }, [totals.budget, totals.ib].concat(months.map(m => totals.prognos[m]), [totals.ib + sumPer(totals.prognos)]));
   if(visaUtfall && months.some(m => totals.utfall[m])) addRow('', 'Summa utfall', 6, ['', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(sumPer(totals.utfall))]), { small: true }, ['', ''].concat(months.map(m => totals.utfall[m]), [sumPer(totals.utfall)]));
 
   // ----- Netto och likviditet -----
-  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), ['']), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m]), ['']));
+  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), [cell((inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos))]), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m]), [(inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos)]));
   const ingaende = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
   let saldo = ingaende;
   const saldoCells = months.map((m, i) => {
