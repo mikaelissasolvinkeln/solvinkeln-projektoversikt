@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006154356';
+const APP_BUILD = '20261006154547';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3360,8 +3360,10 @@ function ekonomiPrognosInbetalningar(pid, start, months){
     const amount = ekonomiInsatsBelopp(a);
     if(!amount) return;
     insatser.budget += amount;
-    const m = ekonomiInsatsManad(a);
-    const item = { apt: a, belopp: amount, betald: !!(a.slutbetald && a.slutbetald.done), manad: m };
+    // Utan inflyttningsdag: en preliminärt vald månad (prog.insatsManad) gäller tills datumet fylls i.
+    const realM = ekonomiInsatsManad(a);
+    const m = realM || ((prog.insatsManad || {})[a.id] || '');
+    const item = { apt: a, belopp: amount, betald: !!(a.slutbetald && a.slutbetald.done), manad: m, prel: !realM };
     if(!m){ insatser.utanDatum.push(item); return; }
     if(m < start){ insatser.ib += amount; insatser.ibItems.push(item); }
     else if(monthSet.has(m)){ insatser.per[m] = (insatser.per[m] || 0) + amount; (insatser.items[m] = insatser.items[m] || []).push(item); }
@@ -3612,7 +3614,7 @@ function ekoAptLabel(apt){
 // Markeringen skriver slutbetald i projektöversikten (samma fält), så beloppet
 // flyttar till inbetalningsmånaden om kunden betalade en annan månad.
 function showEkonomiInsatserPopup(pid, title, items){
-  const p = ekoPopup({ title, sub: 'Insatser enligt lägenheternas inflyttningsdag. Markera när inbetalningen skett – då flyttas beloppet till den månaden och Slutbetald fylls i projektöversikten.', maxWidth: 640 });
+  const p = ekoPopup({ title, sub: 'Insatser enligt lägenheternas inflyttningsdag. Bostäder utan datum kan läggas på en preliminär månad tills datumet fylls i. Markera när inbetalningen skett – då flyttas beloppet till den månaden och Slutbetald fylls i projektöversikten.', maxWidth: 820 });
   if(!items.length){ p.body.innerHTML = '<p class="eko-sub">Inga bostäder.</p>'; return; }
   const today = new Date().toISOString().slice(0, 10);
   const table = document.createElement('table');
@@ -3633,6 +3635,16 @@ function showEkonomiInsatserPopup(pid, title, items){
       '<td style="' + tdStyle + '">' + escapeHtml(effectiveInflyttningDate(apt) || '—') + '</td>' +
       '<td style="padding:6px 8px; font-size:12.5px;"></td><td style="' + tdStyle + '"></td>';
     const amtTd = tr.children[2], stTd = tr.children[3];
+    if(!effectiveInflyttningDate(apt)){
+      // Ingen inflyttningsdag: välj preliminär månad (byts ut när datumet fylls i).
+      const dtd = tr.children[1]; dtd.innerHTML = '';
+      const mi = document.createElement('input');
+      mi.type = 'month'; mi.value = it.manad || ''; mi.title = 'Preliminär månad tills inflyttningsdag finns';
+      mi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
+      mi.onchange = async () => { const prog = ekonomiPrognosRec(pid); prog.insatsManad = prog.insatsManad || {}; if(mi.value) prog.insatsManad[apt.id] = mi.value; else delete prog.insatsManad[apt.id]; await saveEkonomiPrognos(); p.close(); renderEkonomiPrognos(); };
+      dtd.appendChild(mi);
+      const lbl = document.createElement('span'); lbl.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; lbl.textContent = 'prel.'; dtd.appendChild(lbl);
+    }
     if(paid){
       amtTd.textContent = formatKrFull(it.belopp);
       const st = document.createElement('span');
