@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006101811';
+const APP_BUILD = '20261006103701';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3006,8 +3006,8 @@ function renderEkonomiProjektLan(){
       dateInput.type = 'date';
       dateInput.className = 'eko-inline-input';
       dateInput.style.cssText = 'text-align:left; width:150px;';
-      dateInput.value = rec[f.key + 'Datum'] || '';
-      dateInput.title = 'Månad då lånebeloppet (fältets värde) räknas som inbetalning om inga bokningar finns';
+      dateInput.value = rec[f.key + 'Forfallodatum'] || '';
+      dateInput.title = 'Förfallodatum: då ska lånet vara återbetalt. Saldot läggs som återbetalning den månaden i likviditetsprognosen.';
       dateInput.onchange = () => saveEkonomiLanFieldDate(f.key, dateInput.value);
       row.children[2].appendChild(dateInput);
       const openBtn = document.createElement('button');
@@ -3042,7 +3042,9 @@ function renderEkonomiLanDetaljPanel(){
   const upp = ekonomiLanUpplupen(d);
   document.getElementById('ekoLanDetaljSaldo').textContent = formatKrFull(saldo);
   document.getElementById('ekoLanDetaljUpplupen').textContent = Math.round(upp.belopp).toLocaleString('sv-SE') + ' kr';
-  document.getElementById('ekoLanDetaljRantaInfo').textContent = upp.ranta + ' % per år · ' + upp.dagar + ' dagar sedan ' + (d.ibDatum || EKONOMI_LAN_IB_DEFAULT) + (d.upplupenIb ? ' · varav IB ' + formatKrFull(d.upplupenIb) : '');
+  const forfall = (companyEkonomiData.lan[pid] || {})[key + 'Forfallodatum'];
+  const dagarKvar = forfall ? Math.round((new Date(forfall + 'T00:00:00Z') - new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z')) / 86400000) : null;
+  document.getElementById('ekoLanDetaljRantaInfo').textContent = upp.ranta + ' % per år · ' + upp.dagar + ' dagar sedan ' + (d.ibDatum || EKONOMI_LAN_IB_DEFAULT) + (d.upplupenIb ? ' · varav IB ' + formatKrFull(d.upplupenIb) : '') + (forfall ? ' · förfaller ' + forfall + (dagarKvar != null ? ' (' + (dagarKvar >= 0 ? dagarKvar + ' dagar kvar' : Math.abs(dagarKvar) + ' dagar sedan') + ')' : '') : ' · inget förfallodatum satt');
   if(!document.getElementById('ekoLanTxDatum').value) document.getElementById('ekoLanTxDatum').value = new Date().toISOString().slice(0, 10);
 
   const tbody = document.getElementById('ekoLanTxBody');
@@ -3201,7 +3203,7 @@ async function saveEkonomiLanFieldValue(fieldKey, value){
 async function saveEkonomiLanFieldDate(fieldKey, dateValue){
   const pid = currentEkonomiLanProjectId;
   if(!companyEkonomiData.lan[pid]) companyEkonomiData.lan[pid] = {};
-  companyEkonomiData.lan[pid][fieldKey + 'Datum'] = dateValue;
+  companyEkonomiData.lan[pid][fieldKey + 'Forfallodatum'] = dateValue;
   try{
     await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
   }catch(e){
@@ -3305,8 +3307,8 @@ async function computeLikviditetsplan(pid){
     });
   }catch(e){ /* inga lägenheter ännu */ }
 
-  // Lån: bokningar (utökning +, återbetalning −) per månad, annars fältets
-  // belopp på sin valda inbetalningsmånad (Lån-fliken).
+  // Lån: bokningar (utökning +, återbetalning −) per månad, och hela saldot
+  // som utbetalning på förfallomånaden (Lån-fliken).
   const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
   const lanRec = companyEkonomiData.lan[pid] || {};
   lanFields.forEach(f => {
@@ -3316,13 +3318,13 @@ async function computeLikviditetsplan(pid){
         const key = String(t.datum || '').slice(0, 7);
         if(key in inflow) inflow[key] += t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0);
       });
-      return;
     }
-    const dateStr = lanRec[f.key + 'Datum'];
-    const amount = lanRec[f.key] || 0;
-    if(!dateStr || !amount) return;
-    const key = dateStr.slice(0, 7);
-    if(key in inflow) inflow[key] += amount;
+    const forfall = lanRec[f.key + 'Forfallodatum'];
+    if(forfall){
+      const key = forfall.slice(0, 7);
+      const saldo = d ? ekonomiLanSaldoPer(d, forfall) : (lanRec[f.key] || 0);
+      if(key in outflow && saldo > 0) outflow[key] += saldo;
+    }
   });
 
   // Kategoriserade reskontraposter (Budget-fliken), räknade på förfallodatum
@@ -3429,14 +3431,15 @@ function ekonomiPrognosInbetalningar(pid, start, months){
         row.per[m] = (row.per[m] || 0) + (t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0));
       });
     } else {
-      const dateStr = lanRec[f.key + 'Datum'];
-      const amount = lanRec[f.key] || 0;
-      if(amount && dateStr){
-        const m = dateStr.slice(0, 7);
-        if(m < start) row.ib = amount; else if(monthSet.has(m)) row.per[m] = amount;
-      } else if(amount){
-        row.ib = amount;
-      }
+      // Inga bokningar: fältets belopp är lånets saldo och räknas som IB.
+      row.ib = lanRec[f.key] || 0;
+    }
+    // Förfallodatum: hela saldot återbetalas den månaden.
+    const forfall = lanRec[f.key + 'Forfallodatum'];
+    if(forfall && monthSet.has(forfall.slice(0, 7))){
+      const m = forfall.slice(0, 7);
+      const saldoVid = d ? ekonomiLanSaldoPer(d, forfall) : (lanRec[f.key] || 0);
+      if(saldoVid > 0){ row.per[m] = (row.per[m] || 0) - saldoVid; row.forfall = forfall; }
     }
     if(row.ib || Object.keys(row.per).length) lan.push(row);
   });
@@ -3687,7 +3690,7 @@ function renderEkonomiPrognos(){
   inb.lan.forEach(l => {
     inbTot.ib += l.ib;
     months.forEach(m => { inbTot.per[m] += l.per[m] || 0; });
-    addRow('', 'Lån: ' + l.namn, 6, ['', '', '', cell(l.ib)].concat(months.map(m => cell(l.per[m] || 0)), [cell(months.reduce((s, m) => s + (l.per[m] || 0), 0))]), { bg: 'var(--blue-soft)' });
+    addRow('', 'Lån: ' + l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : ''), 6, ['', '', '', cell(l.ib)].concat(months.map(m => cell(l.per[m] || 0)), [cell(months.reduce((s, m) => s + (l.per[m] || 0), 0))]), { bg: 'var(--blue-soft)' });
   });
   addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', '', '', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(months.reduce((s, m) => s + inbTot.per[m], 0))]), { bold: true });
   addRow('', 'Netto per månad', 6, ['', '', '', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), ['']), { small: true });
