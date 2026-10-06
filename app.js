@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006154547';
+const APP_BUILD = '20261006154808';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3342,6 +3342,9 @@ function ekonomiInsatsBelopp(apt){
   return parseKr(apt.slutbetald && apt.slutbetald.amount) || parseKr(apt.totalpris) || 0;
 }
 function ekonomiForeningslanBudget(pid){
+  // I första hand projektbudgeten (Budget-fliken), annars kalkylen i Nya projekt.
+  const bd = companyEkonomiData.budgetDetalj[pid];
+  if(bd && bd.foreningslan) return bd.foreningslan;
   const cand = (typeof nyaProjektList !== 'undefined' ? nyaProjektList : []).find(c => c.promoted_project_id === pid);
   if(!cand) return null;
   try{
@@ -3765,6 +3768,40 @@ function showEkonomiLanManadPopup(pid, l, m){
   p.body.appendChild(addRowEl);
 }
 
+// Föreningslån: beloppet enligt projektbudgeten bokas preliminärt på vald månad (rött tills
+// det markeras som inbetalt via klick på beloppet i raden).
+function showEkonomiForeningslanPopup(pid, l, months){
+  const budget = ekonomiForeningslanBudget(pid) || 0;
+  const bokat = months.reduce((s, m) => s + (l.per[m] || 0), 0) + (l.ib || 0);
+  const p = ekoPopup({ title: 'Föreningslån', sub: 'Välj vilken månad föreningslånet väntas betalas ut. Beloppet ligger rött i prognosen tills du klickar på det och markerar det som inbetalt.' });
+  p.body.appendChild(ekoPopupLine('Föreningslån enligt projektbudgeten' + (budget ? '' : ' (inte ifyllt under Ekonomi → Budget)'), formatKrFull(budget), { bold: true }));
+  months.forEach(m => {
+    if(!l.per[m]) return;
+    const plan = (l.planerade[m] || []).length;
+    const line = ekoPopupLine(ekonomiPrognosShortLabel(m) + (plan ? ' · preliminärt' : ' · inbetalt'), formatKrFull(l.per[m]), { muted: !plan });
+    if(plan) line.style.color = 'var(--danger)';
+    p.body.appendChild(line);
+  });
+  if(l.ib) p.body.appendChild(ekoPopupLine('Inbetalt före startmånaden (IB)', formatKrFull(l.ib), { muted: true }));
+  p.body.appendChild(ekoPopupLine('Kvar att boka', formatKrFull(Math.max(0, budget - bokat)), { bold: true }));
+  const form = document.createElement('div');
+  form.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:14px; flex-wrap:wrap;';
+  const sel = document.createElement('select');
+  sel.className = 'eko-inline-select';
+  sel.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join('');
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.value = Math.max(0, budget - bokat) || ''; inp.placeholder = 'Belopp (kr)';
+  inp.style.cssText = 'width:150px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  form.appendChild(sel); form.appendChild(inp);
+  form.appendChild(ekoSmallBtn('Boka preliminärt', async () => {
+    const b = parseFloat(String(inp.value).replace(',', '.'));
+    if(!b){ showToast('Ange belopp.'); return; }
+    await ekonomiPrognosSetPlanerad(pid, 'foreningslan', sel.value, b, true);
+    showToast(formatKrFull(b) + ' föreningslån bokat preliminärt ' + ekonomiPrognosShortLabel(sel.value));
+    p.close(); renderEkonomiPrognos();
+  }));
+  p.body.appendChild(form);
+}
 // Vad händer med likviditeten en viss månad – och boka finansiering om den är negativ.
 function showEkonomiLikviditetPopup(pid, m, info){
   const p = ekoPopup({ title: 'Likviditet ' + ekonomiPrognosShortLabel(m), sub: 'Så här räknas likviditeten fram den här månaden.' });
@@ -3945,6 +3982,7 @@ function renderEkonomiPrognos(){
     const lbl = document.createElement('span');
     lbl.textContent = l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : '');
     if(l.key === 'foreningslan') lbl.title = 'Skriv in beloppet den månad lånet väntas betalas ut (rött tills det markerats som genomfört).' + (l.budget ? ' Enligt kalkylen ' + formatKrFull(l.budget) + '.' : '');
+    if(l.key === 'foreningslan'){ lbl.className = 'editable'; lbl.style.cursor = 'pointer'; lbl.onclick = () => showEkonomiForeningslanPopup(pid, l, months); }
     addRow('', lbl, 6, [cell(l.budget || 0), cell(l.ib)].concat(cells, [cell(l.ib + sumPer(l.per))]), { bg: 'var(--blue-soft)', pdfLabel: l.namn }, [l.budget || 0, l.ib].concat(months.map(m => l.per[m] || 0), [l.ib + sumPer(l.per)]));
   });
   // "+ Visa lån": lägg till en lånerad som ännu inte har några bokningar.
