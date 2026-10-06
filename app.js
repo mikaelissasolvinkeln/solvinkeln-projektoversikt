@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006103701';
+const APP_BUILD = '20261006103852';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3419,9 +3419,10 @@ function ekonomiPrognosInbetalningar(pid, start, months){
     const row = { namn: f.label.replace(' (kr)', ''), ib: 0, per: {} };
     if(d){
       const ibDatum = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
-      row.ib = (ibDatum.slice(0, 7) < start ? ekonomiLanSaldoPer(d, start + '-00') : 0);
-      if(ibDatum.slice(0, 7) >= start && ibDatum.slice(0, 7) <= months[months.length - 1] && (d.ib || 0)){
-        // IB-beloppet självt räknas som inbetalning i IB-månaden om lånet startar inom perioden.
+      // Lånets IB-datum i eller före startmånaden: saldot vid start är IB.
+      // Senare IB-datum: IB-beloppet räknas som inbetalning den månaden.
+      row.ib = (ibDatum.slice(0, 7) <= start ? ekonomiLanSaldoPer(d, start + '-00') : 0);
+      if(ibDatum.slice(0, 7) > start && monthSet.has(ibDatum.slice(0, 7)) && (d.ib || 0)){
         const m = ibDatum.slice(0, 7);
         row.per[m] = (row.per[m] || 0) + (d.ib || 0);
       }
