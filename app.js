@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006131502';
+const APP_BUILD = '20261006142026';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3700,8 +3700,13 @@ function renderEkonomiPrognos(){
   document.getElementById('ekoPrognosStart').value = prog.start;
   document.getElementById('ekoPrognosManader').value = prog.manader;
   const visaUtfall = document.getElementById('ekoPrognosVisaUtfall').checked;
-  const cell = v => v ? formatKrFull(v) : '';
-  const mono = "font-family:'JetBrains Mono',monospace;";
+  const tkr = (prog.enhet || 'tkr') === 'tkr';
+  document.getElementById('ekoPrognosEnhet').value = tkr ? 'tkr' : 'kr';
+  const fmtV = v => tkr ? Math.round(v / 1000).toLocaleString('sv-SE') : formatKrFull(v);
+  const cell = v => v ? fmtV(v) : '';
+  const cellOpts = { fmt: fmtV, scale: tkr ? 1000 : 1 };
+  const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
+  const pdfRows = [];
   const sumPer = obj => months.reduce((s, m) => s + (obj[m] || 0), 0);
   const nVal = 3 + months.length; // Budget, IB, månader…, Prognos totalt
   const blank = n => Array.from({ length: n }, () => '');
@@ -3710,17 +3715,19 @@ function renderEkonomiPrognos(){
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
   const thead = document.createElement('thead');
-  thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost</th><th>Budget</th><th>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
-    months.map(m => '<th>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th>Prognos totalt</th></tr>';
+  const thc = 'style="text-align:center;"';
+  thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost' + (tkr ? ' <span style="font-weight:400; text-transform:none;">(tkr)</span>' : '') + '</th><th ' + thc + '>Budget</th><th ' + thc + '>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
+    months.map(m => '<th ' + thc + '>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th ' + thc + '>Prognos totalt</th></tr>';
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
 
-  const addRow = (cls, label, indent, values, opts) => {
+  const addRow = (cls, label, indent, values, opts, nums) => {
+    pdfRows.push({ label: (opts && opts.pdfLabel) || (typeof label === 'string' ? label : (label.firstChild && label.firstChild.nodeType === 3 ? label.firstChild.textContent : label.textContent)), nums: nums || [], bold: !!(opts && opts.bold), small: !!(opts && opts.small), section: !!(opts && opts.section), indent });
     const tr = document.createElement('tr');
     if(cls) tr.className = cls;
     const first = document.createElement('td');
-    first.style.cssText = 'text-align:left; padding-left:' + indent + 'px; position:sticky; left:0; background:' + (opts && opts.bg ? opts.bg : 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    first.style.cssText = 'font-size:12.5px; text-align:left; padding-left:' + indent + 'px; position:sticky; left:0; background:' + (opts && opts.bg ? opts.bg : 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
     if(typeof label === 'string') first.textContent = label; else first.appendChild(label);
     tr.appendChild(first);
     values.forEach(v => {
@@ -3734,7 +3741,7 @@ function renderEkonomiPrognos(){
     return tr;
   };
   const sectionRow = text => {
-    const tr = addRow('', text, 6, blank(nVal), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    const tr = addRow('', text, 6, blank(nVal), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', section: true });
     tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;';
     return tr;
   };
@@ -3768,7 +3775,7 @@ function renderEkonomiPrognos(){
   months.forEach(m => { inbTot.per[m] += inb.insatser.per[m] || 0; });
   inbRows.push({ namn: 'Insatser', ib: inb.insatser.ib, per: inb.insatser.per });
   addRow('', insLbl, 6, [cell(inb.insatser.budget), clickable(cell(inb.insatser.ib), 'Visa bostäderna', inb.insatser.ib ? () => showEkonomiInsatserPopup(pid, 'Insatser före ' + ekonomiPrognosShortLabel(prog.start) + ' (IB)', inb.insatser.ibItems) : null)]
-    .concat(months.map(m => clickable(cell(inb.insatser.per[m] || 0), 'Visa bostäderna och markera inbetalt', inb.insatser.per[m] ? () => showEkonomiInsatserPopup(pid, 'Insatser ' + ekonomiPrognosShortLabel(m), inb.insatser.items[m] || []) : null)), [cell(sumPer(inb.insatser.per))]), { bg: 'var(--blue-soft)' });
+    .concat(months.map(m => clickable(cell(inb.insatser.per[m] || 0), 'Visa bostäderna och markera inbetalt', inb.insatser.per[m] ? () => showEkonomiInsatserPopup(pid, 'Insatser ' + ekonomiPrognosShortLabel(m), inb.insatser.items[m] || []) : null)), [cell(sumPer(inb.insatser.per))]), { bg: 'var(--blue-soft)', pdfLabel: 'Insatser' }, [inb.insatser.budget, inb.insatser.ib].concat(months.map(m => inb.insatser.per[m] || 0), [sumPer(inb.insatser.per)]));
 
   // Lån: bokningar i Lån-fliken + preliminär finansiering.
   inb.lan.forEach(l => {
@@ -3788,7 +3795,7 @@ function renderEkonomiPrognos(){
       }
       return wrapEl;
     });
-    addRow('', l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : ''), 6, ['', cell(l.ib)].concat(cells, [cell(sumPer(l.per))]), { bg: 'var(--blue-soft)' });
+    addRow('', l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : ''), 6, ['', cell(l.ib)].concat(cells, [cell(sumPer(l.per))]), { bg: 'var(--blue-soft)' }, ['', l.ib].concat(months.map(m => l.per[m] || 0), [sumPer(l.per)]));
   });
 
   // Föreningslån: preliminärt, fyll i beloppet den månad det väntas komma in.
@@ -3803,14 +3810,14 @@ function renderEkonomiPrognos(){
       if(val == null || val === 0) delete fl[m]; else fl[m] = val;
       await saveEkonomiPrognos();
       renderEkonomiPrognos();
-    });
+    }, cellOpts);
     return wrapEl;
   });
   const flLbl = document.createElement('span');
   flLbl.textContent = 'Föreningslån';
   flLbl.title = 'Preliminärt: klicka i cellen för den månad lånet väntas betalas ut och fyll i beloppet.' + (inb.foreningslan.budget ? ' Enligt kalkylen ' + formatKrFull(inb.foreningslan.budget) + '.' : '');
-  addRow('', flLbl, 6, [cell(inb.foreningslan.budget || 0), ''].concat(flCells, [cell(sumPer(flPer))]), { bg: 'var(--blue-soft)' });
-  addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(sumPer(inbTot.per))]), { bold: true });
+  addRow('', flLbl, 6, [cell(inb.foreningslan.budget || 0), ''].concat(flCells, [cell(sumPer(flPer))]), { bg: 'var(--blue-soft)', pdfLabel: 'Föreningslån' }, [inb.foreningslan.budget || 0, ''].concat(months.map(m => flPer[m] || 0), [sumPer(flPer)]));
+  addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(sumPer(inbTot.per))]), { bold: true }, ['', inbTot.ib].concat(months.map(m => inbTot.per[m]), [sumPer(inbTot.per)]));
 
   // ----- Utbetalningar (budgetens struktur) -----
   sectionRow('Utbetalningar');
@@ -3851,9 +3858,9 @@ function renderEkonomiPrognos(){
       await saveEkonomiPrognos();
       renderEkonomiPrognos();
     };
-    addRow('', lbl, 6, [cell(g.budget), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    addRow('', lbl, 6, [cell(g.budget), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', pdfLabel: group.grupp }, [g.budget, g.ib].concat(months.map(m => g.prognos[m]), [g.sum]));
     if(visaUtfall && months.some(m => g.utfall[m])){
-      addRow('', 'Utfall', 18, ['', ''].concat(months.map(m => cell(g.utfall[m])), ['']), { small: true, bg: 'var(--paper-soft, #f6f4ef)' });
+      addRow('', 'Utfall', 18, ['', ''].concat(months.map(m => cell(g.utfall[m])), ['']), { small: true, bg: 'var(--paper-soft, #f6f4ef)' }, ['', ''].concat(months.map(m => g.utfall[m]), ['']));
     }
     if(!open) return;
 
@@ -3916,11 +3923,11 @@ function renderEkonomiPrognos(){
           if(val == null || val === 0) delete cells[m]; else cells[m] = val;
           await saveEkonomiPrognos();
           renderEkonomiPrognos();
-        });
+        }, cellOpts);
         if(ob){
           const obEl = document.createElement('div');
           obEl.style.cssText = 'font-size:10px; color:var(--danger); cursor:pointer;';
-          obEl.textContent = '+ faktura ' + formatKrFull(ob);
+          obEl.textContent = '+ faktura ' + fmtV(ob);
           obEl.title = (pp.e.obetaltItems[m] || []).map(it => it.lopnr + ' ' + it.text + ' ' + formatKrFull(it.belopp)).join('\n');
           obEl.onclick = () => showEkonomiTagnaSpec(post.namn + ' - obetalda fakturor ' + ekonomiPrognosShortLabel(m), { reskontra: ob, mark: 0, items: (pp.e.obetaltItems[m] || []).map(it => ({ typ: 'reskontra', lopnr: it.lopnr, text: it.text, belopp: it.belopp })) });
           wrapEl.appendChild(obEl);
@@ -3928,25 +3935,25 @@ function renderEkonomiPrognos(){
         td.appendChild(wrapEl);
         return td;
       });
-      addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.sum)]), {});
+      addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.sum]));
       if(visaUtfall && months.some(m => pp.e.utfall[m])){
-        addRow('', 'Utfall', 36, ['', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true });
+        addRow('', 'Utfall', 36, ['', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true }, ['', ''].concat(months.map(m => pp.e.utfall[m] || 0), [months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0)]));
       }
     });
   });
 
-  addRow('eko-row-resultat', 'Summa utbetalningar', 6, [cell(totals.budget), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(sumPer(totals.prognos))]), { bold: true });
-  if(visaUtfall && months.some(m => totals.utfall[m])) addRow('', 'Summa utfall', 6, ['', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(sumPer(totals.utfall))]), { small: true });
+  addRow('eko-row-resultat', 'Summa utbetalningar', 6, [cell(totals.budget), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(sumPer(totals.prognos))]), { bold: true }, [totals.budget, totals.ib].concat(months.map(m => totals.prognos[m]), [sumPer(totals.prognos)]));
+  if(visaUtfall && months.some(m => totals.utfall[m])) addRow('', 'Summa utfall', 6, ['', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(sumPer(totals.utfall))]), { small: true }, ['', ''].concat(months.map(m => totals.utfall[m]), [sumPer(totals.utfall)]));
 
   // ----- Netto och likviditet -----
-  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), ['']), { small: true });
+  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), ['']), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m]), ['']));
   const ingaende = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
   let saldo = ingaende;
   const saldoCells = months.map((m, i) => {
     const prev = saldo;
     saldo += inbTot.per[m] - totals.prognos[m];
     const s = document.createElement('span');
-    s.textContent = cell(saldo) || '0 kr';
+    s.textContent = cell(saldo) || '0';
     s.className = 'editable';
     s.style.cursor = 'pointer';
     s.title = 'Visa vad som händer med likviditeten' + (saldo < 0 ? ' och boka finansiering' : '');
@@ -3960,11 +3967,67 @@ function renderEkonomiPrognos(){
     s.onclick = () => showEkonomiLikviditetPopup(pid, m, info);
     return s;
   });
-  addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0 kr'].concat(saldoCells, ['']), { bold: true });
+  const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m]; saldoNums.push(s2); });
+  addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
 
+  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr };
   wrap.innerHTML = '';
   wrap.appendChild(table);
 }
+// ---------- Likviditetsprognos som PDF (liggande A4, 12 månader per sida) ----------
+let ekonomiPrognosPdfModel = null;
+function ekonomiPrognosPdf(){
+  const M = ekonomiPrognosPdfModel;
+  if(!M) return;
+  const proj = projects.find(p => p.id === M.pid) || {};
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const fmt = v => (v === '' || v == null) ? '' : (!v ? '' : (M.tkr ? Math.round(v / 1000).toLocaleString('sv-SE') : Math.round(v).toLocaleString('sv-SE')));
+  const chunks = [];
+  for(let i = 0; i < M.months.length; i += 12) chunks.push(M.months.slice(i, i + 12));
+  chunks.forEach((chunk, ci) => {
+    if(ci > 0) doc.addPage();
+    doc.setFontSize(14); doc.setTextColor(20);
+    doc.text('Likviditetsprognos – ' + (proj.name || ''), 12, 14);
+    doc.setFontSize(9); doc.setTextColor(110);
+    doc.text('Belopp i ' + (M.tkr ? 'tkr' : 'kr') + ' · startmånad ' + ekonomiPrognosShortLabel(M.start) + ' · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + new Date().toLocaleDateString('sv-SE'), 12, 19);
+    const first = ci === 0, last = ci === chunks.length - 1;
+    const offset = M.months.indexOf(chunk[0]);
+    const head = ['Kostnadspost'].concat(first ? ['Budget', 'IB ' + ekonomiPrognosShortLabel(M.start)] : [], chunk.map(ekonomiPrognosShortLabel), last ? ['Prognos totalt'] : []);
+    const body = M.rows.map(r => {
+      const n = r.nums;
+      const vals = n.length ? [].concat(first ? [fmt(n[0]), fmt(n[1])] : [], chunk.map((m, i) => fmt(n[2 + offset + i])), last ? [fmt(n[n.length - 1])] : []) : head.slice(1).map(() => '');
+      return [r.label].concat(vals);
+    });
+    doc.autoTable({
+      startY: 23,
+      head: [head],
+      body,
+      styles: { fontSize: 6.5, cellPadding: 1.2, halign: 'center', textColor: 30 },
+      headStyles: { fillColor: [58, 44, 32], halign: 'center', fontSize: 6.5 },
+      columnStyles: { 0: { halign: 'left', cellWidth: 52 } },
+      margin: { left: 12, right: 12 },
+      didParseCell: h => {
+        const r = M.rows[h.row.index];
+        if(h.section !== 'body' || !r) return;
+        if(r.bold) h.cell.styles.fontStyle = 'bold';
+        if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; }
+        if(r.small) h.cell.styles.textColor = 120;
+        if(h.column.index === 0 && r.indent > 12) h.cell.styles.cellPadding = { left: 1.2 + (r.indent - 6) / 4, top: 1.2, bottom: 1.2, right: 1.2 };
+        if(r.label === 'Likviditet' && h.column.index > 0 && /^−|^-/.test(String(h.cell.raw))) h.cell.styles.textColor = [180, 40, 40];
+      }
+    });
+  });
+  doc.save('Likviditetsprognos-' + (proj.name || 'projekt').replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') + '.pdf');
+}
+document.getElementById('ekoPrognosPdf').onclick = ekonomiPrognosPdf;
+document.getElementById('ekoPrognosEnhet').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  ekonomiPrognosRec(pid).enhet = document.getElementById('ekoPrognosEnhet').value;
+  await saveEkonomiPrognos();
+  renderEkonomiPrognos();
+};
+
 document.getElementById('ekoPrognosStart').onchange = async () => {
   const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
   const v = document.getElementById('ekoPrognosStart').value;
@@ -3998,22 +4061,23 @@ async function saveEkonomiLikviditetIngaende(value){
   }
 }
 
-function likviditetsbudgetEditableCell(td, value, onSave){
+function likviditetsbudgetEditableCell(td, value, onSave, opts){
+  const scale = (opts && opts.scale) || 1;
   const span = document.createElement('span');
   span.className = 'editable';
   span.style.cursor = 'pointer';
-  span.textContent = value != null ? formatKrFull(value) : '—';
+  span.textContent = value != null ? (opts && opts.fmt ? opts.fmt(value) : formatKrFull(value)) : '—';
   span.onclick = () => {
     const input = document.createElement('input');
     input.type = 'number';
-    input.value = value != null ? value : '';
+    input.value = value != null ? Math.round(value / scale * 100) / 100 : '';
     input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
     td.innerHTML = '';
     td.appendChild(input);
     input.focus(); input.select();
     const save = async () => {
       const raw = input.value.trim();
-      await onSave(raw === '' ? null : parseFloat(raw.replace(',', '.')));
+      await onSave(raw === '' ? null : parseFloat(raw.replace(',', '.')) * scale);
     };
     input.addEventListener('blur', save);
     input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
