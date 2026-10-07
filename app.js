@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007115938';
+const APP_BUILD = '20261007131137';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4343,16 +4343,56 @@ function renderEkonomiPrognos(){
   const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m]; saldoNums.push(s2); });
   addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
 
-  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr };
+  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.concat([inb.foreningslan]).map(l => ({ namn: l.namn, ib: l.ib || 0, per: l.per })) };
   wrap.innerHTML = '';
   wrap.appendChild(table);
 }
 // ---------- Likviditetsprognos som PDF (liggande A4, 12 månader per sida) ----------
 let ekonomiPrognosPdfModel = null;
-function ekonomiPrognosPdf(){
+// Högsta belåning under prognosperioden: summan av alla lånesaldon (inkl. föreningslån)
+// månad för månad, det högsta värdet. LTC = högsta belåning / totalkostnad.
+function ekonomiPrognosMaxBelaning(M){
+  const bal = (M.lan || []).map(l => l.ib || 0);
+  let max = bal.reduce((s, v) => s + v, 0);
+  M.months.forEach(m => {
+    (M.lan || []).forEach((l, i) => { bal[i] += l.per[m] || 0; });
+    const t = bal.reduce((s, v) => s + v, 0);
+    if(t > max) max = t;
+  });
+  return max;
+}
+// Nyckeltal till PDF:en, samma definitioner som korten under Budget.
+async function ekonomiPrognosPdfNyckeltal(M){
+  const pid = M.pid;
+  const area = await computeProjectAreaRevenue(pid);
+  const detail = ekonomiBudgetDetail(pid);
+  const foreningslan = detail.foreningslan || 0;
+  const totalkostnad = ekonomiProjectBudgetTotals(pid).budget;
+  const budgetIntakt = ekonomiBudgetIntakt(pid);
+  const vinst = budgetIntakt != null ? budgetIntakt - totalkostnad : null;
+  const marginal = vinst != null && budgetIntakt ? vinst / budgetIntakt : null;
+  const maxBel = ekonomiPrognosMaxBelaning(M);
+  const ltc = totalkostnad ? maxBel / totalkostnad : null;
+  const kr = v => v == null ? '—' : Math.round(v).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-') + ' kr';
+  const pct = v => v == null ? '—' : (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }).replace(/[  ]/g, ' ').replace(/−/g, '-') + ' %';
+  return [
+    { label: 'Total antal kvm', value: area.kvm ? area.kvm.toLocaleString('sv-SE', { maximumFractionDigits: 0 }).replace(/[  ]/g, ' ') + ' kvm' : '—' },
+    { label: 'Insatser', value: kr(area.intakter) },
+    { label: 'Föreningslån', value: kr(foreningslan) },
+    { label: 'Totalkostnad', value: kr(totalkostnad) },
+    { label: 'Budgeterad vinst', value: kr(vinst) },
+    { label: 'Projektmarginal', value: pct(marginal) },
+    { label: 'LTC (högsta belåning ' + (maxBel ? Math.round(maxBel / 1e6).toLocaleString('sv-SE') + ' MSEK' : '') + ')', value: pct(ltc) }
+  ];
+}
+async function ekonomiPrognosPdf(){
   const M = ekonomiPrognosPdfModel;
   if(!M) return;
   const proj = projects.find(p => p.id === M.pid) || {};
+  const nyckeltal = await ekonomiPrognosPdfNyckeltal(M);
+  const logoEl = document.querySelector('.brand-logo');
+  const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
+  const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const fmt = v => (v === '' || v == null) ? '' : (!v ? '' : (M.tkr ? Math.round(v / 1000) : Math.round(v)).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-'));
@@ -4360,10 +4400,33 @@ function ekonomiPrognosPdf(){
   for(let i = 0; i < M.months.length; i += 12) chunks.push(M.months.slice(i, i + 12));
   chunks.forEach((chunk, ci) => {
     if(ci > 0) doc.addPage();
-    doc.setFontSize(14); doc.setTextColor(20);
-    doc.text('Likviditetsprognos – ' + (proj.name || ''), 12, 14);
-    doc.setFontSize(9); doc.setTextColor(110);
-    doc.text('Belopp i ' + (M.tkr ? 'tkr' : 'kr') + ' · startmånad ' + ekonomiPrognosShortLabel(M.start) + ' · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + new Date().toLocaleDateString('sv-SE'), 12, 19);
+    // Sidhuvud: logga till vänster, titel och info till höger.
+    if(logo){ try{ doc.addImage(logo, 'PNG', 12, 9, logoW, logoH); }catch(e){ /* utan logga */ } }
+    doc.setFontSize(15); doc.setTextColor(31, 26, 20);
+    doc.text('Likviditetsprognos', 285, 14, { align: 'right' });
+    doc.setFontSize(11); doc.setTextColor(60);
+    doc.text(String(proj.name || ''), 285, 19.5, { align: 'right' });
+    doc.setFontSize(8); doc.setTextColor(120);
+    doc.text('Belopp i ' + (M.tkr ? 'tkr' : 'kr') + ' · startmånad ' + ekonomiPrognosShortLabel(M.start) + ' · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + new Date().toLocaleDateString('sv-SE'), 285, 24, { align: 'right' });
+    doc.setDrawColor(217, 211, 199); doc.setLineWidth(0.4);
+    doc.line(12, 27, 285, 27);
+    let startY = 31;
+    if(ci === 0){
+      // Nyckeltal från Budget som en rad med rutor.
+      const gap = 3, w = (273 - gap * (nyckeltal.length - 1)) / nyckeltal.length, h = 17, y0 = 31;
+      nyckeltal.forEach((k, i) => {
+        const x = 12 + i * (w + gap);
+        doc.setFillColor(246, 244, 239); doc.setDrawColor(233, 228, 218);
+        doc.roundedRect(x, y0, w, h, 2, 2, 'FD');
+        doc.setFontSize(6.5); doc.setTextColor(122, 115, 104);
+        doc.text(k.label.toUpperCase(), x + 3, y0 + 5.2, { maxWidth: w - 6 });
+        doc.setFontSize(10.5); doc.setTextColor(31, 26, 20); doc.setFont(undefined, 'bold');
+        doc.text(k.value, x + 3, y0 + 12.5);
+        doc.setFont(undefined, 'normal');
+      });
+      startY = y0 + h + 5;
+    }
+
     const first = ci === 0, last = ci === chunks.length - 1;
     const offset = M.months.indexOf(chunk[0]);
     const head = ['Kostnadspost'].concat(first ? ['Budget', 'IB ' + ekonomiPrognosShortLabel(M.start)] : [], chunk.map(ekonomiPrognosShortLabel), last ? ['Prognos totalt'] : []);
@@ -4373,7 +4436,7 @@ function ekonomiPrognosPdf(){
       return [r.label].concat(vals);
     });
     doc.autoTable({
-      startY: 23,
+      startY: startY,
       head: [head],
       body,
       styles: { fontSize: 6.5, cellPadding: 1.2, halign: 'center', textColor: 30 },
