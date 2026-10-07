@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007140934';
+const APP_BUILD = '20261007141712';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4588,9 +4588,13 @@ async function ekonomiPrognosPdf(){
       didParseCell: h => {
         const r = M.rows[h.row.index];
         if(h.section !== 'body' || !r) return;
-        if(r.bold) h.cell.styles.fontStyle = 'bold';
-        if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; }
-        if(r.small) h.cell.styles.textColor = 120;
+        // Fet: raderna Summa inbetalningar, Summa utbetalningar och Likviditet samt IB-kolumnen.
+        // Kursiv: Budget-kolumnen. Netto per månad ljusgrå. Allt annat normalt.
+        const fetRad = /^(Summa inbetalningar|Summa utbetalningar|Likviditet)$/.test(r.label || '');
+        const isBudget = first && h.column.index === 1, isIb = first && h.column.index === 2;
+        h.cell.styles.fontStyle = isBudget ? (fetRad ? 'bolditalic' : 'italic') : ((fetRad || isIb) && !r.section ? 'bold' : 'normal');
+        if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; h.cell.styles.fontStyle = 'bold'; }
+        if(r.small || /^Netto per månad$/.test(r.label || '')) h.cell.styles.textColor = 150;
         if(h.column.index === 0 && r.indent > 12) h.cell.styles.cellPadding = { left: 1.2 + (r.indent - 6) / 4, top: 1.2, bottom: 1.2, right: 1.2 };
       }
     });
