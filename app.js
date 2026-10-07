@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007113256';
+const APP_BUILD = '20261007114447';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1455,7 +1455,50 @@ function setEkonomiSubView(view){
   else if(view === 'mark') renderEkonomiMarkList();
   else if(view === 'vinstsolvinkeln') renderEkonomiVinstSolvinkeln();
   else if(view === 'nyaprojekt') loadNyaProjektList();
+  else if(view === 'likviditet') renderEkonomiLikviditetList();
   else renderEkonomiNumberTab(view);
+}
+
+// Statusfilter (samma som i Projektöversikten); valet sparas per användare under prefKey.
+function buildStatusFilterBar(wrap, prefKey, onChange){
+  const statuses = Array.isArray(uiPrefs[prefKey]) ? uiPrefs[prefKey] : HOME_LIST_DEFAULT_STATUS;
+  wrap.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.textContent = 'Visa:'; wrap.appendChild(lbl);
+  HOME_STATUS_GROUPS.forEach(({ status, heading }) => {
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = statuses.includes(status); cb.dataset.s = status;
+    cb.onchange = async () => {
+      uiPrefs[prefKey] = HOME_STATUS_GROUPS.map(g => g.status).filter(s => [...wrap.querySelectorAll('input')].find(i => i.dataset.s === s).checked);
+      await saveUiPrefs();
+      onChange();
+    };
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(' ' + heading + ' (' + projects.filter(p => (p.status || 'Pågående') === status).length + ')'));
+    wrap.appendChild(l);
+  });
+  return statuses;
+}
+function homeStatusPillHtml(status){
+  const g = HOME_STATUS_GROUPS.find(x => x.status === status);
+  const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : '';
+  return '<span class="home-status-pill ' + cls + '">' + escapeHtml(g ? g.heading : status) + '</span>';
+}
+// Likviditet: projektlista med statusfilter (Namn, Status) - klick öppnar likviditetsprognosen.
+function renderEkonomiLikviditetList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoLikvFilters'), 'likvStatus', renderEkonomiLikviditetList);
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  const tbody = document.getElementById('ekonomiLikviditetBody');
+  tbody.innerHTML = '';
+  const rows = projects.filter(p => statuses.includes(p.status || 'Pågående')).sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="2" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>'; return; }
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.className = 'home-list-row';
+    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td>';
+    tr.onclick = () => openEkonomiProjektLikviditet(p);
+    tbody.appendChild(tr);
+  });
 }
 
 function ekonomiLedgerAmount(line){
