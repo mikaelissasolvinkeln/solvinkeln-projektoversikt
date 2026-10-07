@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007131414';
+const APP_BUILD = '20261007132117';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4344,6 +4344,7 @@ function renderEkonomiPrognos(){
   addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
 
   ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.concat([inb.foreningslan]).map(l => ({ namn: l.namn, ib: l.ib || 0, per: l.per })) };
+  renderEkonomiPrognosNyckeltal();
   wrap.innerHTML = '';
   wrap.appendChild(table);
 }
@@ -4361,35 +4362,114 @@ function ekonomiPrognosMaxBelaning(M){
   });
   return max;
 }
-// Nyckeltal till PDF:en, samma definitioner som korten under Budget.
-async function ekonomiPrognosPdfNyckeltal(M){
+// Nyckeltal till prognosen och PDF:en. Beräknade värden kommer från Budget (samma
+// definitioner som korten där); varje värde kan skrivas över i prognosvyn och
+// sparas då i prognosen (prog.nyckeltal[key]). Marginal och LTC räknas på de
+// värden som visas (ev. överskrivna) om de inte själva är överskrivna.
+const EKONOMI_PROGNOS_NYCKELTAL = [
+  { key: 'kvm', label: 'Total antal kvm', typ: 'kvm' },
+  { key: 'insatser', label: 'Insatser', typ: 'kr' },
+  { key: 'foreningslan', label: 'Föreningslån', typ: 'kr' },
+  { key: 'totalkostnad', label: 'Totalkostnad', typ: 'kr' },
+  { key: 'vinst', label: 'Budgeterad vinst', typ: 'kr' },
+  { key: 'marginal', label: 'Projektmarginal', typ: 'pct' },
+  { key: 'belaning', label: 'Högsta belåning', typ: 'kr' },
+  { key: 'ltc', label: 'LTC (belåning / totalkostnad)', typ: 'pct' }
+];
+function ekonomiPrognosNyckeltalFormat(typ, v){
+  if(v == null || isNaN(v)) return '—';
+  const clean = s => s.replace(/[  ]/g, ' ').replace(/−/g, '-');
+  if(typ === 'kvm') return clean(Math.round(v).toLocaleString('sv-SE')) + ' kvm';
+  if(typ === 'pct') return clean((v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 })) + ' %';
+  return clean(Math.round(v).toLocaleString('sv-SE')) + ' kr';
+}
+function ekonomiPrognosNyckeltal(M){
   const pid = M.pid;
-  const area = await computeProjectAreaRevenue(pid);
+  const prog = ekonomiPrognosRec(pid);
+  const over = prog.nyckeltal || {};
+  const apts = ekonomiPrognosAptsCache[pid] || [];
+  const kvm = apts.reduce((s, a) => { const n = parseFloat(String(a.totalyta || '').replace(',', '.').replace(/[^0-9.]/g, '')); return s + (isNaN(n) ? 0 : n); }, 0);
+  const insatser = apts.reduce((s, a) => s + (parseKr(a.totalpris) || 0), 0);
   const detail = ekonomiBudgetDetail(pid);
-  const foreningslan = detail.foreningslan || 0;
   const totalkostnad = ekonomiProjectBudgetTotals(pid).budget;
   const budgetIntakt = ekonomiBudgetIntakt(pid);
-  const vinst = budgetIntakt != null ? budgetIntakt - totalkostnad : null;
-  const marginal = vinst != null && budgetIntakt ? vinst / budgetIntakt : null;
-  const maxBel = ekonomiPrognosMaxBelaning(M);
-  const ltc = totalkostnad ? maxBel / totalkostnad : null;
-  const kr = v => v == null ? '—' : Math.round(v).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-') + ' kr';
-  const pct = v => v == null ? '—' : (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }).replace(/[  ]/g, ' ').replace(/−/g, '-') + ' %';
-  return [
-    { label: 'Total antal kvm', value: area.kvm ? area.kvm.toLocaleString('sv-SE', { maximumFractionDigits: 0 }).replace(/[  ]/g, ' ') + ' kvm' : '—' },
-    { label: 'Insatser', value: kr(area.intakter) },
-    { label: 'Föreningslån', value: kr(foreningslan) },
-    { label: 'Totalkostnad', value: kr(totalkostnad) },
-    { label: 'Budgeterad vinst', value: kr(vinst) },
-    { label: 'Projektmarginal', value: pct(marginal) },
-    { label: 'LTC (högsta belåning ' + (maxBel ? Math.round(maxBel / 1e6).toLocaleString('sv-SE') + ' MSEK' : '') + ')', value: pct(ltc) }
-  ];
+  const computed = {
+    kvm, insatser, foreningslan: detail.foreningslan || 0, totalkostnad,
+    vinst: budgetIntakt != null ? budgetIntakt - totalkostnad : null,
+    belaning: ekonomiPrognosMaxBelaning(M)
+  };
+  const val = k => (over[k] != null ? over[k] : computed[k]);
+  // Härledda: marginal på visad vinst / budgeterad intäkt, LTC på visad belåning / visad totalkostnad.
+  const intaktVisad = budgetIntakt != null ? (over.vinst != null ? over.vinst + val('totalkostnad') : budgetIntakt) : null;
+  computed.marginal = val('vinst') != null && intaktVisad ? val('vinst') / intaktVisad : null;
+  computed.ltc = val('totalkostnad') ? val('belaning') / val('totalkostnad') : null;
+  return EKONOMI_PROGNOS_NYCKELTAL.map(d => {
+    const v = over[d.key] != null ? over[d.key] : computed[d.key];
+    return { key: d.key, label: d.label, typ: d.typ, value: v, computed: computed[d.key], override: over[d.key] != null, text: ekonomiPrognosNyckeltalFormat(d.typ, v) };
+  });
+}
+// Nyckeltalskorten ovanför prognosen: klicka på värdet för att skriva över det.
+function renderEkonomiPrognosNyckeltal(){
+  const wrap = document.getElementById('ekoPrognosNyckeltal');
+  const M = ekonomiPrognosPdfModel;
+  if(!wrap || !M) return;
+  const pid = M.pid;
+  const prog = ekonomiPrognosRec(pid);
+  wrap.innerHTML = '';
+  ekonomiPrognosNyckeltal(M).forEach(k => {
+    const card = document.createElement('div');
+    card.className = 'home-card';
+    card.style.cssText = 'padding:12px 14px 10px; gap:4px; cursor:default;';
+    const title = document.createElement('div');
+    title.className = 'home-card-title editable';
+    title.style.cssText = 'font-size:16px; cursor:pointer;' + (k.override ? ' color:var(--blue);' : '');
+    title.textContent = k.text;
+    title.title = 'Klicka för att skriva över värdet (används i PDF:en)';
+    title.onclick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = 'any';
+      inp.value = k.value == null ? '' : (k.typ === 'pct' ? Math.round(k.value * 1000) / 10 : Math.round(k.value));
+      inp.placeholder = k.typ === 'pct' ? '%' : (k.typ === 'kvm' ? 'kvm' : 'kr');
+      inp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px; font-size:14px;';
+      card.replaceChild(inp, title);
+      inp.focus(); inp.select();
+      let done = false;
+      const save = async () => {
+        if(done) return; done = true;
+        const raw = inp.value.trim();
+        prog.nyckeltal = prog.nyckeltal || {};
+        if(raw === '') delete prog.nyckeltal[k.key];
+        else { const n = parseFloat(raw.replace(',', '.')); if(!isNaN(n)) prog.nyckeltal[k.key] = k.typ === 'pct' ? n / 100 : n; }
+        await saveEkonomiPrognos();
+        renderEkonomiPrognosNyckeltal();
+      };
+      inp.addEventListener('blur', save);
+      inp.addEventListener('keydown', e => { if(e.key === 'Enter') inp.blur(); if(e.key === 'Escape'){ done = true; renderEkonomiPrognosNyckeltal(); } });
+    };
+    card.appendChild(title);
+    const sub = document.createElement('div');
+    sub.className = 'home-card-sub';
+    sub.textContent = k.label;
+    card.appendChild(sub);
+    if(k.override){
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:10.5px; color:var(--ink-soft); display:flex; gap:6px; align-items:center;';
+      note.textContent = 'Eget värde · beräknat ' + ekonomiPrognosNyckeltalFormat(k.typ, k.computed);
+      const reset = document.createElement('button');
+      reset.type = 'button'; reset.textContent = '↺'; reset.title = 'Återgå till beräknat värde';
+      reset.style.cssText = 'background:none; border:1px solid var(--line-soft); border-radius:4px; cursor:pointer; font-size:10px; padding:0 5px; color:var(--ink-soft);';
+      reset.onclick = async () => { delete prog.nyckeltal[k.key]; await saveEkonomiPrognos(); renderEkonomiPrognosNyckeltal(); };
+      note.appendChild(reset);
+      card.appendChild(note);
+    }
+    wrap.appendChild(card);
+  });
 }
 async function ekonomiPrognosPdf(){
   const M = ekonomiPrognosPdfModel;
   if(!M) return;
   const proj = projects.find(p => p.id === M.pid) || {};
-  const nyckeltal = await ekonomiPrognosPdfNyckeltal(M);
+  const nyckeltal = ekonomiPrognosNyckeltal(M).map(k => ({ label: k.label, value: k.text }));
   const logoEl = document.querySelector('.brand-logo');
   const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
   const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
