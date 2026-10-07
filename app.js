@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007140631';
+const APP_BUILD = '20261007140934';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4159,7 +4159,7 @@ function renderEkonomiPrognos(){
       if(!plan.length && !real.length){
         likviditetsbudgetEditableCell(wrapEl, null, async (val) => {
           let ranta = null;
-          if(val && l.key !== 'foreningslan'){
+          if(val && !ekonomiPrognosCustomStore(prog, l.key)){ // ränta bara på riktiga lån
             const r = prompt('Ränta (% per år) på ' + formatKrFull(Math.abs(val)) + ' ' + l.namn + '?\nRäntan läggs som kostnad under Finansiering varje månad.', String(ekonomiPrognosForeslagenRanta(pid, l.key)));
             if(r === null){ renderEkonomiPrognos(); return; }
             ranta = parseFloat(String(r).replace(',', '.').replace('%', '')) || 0;
