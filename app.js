@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007141712';
+const APP_BUILD = '20261007141946';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3723,6 +3723,17 @@ function ekonomiPrognosData(pid){
     e.ib += tagna[postId].mark;
     tagna[postId].items.filter(it => it.typ === 'mark').forEach(it => e.ibItems.push({ text: it.text, belopp: it.belopp }));
   });
+  // Flyttat från IB till en senare månad (prog.ibFlytt): IB minskar, beloppet läggs på vald månad.
+  Object.keys(prog.ibFlytt || {}).forEach(postId => {
+    (prog.ibFlytt[postId] || []).forEach(f => {
+      const e = entry(postId);
+      e.ib -= f.belopp || 0;
+      if(monthSet.has(f.manad)){
+        e.obetalt[f.manad] = (e.obetalt[f.manad] || 0) + (f.belopp || 0);
+        (e.obetaltItems[f.manad] = e.obetaltItems[f.manad] || []).push({ lopnr: f.lopnr, text: (f.text || '') + ' · flyttad från IB', belopp: f.belopp });
+      }
+    });
+  });
   return { prog, months, per };
 }
 async function saveEkonomiPrognos(){
@@ -4042,6 +4053,69 @@ function showEkonomiLikviditetPopup(pid, m, info){
   form.appendChild(row);
   p.body.appendChild(form);
 }
+// IB för en kostnadspost: vad som ingår, och flytta hela eller delar av en faktura
+// till en senare månad (t.ex. obetalda leverantörsskulder som betalas i november).
+// Flyttarna sparas i prog.ibFlytt[postId] = [{ id, lopnr, text, belopp, manad }].
+function showEkonomiIbFlyttPopup(pid, post, e, months, prog){
+  const p = ekoPopup({ title: post.namn + ' – IB ' + ekonomiPrognosShortLabel(prog.start), sub: 'Fakturor och Mark-belopp som är betalda före startmånaden. Flytta hela eller en del av en faktura till den månad den faktiskt betalas – då minskar IB och beloppet läggs på den månaden.', maxWidth: 820 });
+  const flytt = () => (prog.ibFlytt && prog.ibFlytt[post.id]) || [];
+  const render = () => {
+    p.body.innerHTML = '';
+    const moves = flytt();
+    const movedFor = lopnr => moves.filter(f => f.lopnr === lopnr).reduce((s, f) => s + (f.belopp || 0), 0);
+    let kvar = 0;
+    e.ibItems.forEach(it => {
+      const flyttat = it.lopnr ? movedFor(it.lopnr) : 0;
+      const rest = (it.belopp || 0) - flyttat;
+      kvar += rest;
+      const right = document.createElement('div');
+      right.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;';
+      const amt = document.createElement('span');
+      amt.textContent = formatKrFull(rest) + (flyttat ? ' (av ' + formatKrFull(it.belopp) + ')' : '');
+      right.appendChild(amt);
+      if(it.lopnr && rest > 0.5){
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.placeholder = 'Belopp'; inp.value = Math.round(rest);
+        inp.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+        const sel = document.createElement('select');
+        sel.className = 'eko-inline-select';
+        sel.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join('');
+        right.appendChild(inp); right.appendChild(sel);
+        right.appendChild(ekoSmallBtn('Flytta', async () => {
+          const b = parseFloat(String(inp.value).replace(',', '.'));
+          if(!b || b <= 0){ showToast('Ange belopp.'); return; }
+          if(b > rest + 0.5){ showToast('Högst ' + formatKrFull(rest) + ' kan flyttas.'); return; }
+          prog.ibFlytt = prog.ibFlytt || {};
+          (prog.ibFlytt[post.id] = prog.ibFlytt[post.id] || []).push({ id: uid(), lopnr: it.lopnr, text: it.text, belopp: b, manad: sel.value });
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+          render();
+        }));
+      }
+      p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + (it.lopnr ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--ink); color:#fff; margin-right:6px;">Reskontra ' + escapeHtml(String(it.lopnr)) + '</span>' : '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Mark</span>') + escapeHtml(it.text || '') + '</div>', right));
+    });
+    p.body.appendChild(ekoPopupLine('IB ' + ekonomiPrognosShortLabel(prog.start), formatKrFull(kvar), { bold: true }));
+    if(moves.length){
+      const h = document.createElement('div');
+      h.style.cssText = 'font-weight:700; margin-top:14px;';
+      h.textContent = 'Flyttat från IB';
+      p.body.appendChild(h);
+      moves.forEach(f => {
+        const right = document.createElement('div');
+        right.style.cssText = 'display:flex; align-items:center; gap:8px;';
+        const amt = document.createElement('span'); amt.textContent = formatKrFull(f.belopp); right.appendChild(amt);
+        right.appendChild(ekoSmallBtn('Ångra', async () => {
+          prog.ibFlytt[post.id] = prog.ibFlytt[post.id].filter(x => x.id !== f.id);
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+          render();
+        }, true));
+        p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + escapeHtml(String(f.lopnr)) + ' ' + escapeHtml(f.text || '') + ' → <b>' + ekonomiPrognosShortLabel(f.manad) + '</b></div>', right));
+      });
+    }
+  };
+  render();
+}
 // Kvar att fördela för en kostnadspost (budget − tagna − det som ligger i prognosen).
 function showEkonomiPostKvarPopup(post, t, pp, months, prog){
   const tagna = t.reskontra + t.mark;
@@ -4295,7 +4369,7 @@ function renderEkonomiPrognos(){
       // IB-cell: klick visar specifikationen.
       const ibSpan = document.createElement('span');
       ibSpan.textContent = cell(pp.e.ib);
-      if(pp.e.ib){ ibSpan.className = 'editable'; ibSpan.style.cursor = 'pointer'; ibSpan.title = 'Visa vad som ingår'; ibSpan.onclick = () => showEkonomiTagnaSpec(post.namn + ' - IB ' + ekonomiPrognosShortLabel(prog.start), { reskontra: pp.e.ib, mark: 0, items: pp.e.ibItems.map(it => ({ typ: it.lopnr ? 'reskontra' : 'mark', lopnr: it.lopnr, text: it.text, belopp: it.belopp })) }); }
+      if(pp.e.ib || pp.e.ibItems.length){ ibSpan.className = 'editable'; ibSpan.style.cursor = 'pointer'; ibSpan.title = 'Visa vad som ingår och flytta fakturor till en senare månad'; ibSpan.onclick = () => showEkonomiIbFlyttPopup(pid, post, pp.e, months, prog); if(!pp.e.ib) ibSpan.textContent = '0'; }
       // Postens namn (klick = kvar att fördela) + "Fördela jämnt".
       const nameWrap = document.createElement('span');
       const nameSpan = document.createElement('span');
