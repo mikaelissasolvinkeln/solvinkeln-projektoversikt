@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007141946';
+const APP_BUILD = '20261007145615';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3803,11 +3803,12 @@ function showEkonomiInsatserPopup(pid, title, items){
   const today = new Date().toISOString().slice(0, 10);
   const prog = ekonomiPrognosRec(pid);
   const pending = {}; // aptId -> 'YYYY-MM' | '' (ändringar som sparas med "Applicera ändringar")
+  const pendingF = {}; // aptId -> beräknad försäljningsmånad för osålda
   const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:100%; white-space:nowrap;';
-  table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th style="text-align:left;">Beräknad försäljning</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
   const render = () => {
@@ -3822,9 +3823,22 @@ function showEkonomiInsatserPopup(pid, title, items){
       const tr = document.createElement('tr');
       const tdStyle = 'padding:6px 8px; font-size:12.5px; text-align:left;';
       tr.innerHTML = '<td style="' + tdStyle + ' font-weight:600;">' + escapeHtml(apt.lgh || '—') + '</td>' +
-        '<td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td>' +
+        '<td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td>' +
         '<td style="padding:6px 8px; font-size:12.5px;"></td><td style="' + tdStyle + '"></td>';
-      const mTd = tr.children[1], dTd = tr.children[2], amtTd = tr.children[3], stTd = tr.children[4];
+      const mTd = tr.children[1], dTd = tr.children[2], fTd = tr.children[3], amtTd = tr.children[4], stTd = tr.children[5];
+      // Beräknad försäljning: sålda visar datumet, osålda får en månadsväljare (styr försäljningsprognosen).
+      if(apt.sald && apt.sald.done){
+        fTd.innerHTML = '<span style="color:var(--good, #2e7d32);">Såld ' + escapeHtml((apt.sald.at || '').slice(0, 10)) + '</span>';
+      } else {
+        const fi = document.createElement('input');
+        fi.type = 'month';
+        fi.value = pendingF[apt.id] != null ? pendingF[apt.id] : ((prog.forsaljningManad || {})[apt.id] || '');
+        fi.title = 'När försäljningen beräknas ske (används i försäljningsprognosen)';
+        fi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
+        fi.onchange = () => { pendingF[apt.id] = fi.value; applyBtn.disabled = false; applyBtn.style.opacity = '1'; };
+        fTd.appendChild(fi);
+        const t = document.createElement('span'); t.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; t.textContent = 'osåld'; fTd.appendChild(t);
+      }
       if(fast){
         const m = paid && apt.slutbetald.date ? apt.slutbetald.date.slice(0, 7) : bek.slice(0, 7);
         mTd.textContent = ekonomiPrognosShortLabel(m);
@@ -3876,7 +3890,7 @@ function showEkonomiInsatserPopup(pid, title, items){
     });
     const sumTr = document.createElement('tr');
     sumTr.className = 'eko-row-resultat';
-    sumTr.innerHTML = '<td style="padding:8px; text-align:left;">Summa (' + sorted.length + ' bostäder)</td><td></td><td></td><td style="padding:8px; font-size:12.5px;">' + formatKrFull(sum) + '</td><td></td>';
+    sumTr.innerHTML = '<td style="padding:8px; text-align:left;">Summa (' + sorted.length + ' bostäder)</td><td></td><td></td><td></td><td style="padding:8px; font-size:12.5px;">' + formatKrFull(sum) + '</td><td></td>';
     tbody.appendChild(sumTr);
   };
   const applyBtn = document.createElement('button');
@@ -3886,6 +3900,8 @@ function showEkonomiInsatserPopup(pid, title, items){
   applyBtn.onclick = async () => {
     prog.insatsManad = prog.insatsManad || {};
     Object.keys(pending).forEach(id => { if(pending[id]) prog.insatsManad[id] = pending[id]; else delete prog.insatsManad[id]; });
+    prog.forsaljningManad = prog.forsaljningManad || {};
+    Object.keys(pendingF).forEach(id => { if(pendingF[id]) prog.forsaljningManad[id] = pendingF[id]; else delete prog.forsaljningManad[id]; });
     await saveEkonomiPrognos();
     showToast('Månader uppdaterade i likviditetsprognosen.');
     p.close(); renderEkonomiPrognos();
@@ -4115,6 +4131,141 @@ function showEkonomiIbFlyttPopup(pid, post, e, months, prog){
     }
   };
   render();
+}
+// ---------- Försäljningsprognos (andel sålda enheter och andel av insatser per månad) ----------
+// Sålda enheter räknas från sitt försäljningsdatum (när Såld kryssades i), osålda från
+// den beräknade försäljningsmånad som anges i insatslistan (prog.forsaljningManad[aptId]).
+function ekonomiForsaljningManad(apt, prog){
+  if(apt.sald && apt.sald.done) return { m: (apt.sald.at || '').slice(0, 7), sald: true };
+  return { m: (prog && prog.forsaljningManad && prog.forsaljningManad[apt.id]) || '', sald: false };
+}
+function ekonomiForsaljningsData(pid){
+  const prog = ekonomiPrognosRec(pid);
+  const apts = ekonomiPrognosAptsCache[pid] || [];
+  const total = apts.length;
+  const totalKr = apts.reduce((s, a) => s + (parseKr(a.totalpris) || 0), 0);
+  const per = {}; let utanDatum = 0;
+  apts.forEach(a => {
+    const f = ekonomiForsaljningManad(a, prog);
+    if(!f.m){ utanDatum++; return; }
+    const kr = f.sald ? (parseKr(a.sald.price) || parseKr(a.totalpris) || 0) : (parseKr(a.totalpris) || 0);
+    per[f.m] = per[f.m] || { n: 0, kr: 0, sald: 0 };
+    per[f.m].n++; per[f.m].kr += kr; if(f.sald) per[f.m].sald++;
+  });
+  const prognosMonths = ekonomiPrognosMonths(prog.start, prog.manader);
+  const all = Object.keys(per).concat(prognosMonths).sort();
+  if(!all.length) return { pts: [], total, totalKr, utanDatum, saldaN: 0, saldaKr: 0 };
+  const months = ekonomiPrognosMonths(all[0], 1);
+  while(months[months.length - 1] < all[all.length - 1]) months.push(ekonomiPrognosMonths(months[months.length - 1], 2)[1]);
+  const today = new Date().toISOString().slice(0, 7);
+  let cn = 0, ckr = 0, saldaN = 0, saldaKr = 0;
+  const pts = months.map(m => {
+    const s = per[m] || { n: 0, kr: 0, sald: 0 };
+    cn += s.n; ckr += s.kr;
+    if(m <= today){ saldaN += s.sald; }
+    apts.forEach(a => { if(a.sald && a.sald.done && (a.sald.at || '').slice(0, 7) === m) saldaKr += parseKr(a.sald.price) || parseKr(a.totalpris) || 0; });
+    return { m, n: s.n, kr: s.kr, cn, ckr, pn: total ? cn / total : 0, pk: totalKr ? ckr / totalKr : 0, prognos: m > today || s.sald < s.n };
+  });
+  return { pts, total, totalKr, utanDatum, saldaN: apts.filter(a => a.sald && a.sald.done).length, saldaKr };
+}
+function renderEkonomiForsaljning(){
+  const wrap = document.getElementById('ekoForsaljningWrap');
+  const pid = currentEkonomiLikviditetProjectId;
+  if(!wrap || !pid) return;
+  const D = ekonomiForsaljningsData(pid);
+  wrap.innerHTML = '';
+  if(!D.pts.length){ wrap.innerHTML = '<p class="eko-sub">Inga bostäder än.</p>'; return; }
+  const sub = document.createElement('p');
+  sub.className = 'eko-sub';
+  sub.style.margin = '0 0 8px';
+  sub.textContent = D.saldaN + ' av ' + D.total + ' enheter sålda (' + Math.round(D.total ? D.saldaN / D.total * 100 : 0) + ' %), ' + Math.round(D.totalKr ? D.saldaKr / D.totalKr * 100 : 0) + ' % av insatserna.' + (D.utanDatum ? ' ' + D.utanDatum + ' osålda saknar beräknat försäljningsdatum (anges i insatslistan) och ingår inte i prognosen.' : '');
+  wrap.appendChild(sub);
+  const legend = document.createElement('div');
+  legend.style.cssText = 'display:flex; gap:18px; font-size:12.5px; color:var(--ink-soft); margin:0 0 6px;';
+  legend.innerHTML = '<span><i style="display:inline-block; width:18px; height:2px; background:#2f5f8f; vertical-align:middle; margin-right:6px;"></i>Andel av enheter</span><span><i style="display:inline-block; width:18px; height:2px; background:#b08a00; vertical-align:middle; margin-right:6px;"></i>Andel av insatser</span><span><i style="display:inline-block; width:18px; height:2px; background:repeating-linear-gradient(90deg, #7a7368 0 4px, transparent 4px 7px); vertical-align:middle; margin-right:6px;"></i>Prognos (ej sålt än)</span>';
+  wrap.appendChild(legend);
+  const pts = D.pts, W = 940, H = 280, L = 46, R = 130, T = 16, B = 36;
+  const X = i => L + (pts.length > 1 ? i * (W - L - R) / (pts.length - 1) : 0), Y = v => T + (1 - v) * (H - T - B);
+  const lbl = m => ekonomiPrognosShortLabel(m);
+  let g = '';
+  [0, .25, .5, .75, 1].forEach(v => { g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="#e9e4da"/><text x="' + (L - 8) + '" y="' + (Y(v) + 4) + '" text-anchor="end" style="font-family:JetBrains Mono,monospace; font-size:10.5px; fill:#7a7368;">' + Math.round(v * 100) + ' %</text>'; });
+  pts.forEach((p, i) => { if(pts.length <= 14 || i % 2 === 0) g += '<text x="' + X(i) + '" y="' + (H - B + 18) + '" text-anchor="middle" style="font-family:JetBrains Mono,monospace; font-size:10.5px; fill:#7a7368;">' + lbl(p.m) + '</text>'; });
+  const split = pts.findIndex(p => p.prognos);
+  if(split > 0){ const sx = X(split) - (X(1) - X(0)) / 2; g += '<line x1="' + sx + '" x2="' + sx + '" y1="' + T + '" y2="' + (H - B) + '" stroke="#d9d3c7" stroke-dasharray="3 3"/><text x="' + (sx + 6) + '" y="' + (T + 10) + '" style="font-family:JetBrains Mono,monospace; font-size:10px; fill:#7a7368;">prognos →</text>'; }
+  const series = (key, color, name, dy) => {
+    let d = '';
+    for(let i = 1; i < pts.length; i++) d += '<line x1="' + X(i - 1) + '" y1="' + Y(pts[i - 1][key]) + '" x2="' + X(i) + '" y2="' + Y(pts[i][key]) + '" stroke="' + color + '" stroke-width="2.2"' + (pts[i].prognos ? ' stroke-dasharray="5 4"' : '') + '/>';
+    d += pts.map((p, i) => '<circle cx="' + X(i) + '" cy="' + Y(p[key]) + '" r="4" fill="' + (p.prognos ? '#fff' : color) + '" stroke="' + color + '" stroke-width="2"/>').join('');
+    const last = pts[pts.length - 1];
+    d += '<text x="' + (X(pts.length - 1) + 10) + '" y="' + (Y(last[key]) + 4 + dy) + '" fill="' + color + '" style="font-family:Inter,sans-serif; font-weight:600; font-size:11.5px;">' + Math.round(last[key] * 100) + ' % ' + name + '</text>';
+    return d;
+  };
+  const last = pts[pts.length - 1];
+  const overlap = Math.abs(Y(last.pn) - Y(last.pk)) < 14;
+  g += series('pk', '#b08a00', 'insatser', overlap ? 8 : 0) + series('pn', '#2f5f8f', 'enheter', overlap ? -8 : 0);
+  g += pts.map((p, i) => '<rect data-i="' + i + '" x="' + (X(i) - 18) + '" y="' + T + '" width="36" height="' + (H - T - B) + '" fill="transparent"/>').join('');
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:relative; background:#fff; border:1px solid var(--line-soft); border-radius:12px; padding:14px 16px 6px;';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('width', '100%'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Ackumulerad försäljning per månad');
+  svg.innerHTML = g;
+  const tip = document.createElement('div');
+  tip.style.cssText = 'position:absolute; pointer-events:none; background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12px; box-shadow:0 6px 20px rgba(0,0,0,0.12); display:none; min-width:180px; z-index:2;';
+  svg.addEventListener('mousemove', e => {
+    const r = e.target.closest('rect[data-i]'); if(!r){ tip.style.display = 'none'; return; }
+    const p = pts[+r.dataset.i];
+    tip.innerHTML = '<div style="font-weight:700;">' + lbl(p.m) + (p.prognos ? ' · prognos' : '') + '</div>' + p.n + ' ' + (p.prognos ? 'beräknade' : 'sålda') + ' enheter<br>Ackumulerat <b>' + p.cn + ' av ' + D.total + '</b> (' + Math.round(p.pn * 100) + ' %)<br>Insatser ' + (p.ckr / 1e6).toFixed(1) + ' MSEK (' + Math.round(p.pk * 100) + ' %)';
+    tip.style.display = 'block'; tip.style.left = (e.offsetX + 16) + 'px'; tip.style.top = (e.offsetY - 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  holder.appendChild(svg); holder.appendChild(tip);
+  wrap.appendChild(holder);
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; margin-top:12px;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Månad</th><th>Sålda enheter</th><th>Ackumulerat</th><th>Andel enheter</th><th>Insatser (sålt)</th><th>Andel av insatser</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  pts.forEach(p => {
+    const tr = document.createElement('tr');
+    const red = p.prognos ? ' style="color:var(--danger); font-size:12.5px; padding:6px 10px;"' : ' style="font-size:12.5px; padding:6px 10px;"';
+    tr.innerHTML = '<td style="font-size:12.5px; padding:6px 10px;">' + lbl(p.m) + (p.prognos ? ' <span style="font-size:10px; color:var(--ink-soft);">prognos</span>' : '') + '</td><td' + red + '>' + p.n + '</td><td style="font-size:12.5px; padding:6px 10px;">' + p.cn + ' av ' + D.total + '</td><td style="font-size:12.5px; padding:6px 10px;">' + Math.round(p.pn * 100) + ' %</td><td' + red + '>' + formatKrFull(p.kr) + '</td><td style="font-size:12.5px; padding:6px 10px;">' + Math.round(p.pk * 100) + ' %</td>';
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  wrap.appendChild(table);
+}
+// Försäljningsprognosen som sida 2 i PDF:en.
+function ekonomiForsaljningPdfPage(doc, pid){
+  const D = ekonomiForsaljningsData(pid);
+  if(!D.pts.length) return;
+  const pts = D.pts, lbl = m => ekonomiPrognosShortLabel(m);
+  const fmtSp = s => s.replace(/[  ]/g, ' ').replace(/−/g, '-');
+  doc.addPage();
+  doc.setFontSize(15); doc.setTextColor(31, 26, 20); doc.text('Försäljningsprognos', 12, 14);
+  doc.setFontSize(9); doc.setTextColor(110); doc.text(D.saldaN + ' av ' + D.total + ' enheter sålda · andel sålda enheter och andel av insatserna, ackumulerat per månad · heldraget = sålt, streckat = prognos', 12, 19.5);
+  const leg = (x, color, text, dash) => { doc.setDrawColor(...color); doc.setLineWidth(0.7); if(dash) doc.setLineDashPattern([1.5, 1.2], 0); doc.line(x, 24.5, x + 7, 24.5); doc.setLineDashPattern([], 0); doc.setFontSize(8); doc.setTextColor(90); doc.text(text, x + 9, 25.8); };
+  leg(12, [47, 95, 143], 'Andel av enheter'); leg(50, [176, 138, 0], 'Andel av insatser'); leg(90, [120, 120, 120], 'Prognos', true);
+  const L = 22, Rr = 215, T = 32, Bt = 110;
+  const X = i => L + (pts.length > 1 ? i * (Rr - L) / (pts.length - 1) : 0), Y = v => T + (1 - v) * (Bt - T);
+  doc.setDrawColor(233, 228, 218); doc.setLineWidth(0.25);
+  [0, .25, .5, .75, 1].forEach(v => { doc.line(L, Y(v), Rr, Y(v)); doc.setFontSize(7); doc.setTextColor(122, 115, 104); doc.text(Math.round(v * 100) + ' %', L - 2, Y(v) + 1, { align: 'right' }); });
+  pts.forEach((p, i) => { if(pts.length <= 14 || i % 2 === 0){ doc.setFontSize(7); doc.setTextColor(122, 115, 104); doc.text(lbl(p.m), X(i), Bt + 5, { align: 'center' }); } });
+  const split = pts.findIndex(p => p.prognos);
+  if(split > 0){ const sx = X(split) - (X(1) - X(0)) / 2; doc.setDrawColor(200); doc.setLineDashPattern([1, 1], 0); doc.line(sx, T, sx, Bt); doc.setLineDashPattern([], 0); doc.setFontSize(7); doc.setTextColor(140); doc.text('prognos', sx + 1.5, T + 3); }
+  const last = pts[pts.length - 1];
+  const overlap = Math.abs(Y(last.pn) - Y(last.pk)) < 4;
+  const series = (key, color, name, dy) => {
+    doc.setDrawColor(...color); doc.setLineWidth(0.8);
+    for(let i = 1; i < pts.length; i++){ if(pts[i].prognos) doc.setLineDashPattern([1.5, 1.2], 0); else doc.setLineDashPattern([], 0); doc.line(X(i - 1), Y(pts[i - 1][key]), X(i), Y(pts[i][key])); }
+    doc.setLineDashPattern([], 0);
+    pts.forEach((p, i) => { doc.setFillColor(...(p.prognos ? [255, 255, 255] : color)); doc.circle(X(i), Y(p[key]), 1.1, 'FD'); });
+    doc.setFontSize(8); doc.setTextColor(...color); doc.setFont(undefined, 'bold'); doc.text(Math.round(last[key] * 100) + ' % ' + name, Rr + 3, Y(last[key]) + 1 + dy); doc.setFont(undefined, 'normal');
+  };
+  series('pk', [176, 138, 0], 'insatser', overlap ? 2.5 : 0); series('pn', [47, 95, 143], 'enheter', overlap ? -2.5 : 0);
+  doc.autoTable({ startY: Bt + 10, head: [['Månad', 'Sålda enheter', 'Ackumulerat', 'Andel enheter', 'Insatser (sålt)', 'Andel av insatser']],
+    body: pts.map(p => [lbl(p.m) + (p.prognos ? ' (prognos)' : ''), String(p.n), p.cn + ' av ' + D.total, Math.round(p.pn * 100) + ' %', fmtSp(Math.round(p.kr / 1000).toLocaleString('sv-SE')) + ' tkr', Math.round(p.pk * 100) + ' %']),
+    styles: { fontSize: 7, cellPadding: 1.2, halign: 'center', textColor: 30 }, headStyles: { fillColor: [58, 44, 32], textColor: 255, fontSize: 7 }, columnStyles: { 0: { halign: 'left' } }, margin: { left: 12, right: 12 },
+    didParseCell: h => { if(h.section === 'body' && pts[h.row.index] && pts[h.row.index].prognos && (h.column.index === 1 || h.column.index === 4)) h.cell.styles.textColor = [178, 58, 58]; } });
 }
 // Kvar att fördela för en kostnadspost (budget − tagna − det som ligger i prognosen).
 function showEkonomiPostKvarPopup(post, t, pp, months, prog){
@@ -4481,6 +4632,7 @@ function renderEkonomiPrognos(){
   renderEkonomiPrognosNyckeltal();
   wrap.innerHTML = '';
   wrap.appendChild(table);
+  renderEkonomiForsaljning();
 }
 // ---------- Likviditetsprognos som PDF (liggande A4, 12 månader per sida) ----------
 let ekonomiPrognosPdfModel = null;
@@ -4673,6 +4825,7 @@ async function ekonomiPrognosPdf(){
       }
     });
   });
+  ekonomiForsaljningPdfPage(doc, M.pid);
   doc.save('Likviditetsprognos-' + (proj.name || 'projekt').replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') + '.pdf');
 }
 document.getElementById('ekoPrognosPdf').onclick = ekonomiPrognosPdf;
