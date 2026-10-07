@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007145920';
+const APP_BUILD = '20261007151943';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2489,10 +2489,12 @@ function ekonomiLevNamnList(pid){
 function ekonomiLevDatalistHtml(pid){
   return '<datalist id="ekoLevDatalist">' + ekonomiLevNamnList(pid).map(n => '<option value="' + escapeHtml(n).replace(/"/g, '&quot;') + '">').join('') + '</datalist>';
 }
-function showEkonomiLevRenamePopup(pid, orig){
-  const lines = (companyEkonomiData.reskontra[pid] || []).filter(l => String(l.leverantor || '').trim() === orig);
-  const current = ekonomiLevNamn(pid, lines[0] || { leverantor: orig });
-  const p = ekoPopup({ title: 'Byt namn på leverantör', sub: 'Inläst namn: "' + orig + '" (' + lines.length + ' rader). Välj ett befintligt namn i listan eller skriv ett eget – alla rader med samma inlästa namn får det nya namnet.', maxWidth: 520 });
+function showEkonomiLevRenamePopup(pid, origArg){
+  // origArg: ett inläst namn eller en lista (en sammanslagen grupp) - alla får det nya namnet.
+  const origs = Array.isArray(origArg) ? origArg : [origArg];
+  const lines = (companyEkonomiData.reskontra[pid] || []).filter(l => origs.includes(String(l.leverantor || '').trim()));
+  const current = ekonomiLevNamn(pid, lines[0] || { leverantor: origs[0] });
+  const p = ekoPopup({ title: 'Byt namn på leverantör', sub: 'Inläst som: ' + origs.map(o => '"' + o + '"').join(', ') + ' (' + lines.length + ' rader). Välj ett befintligt namn i listan eller skriv ett eget – alla dessa rader får det nya namnet.', maxWidth: 560 });
   p.body.innerHTML = ekonomiLevDatalistHtml(pid);
   const inp = document.createElement('input');
   inp.type = 'text'; inp.setAttribute('list', 'ekoLevDatalist'); inp.value = current; inp.placeholder = 'T.ex. Kameo';
@@ -2502,7 +2504,7 @@ function showEkonomiLevRenamePopup(pid, orig){
     const nytt = inp.value.trim();
     const d = ekonomiBudgetDetail(pid);
     d.levAlias = d.levAlias || {};
-    if(!nytt || nytt === orig) delete d.levAlias[orig]; else d.levAlias[orig] = nytt;
+    origs.forEach(orig => { if(!nytt || nytt === orig) delete d.levAlias[orig]; else d.levAlias[orig] = nytt; });
     try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
     p.close();
     renderEkonomiReskontraTable();
@@ -2554,7 +2556,7 @@ function renderEkonomiLevSummary(pid){
     const ren = document.createElement('button');
     ren.type = 'button'; ren.textContent = '✎'; ren.title = 'Byt namn';
     ren.style.cssText = 'background:none; border:1px solid var(--line-soft); border-radius:4px; cursor:pointer; color:var(--ink-soft); padding:1px 6px;';
-    ren.onclick = () => showEkonomiLevRenamePopup(pid, [...g.orig][0] || g.namn);
+    ren.onclick = () => showEkonomiLevRenamePopup(pid, g.orig.size ? [...g.orig] : [g.namn]);
     tr.children[3].appendChild(ren);
     tbody.appendChild(tr);
     if(isOpen){
