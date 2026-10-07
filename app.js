@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007104531';
+const APP_BUILD = '20261007113256';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -504,6 +504,8 @@ async function loadProjectSummary(p){
       const apts = raw.apartments.map(normalizeApartment);
       const sold = apts.filter(a => a.sald && a.sald.done).length;
       summary.lghText = apts.length + ' lägenheter · ' + sold + ' sålda';
+      summary.antal = apts.length;
+      summary.salda = sold;
       summary.omsattning = apts.reduce((sum, a) => {
         const n = parseInt(String(a.totalpris || '').replace(/[^0-9]/g, ''), 10);
         return sum + (isNaN(n) ? 0 : n);
@@ -546,47 +548,116 @@ async function renderHomeGrid(){
   });
 
   const sectionsWrap = document.getElementById('homeStatusSections');
-  sectionsWrap.innerHTML = '';
-  const allVisibleProjects = [];
+  renderHomeProjectList(sectionsWrap);
+}
 
+// ---------- Projektöversikt som lista (filter och sortering sparas per användare) ----------
+const HOME_LIST_DEFAULT_STATUS = ['Pågående', 'Bygglov/projektering', 'Kommande'];
+const HOME_LIST_COLUMNS = [
+  { k: 'name', label: 'Namn', left: true },
+  { k: 'status', label: 'Status', left: true },
+  { k: 'totalpris', label: 'Totalpris' },
+  { k: 'lan', label: 'Föreningslån' },
+  { k: 'oms', label: 'Total omsättning' },
+  { k: 'antal', label: 'Antal lägenheter' },
+  { k: 'salda', label: 'Antal sålda' }
+];
+let homeListRenderToken = 0;
+async function renderHomeProjectList(wrap){
+  const token = ++homeListRenderToken;
+  const statuses = Array.isArray(uiPrefs.homeStatus) ? uiPrefs.homeStatus : HOME_LIST_DEFAULT_STATUS;
+  const sort = uiPrefs.homeSort && uiPrefs.homeSort.k ? uiPrefs.homeSort : { k: 'status', dir: 1 };
+  wrap.innerHTML = '';
+
+  const bar = document.createElement('div');
+  bar.className = 'home-list-filters';
+  const lbl = document.createElement('span');
+  lbl.textContent = 'Visa:';
+  bar.appendChild(lbl);
   HOME_STATUS_GROUPS.forEach(({ status, heading }) => {
-    const group = projects.filter(p => (p.status || 'Pågående') === status);
-    if(!group.length) return;
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = statuses.includes(status);
+    cb.onchange = async () => {
+      uiPrefs.homeStatus = HOME_STATUS_GROUPS.map(g => g.status).filter(s => [...bar.querySelectorAll('input')].find(i => i.dataset.s === s).checked);
+      await saveUiPrefs();
+      renderHomeGrid();
+    };
+    cb.dataset.s = status;
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(' ' + heading + ' (' + projects.filter(p => (p.status || 'Pågående') === status).length + ')'));
+    bar.appendChild(l);
+  });
+  wrap.appendChild(bar);
 
-    const headingEl = document.createElement('h3');
-    headingEl.className = 'home-section-title';
-    headingEl.textContent = heading;
-    sectionsWrap.appendChild(headingEl);
+  const scroll = document.createElement('div');
+  scroll.className = 'table-scroll';
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table home-list-table';
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  HOME_LIST_COLUMNS.forEach(c => {
+    const th = document.createElement('th');
+    th.textContent = c.label + (sort.k === c.k ? (sort.dir > 0 ? ' ▲' : ' ▼') : '');
+    if(c.left) th.style.textAlign = 'left';
+    th.style.cursor = 'pointer';
+    th.title = 'Sortera';
+    th.onclick = async () => {
+      uiPrefs.homeSort = sort.k === c.k ? { k: c.k, dir: -sort.dir } : { k: c.k, dir: 1 };
+      await saveUiPrefs();
+      renderHomeGrid();
+    };
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Laddar…</td></tr>';
+  table.appendChild(tbody);
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
 
-    const grid = document.createElement('div');
-    grid.className = 'home-grid';
-    group.forEach(p => {
-      const card = document.createElement('div');
-      card.className = 'home-card';
-      card.innerHTML =
-        '<div class="home-card-title">' + escapeHtml(p.name) + '</div>' +
-        '<div class="home-card-sub" id="sub-' + p.id + '">Laddar…</div>' +
-        '<div class="home-card-figures" id="fig-' + p.id + '"></div>';
-      card.onclick = () => openProject(p);
-      grid.appendChild(card);
-      allVisibleProjects.push(p);
-    });
-    sectionsWrap.appendChild(grid);
+  const visible = projects.filter(p => statuses.includes(p.status || 'Pågående'));
+  const rows = await Promise.all(visible.map(async p => {
+    const s = await loadProjectSummary(p);
+    return { p, name: p.name, status: p.status || 'Pågående', totalpris: s.omsattning || 0, lan: s.lan || 0, oms: (s.omsattning || 0) + (s.lan || 0), antal: s.antal || 0, salda: s.salda || 0 };
+  }));
+  if(token !== homeListRenderToken) return; // en nyare rendering har redan tagit över
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  rows.sort((a, b) => {
+    const va = sort.k === 'status' ? order[a.status] : a[sort.k];
+    const vb = sort.k === 'status' ? order[b.status] : b[sort.k];
+    const cmp = typeof va === 'string' ? va.localeCompare(vb, 'sv') : (va - vb);
+    return (cmp * sort.dir) || a.name.localeCompare(b.name, 'sv');
   });
 
-  // Fyll i sammanfattning per projekt asynkront utan att blockera renderingen
-  allVisibleProjects.forEach(async p => {
-    const summary = await loadProjectSummary(p);
-    const subEl = document.getElementById('sub-' + p.id);
-    if(subEl) subEl.textContent = summary.lghText;
-    const figEl = document.getElementById('fig-' + p.id);
-    if(figEl){
-      figEl.innerHTML =
-        '<div class="figure-row"><span>Totalpris</span><strong>' + formatMSEK(summary.omsattning) + '</strong></div>' +
-        '<div class="figure-row"><span>Föreningslån</span><strong>' + formatMSEK(summary.lan) + '</strong></div>' +
-        '<div class="figure-row figure-row-total"><span>Total omsättning</span><strong>' + formatMSEK((summary.omsattning || 0) + (summary.lan || 0)) + '</strong></div>';
-    }
+  tbody.innerHTML = '';
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>';
+    return;
+  }
+  const tot = { totalpris: 0, lan: 0, oms: 0, antal: 0, salda: 0 };
+  rows.forEach(r => {
+    Object.keys(tot).forEach(k => { tot[k] += r[k]; });
+    const tr = document.createElement('tr');
+    tr.className = 'home-list-row';
+    const pct = r.antal ? Math.round(r.salda / r.antal * 100) : 0;
+    tr.innerHTML =
+      '<td class="home-list-name">' + escapeHtml(r.name) + '</td>' +
+      '<td style="text-align:left;"><span class="home-status-pill ' + (r.status === 'Pågående' ? 'pag' : r.status === 'Bygglov/projektering' ? 'bygg' : r.status === 'Kommande' ? 'komm' : '') + '">' + escapeHtml(HOME_STATUS_GROUPS.find(g => g.status === r.status)?.heading || r.status) + '</span></td>' +
+      '<td>' + formatMSEK(r.totalpris) + '</td>' +
+      '<td>' + formatMSEK(r.lan) + '</td>' +
+      '<td style="font-weight:700;">' + formatMSEK(r.oms) + '</td>' +
+      '<td>' + (r.antal || '—') + '</td>' +
+      '<td><span class="home-salda"><span class="home-bar"><i style="width:' + pct + '%"></i></span>' + (r.antal ? r.salda + ' av ' + r.antal : '—') + '</span></td>';
+    tr.onclick = () => openProject(r.p);
+    tbody.appendChild(tr);
   });
+  const sum = document.createElement('tr');
+  sum.className = 'eko-row-resultat';
+  sum.innerHTML = '<td style="text-align:left;">Summa (' + rows.length + ' projekt)</td><td></td><td>' + formatMSEK(tot.totalpris) + '</td><td>' + formatMSEK(tot.lan) + '</td><td>' + formatMSEK(tot.oms) + '</td><td>' + tot.antal + '</td><td>' + tot.salda + ' av ' + tot.antal + '</td>';
+  tbody.appendChild(sum);
 }
 
 function showScreen(next){
@@ -11650,6 +11721,7 @@ async function init(){
   isEkonomiAdmin = myEmail === EKONOMI_ADMIN_EMAIL;
   document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
   if(isEkonomiAdmin) await loadEkonomiData();
+  else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } }
   myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
   myPersonId = info.id;
   renderNameUI();
