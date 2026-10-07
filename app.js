@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261006162029';
+const APP_BUILD = '20261007104401';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -49,8 +49,14 @@ const EKONOMI_KEYS = {
   lan: 'ekonomi-lan',
   brItems: 'ekonomi-br-items',
   mark: 'ekonomi-mark',
-  likviditetsbudget: 'ekonomi-likviditetsbudget'
+  likviditetsbudget: 'ekonomi-likviditetsbudget',
+  prefs: 'ui-prefs'
 };
+// Sparade visningsval (t.ex. filter), följer med mellan enheter.
+let uiPrefs = {};
+async function saveUiPrefs(){
+  try{ await DB.setPersonalData(EKONOMI_KEYS.prefs, JSON.stringify(uiPrefs)); }catch(e){ showDebugError('Kunde inte spara inställning', e); }
+}
 // Fast lista kostnadsposter i en projektbudget - Totalkostnad räknas alltid ut,
 // tilldelas aldrig en reskontrarad.
 const EKONOMI_COST_CATEGORIES = [
@@ -1303,7 +1309,7 @@ function renderPaminnelser(){
 // ---------- Ekonomi (företagsövergripande) ----------
 async function loadEkonomiData(){
   try{
-    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark, likviditetsbudget] = await Promise.all([
+    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark, likviditetsbudget, prefs] = await Promise.all([
       DB.getPersonalData(EKONOMI_KEYS.meta),
       DB.getPersonalData(EKONOMI_KEYS.budgetDetalj),
       DB.getPersonalData(EKONOMI_KEYS.reskontra),
@@ -1312,8 +1318,10 @@ async function loadEkonomiData(){
       DB.getPersonalData(EKONOMI_KEYS.brItems),
       DB.getPersonalData(EKONOMI_KEYS.mark),
       DB.getPersonalData(EKONOMI_KEYS.likviditetsbudget),
+      DB.getPersonalData(EKONOMI_KEYS.prefs),
       loadNyaProjektMall() // budgetstrukturen utgår från kalkylmallen
     ]);
+    try{ uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; }
     companyEkonomiData = {
       meta: (meta && JSON.parse(meta.value)) || {},
       budgetDetalj: (budgetDetalj && JSON.parse(budgetDetalj.value)) || {},
@@ -4259,6 +4267,11 @@ function ekonomiPrognosPdf(){
   doc.save('Likviditetsprognos-' + (proj.name || 'projekt').replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') + '.pdf');
 }
 document.getElementById('ekoPrognosPdf').onclick = ekonomiPrognosPdf;
+document.getElementById('ekoLanDoljNoll').onchange = async () => {
+  uiPrefs.lanDoljNoll = document.getElementById('ekoLanDoljNoll').checked;
+  await saveUiPrefs();
+  renderEkonomiNumberTab('lan');
+};
 document.getElementById('ekoPrognosEnhet').onchange = async () => {
   const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
   ekonomiPrognosRec(pid).enhet = document.getElementById('ekoPrognosEnhet').value;
@@ -7189,15 +7202,20 @@ function renderEkonomiNumberTab(tabKey){
   cfg.fields.forEach(f => { totals[f.key] = 0; });
   let totalComputed = 0;
 
+  const doljNoll = tabKey === 'lan' && !!uiPrefs.lanDoljNoll;
+  const lanBox = document.getElementById('ekoLanDoljNoll');
+  if(lanBox) lanBox.checked = !!uiPrefs.lanDoljNoll;
   projects.forEach(p => {
     const rec = (companyEkonomiData[cfg.key] && companyEkonomiData[cfg.key][p.id]) || {};
+    // Lån: dölj projekt där alla belopp (inkl. fastighetsvärde) är 0 kr om valet är ikryssat.
+    if(doljNoll && cfg.fields.every(f => !(f.computed ? ekonomiMarkKostnader(p.id).summa : (f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0))))) return;
     const row = document.createElement('tr');
     row.onclick = () => {
       if(tabKey === 'lan') openEkonomiProjektLan(p);
       else if(tabKey === 'likviditet') openEkonomiProjektLikviditet(p);
       else openEkonomiNumberModal(tabKey, p);
     };
-    let html = '<td>' + escapeHtml(p.name) + '</td>';
+    let html = '<td style="white-space:nowrap;">' + escapeHtml(p.name) + '</td>';
     cfg.fields.forEach(f => {
       // Fastighetsvärde räknas från Mark; lån med detaljuppgifter visar aktuellt saldo.
       const v = f.computed ? ekonomiMarkKostnader(p.id).summa : (tabKey === 'lan' && f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0));
