@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007145615';
+const APP_BUILD = '20261007145920';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2472,6 +2472,108 @@ async function saveEkonomiForeningslanModal(){
   }
 }
 
+// ---------- Reskontra: leverantörsnamn (alias) och samlad lista per leverantör ----------
+// Inlästa namn som "Inbet kameo 5089" kan döpas om till t.ex. "Kameo"; aliaset sparas per
+// projekt (budgetDetalj.levAlias[originalnamn] = visningsnamn) och gäller alla rader med samma
+// inlästa namn. Sortering, markering och den samlade listan använder visningsnamnet.
+function ekonomiLevNamn(pid, line){
+  const orig = String((line && line.leverantor) || '').trim();
+  const alias = (companyEkonomiData.budgetDetalj[pid] || {}).levAlias || {};
+  return alias[orig] || orig;
+}
+function ekonomiLevNamnList(pid){
+  const set = new Set();
+  (companyEkonomiData.reskontra[pid] || []).forEach(l => { const n = ekonomiLevNamn(pid, l); if(n) set.add(n); });
+  return [...set].sort((a, b) => a.localeCompare(b, 'sv'));
+}
+function ekonomiLevDatalistHtml(pid){
+  return '<datalist id="ekoLevDatalist">' + ekonomiLevNamnList(pid).map(n => '<option value="' + escapeHtml(n).replace(/"/g, '&quot;') + '">').join('') + '</datalist>';
+}
+function showEkonomiLevRenamePopup(pid, orig){
+  const lines = (companyEkonomiData.reskontra[pid] || []).filter(l => String(l.leverantor || '').trim() === orig);
+  const current = ekonomiLevNamn(pid, lines[0] || { leverantor: orig });
+  const p = ekoPopup({ title: 'Byt namn på leverantör', sub: 'Inläst namn: "' + orig + '" (' + lines.length + ' rader). Välj ett befintligt namn i listan eller skriv ett eget – alla rader med samma inlästa namn får det nya namnet.', maxWidth: 520 });
+  p.body.innerHTML = ekonomiLevDatalistHtml(pid);
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.setAttribute('list', 'ekoLevDatalist'); inp.value = current; inp.placeholder = 'T.ex. Kameo';
+  inp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:14px;';
+  p.body.appendChild(inp);
+  const save = async () => {
+    const nytt = inp.value.trim();
+    const d = ekonomiBudgetDetail(pid);
+    d.levAlias = d.levAlias || {};
+    if(!nytt || nytt === orig) delete d.levAlias[orig]; else d.levAlias[orig] = nytt;
+    try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+    p.close();
+    renderEkonomiReskontraTable();
+  };
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Spara'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = save;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+  inp.addEventListener('keydown', e => { if(e.key === 'Enter') save(); });
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+}
+const ekonomiLevOpen = new Set();
+function renderEkonomiLevSummary(pid){
+  const wrap = document.getElementById('ekoLevSummary');
+  if(!wrap) return;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const open = !!uiPrefs.levSummaryOpen;
+  wrap.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex; align-items:center; gap:10px; margin:14px 0 6px;';
+  const tgl = document.createElement('button');
+  tgl.type = 'button'; tgl.textContent = (open ? '▾ ' : '▸ ') + 'Per leverantör';
+  tgl.style.cssText = 'background:none; border:1px solid var(--line-soft); color:var(--ink); border-radius:6px; padding:5px 10px; cursor:pointer; font-weight:600;';
+  tgl.onclick = async () => { uiPrefs.levSummaryOpen = !open; await saveUiPrefs(); renderEkonomiLevSummary(pid); };
+  head.appendChild(tgl);
+  const sub = document.createElement('span'); sub.className = 'eko-sub'; sub.style.margin = '0';
+  sub.textContent = 'Summerat belopp per leverantör. Klicka på en leverantör för att se fakturorna, ✎ för att byta namn.';
+  head.appendChild(sub);
+  wrap.appendChild(head);
+  if(!open || !lines.length) return;
+  const groups = {};
+  lines.forEach(l => {
+    const n = ekonomiLevNamn(pid, l) || '—';
+    const g = groups[n] || (groups[n] = { namn: n, lines: [], belopp: 0, orig: new Set() });
+    g.lines.push(l); g.belopp += ekonomiLedgerAmount(l); if(l.leverantor) g.orig.add(String(l.leverantor).trim());
+  });
+  const list = Object.values(groups).sort((a, b) => b.belopp - a.belopp);
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; margin-bottom:6px;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Leverantör</th><th>Antal fakturor</th><th>Belopp</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  list.forEach(g => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    const isOpen = ekonomiLevOpen.has(g.namn);
+    tr.innerHTML = '<td style="text-align:left;">' + (isOpen ? '▾ ' : '▸ ') + escapeHtml(g.namn) + (g.orig.size > 1 || (g.orig.size === 1 && [...g.orig][0] !== g.namn) ? '<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">inläst som ' + escapeHtml([...g.orig].join(', ')) + '</div>' : '') + '</td><td>' + g.lines.length + '</td><td style="font-weight:600;">' + formatKrFull(g.belopp) + '</td><td></td>';
+    tr.onclick = (e) => { if(e.target.closest('button')) return; if(isOpen) ekonomiLevOpen.delete(g.namn); else ekonomiLevOpen.add(g.namn); renderEkonomiLevSummary(pid); };
+    const ren = document.createElement('button');
+    ren.type = 'button'; ren.textContent = '✎'; ren.title = 'Byt namn';
+    ren.style.cssText = 'background:none; border:1px solid var(--line-soft); border-radius:4px; cursor:pointer; color:var(--ink-soft); padding:1px 6px;';
+    ren.onclick = () => showEkonomiLevRenamePopup(pid, [...g.orig][0] || g.namn);
+    tr.children[3].appendChild(ren);
+    tbody.appendChild(tr);
+    if(isOpen){
+      g.lines.slice().sort((a, b) => String(a.fakturadatum || '').localeCompare(String(b.fakturadatum || ''))).forEach(l => {
+        const sr = document.createElement('tr');
+        sr.style.background = 'var(--paper-soft, #f6f4ef)';
+        const kat = ekonomiLineIsSplit(l) ? 'Fördelad: ' + l.fordelning.map(p => p.kategori).join(', ') : (l.kategori || 'Ej kategoriserad');
+        sr.innerHTML = '<td style="text-align:left; padding-left:28px; font-family:Inter,sans-serif; font-weight:400; font-size:12.5px;">' + (l.manuell ? 'Manuell ' + escapeHtml(l.vernr || '') : 'Löpnr ' + escapeHtml(String(l.lopnr || ''))) + ' · ' + escapeHtml(l.fakturadatum || '—') + ' · <span style="color:var(--ink-soft);">' + escapeHtml(kat) + '</span>' + (ekonomiLineObetald(l) ? ' · <span style="color:var(--danger);">obetald</span>' : '') + '</td><td></td><td style="font-size:12.5px;">' + formatKrFull(ekonomiLedgerAmount(l)) + '</td><td></td>';
+        tbody.appendChild(sr);
+      });
+    }
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td style="text-align:left;">Totalt (' + list.length + ' leverantörer)</td><td>' + lines.length + '</td><td>' + formatKrFull(list.reduce((s, g) => s + g.belopp, 0)) + '</td><td></td>';
+  tbody.appendChild(tot);
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
 function renderEkonomiReskontraTable(){
   const pid = currentEkonomiBudgetProjectId;
   const lines = companyEkonomiData.reskontra[pid] || [];
@@ -2501,6 +2603,7 @@ function renderEkonomiReskontraTable(){
       const label = l => ekonomiLineIsSplit(l) ? 'Fördelad: ' + l.fordelning.map(p => p.kategori).join(', ') : (l.kategori || '');
       if(aUn !== bUn) r = aUn ? -1 : 1; else r = cmpText(label(a), label(b));
     }
+    else if(s.key === 'leverantor') r = cmpText(ekonomiLevNamn(pid, a), ekonomiLevNamn(pid, b));
     else r = cmpText(a[s.key], b[s.key]);
     if(r === 0) r = cmpText(a.lopnr, b.lopnr);
     return s.dir === 'desc' ? -r : r;
@@ -2546,18 +2649,26 @@ function renderEkonomiReskontraTable(){
 
     // Leverantör: klick markerar alla rader från samma leverantör.
     const lev = document.createElement('span');
-    lev.textContent = line.leverantor || '—';
+    const levNamn = ekonomiLevNamn(pid, line);
+    lev.textContent = levNamn || '—';
     lev.className = 'editable';
     lev.style.cursor = 'pointer';
-    lev.title = 'Markera alla rader från ' + (line.leverantor || 'leverantören');
+    lev.title = 'Markera alla rader från ' + (levNamn || 'leverantören') + (levNamn !== String(line.leverantor || '').trim() ? ' (inläst som ' + (line.leverantor || '') + ')' : '');
     lev.onclick = () => {
-      const name = (line.leverantor || '').trim().toLowerCase();
-      const same = lines.filter(l => (l.leverantor || '').trim().toLowerCase() === name);
+      const name = levNamn.toLowerCase();
+      const same = lines.filter(l => ekonomiLevNamn(pid, l).toLowerCase() === name);
       const allSelected = same.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
       same.forEach(l => { if(allSelected) ekonomiReskontraSelection.delete(String(l.lopnr)); else ekonomiReskontraSelection.add(String(l.lopnr)); });
       renderEkonomiReskontraTable();
     };
     row.children[2].appendChild(lev);
+    if(line.leverantor){
+      const ren = document.createElement('button');
+      ren.type = 'button'; ren.textContent = '✎'; ren.title = 'Byt namn på leverantören (gäller alla rader med samma inlästa namn)';
+      ren.style.cssText = 'background:none; border:none; cursor:pointer; color:var(--ink-soft); font-size:12px; margin-left:4px; padding:0 3px;';
+      ren.onclick = (e) => { e.stopPropagation(); showEkonomiLevRenamePopup(pid, String(line.leverantor).trim()); };
+      row.children[2].appendChild(ren);
+    }
 
     // En beloppskolumn i kr: visas som "411 500 kr"; klick ger ett fält att justera i.
     // Är beloppet justerat visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
@@ -2646,6 +2757,8 @@ function renderEkonomiReskontraTable(){
   const uncat = lines.filter(l => !ekonomiLineHandled(l));
   selAll.checked = uncat.length > 0 && uncat.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
   ekonomiReskontraUpdateBulkBar();
+  renderEkonomiLevSummary(pid);
+  const dl = document.getElementById('ekoLevDatalistWrap'); if(dl) dl.innerHTML = ekonomiLevDatalistHtml(pid);
 }
 // Betalstatus: obetald om saldo > 0 enligt senaste reskontrainläsning, eller
 // om den markerats obetald manuellt (obetaldManuell). Manuell markering vinner.

@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261007145615">
+<meta name="app-build" content="20261007145920">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1479,7 +1479,7 @@
           <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px;">Belopp (kr, inkl. moms)
             <input type="number" step="any" id="ekoManuellBelopp" placeholder="0" style="width:150px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px; text-align:right;"></label>
           <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px; flex:1; min-width:200px;">Leverantör
-            <input type="text" id="ekoManuellLeverantor" placeholder="T.ex. Huddinge kommun" style="border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px;"></label>
+            <input type="text" id="ekoManuellLeverantor" placeholder="T.ex. Huddinge kommun" list="ekoLevDatalist" style="border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px;"></label>
           <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px; min-width:200px;">Kategori (valfritt)
             <select id="ekoManuellKategori" class="eko-inline-select"></select></label>
           <button type="button" id="ekoManuellSpara" class="upload-btn">Lägg till</button>
@@ -1492,6 +1492,7 @@
         Visa ej hanterade <span class="eko-sub" style="margin:0;">(döljer kategoriserade rader)</span>
         <span id="ekonomiReskontraUnhandledCount" class="eko-sub" style="margin:0 0 0 6px;"></span>
       </label>
+      <div id="ekoLevSummary"></div><span id="ekoLevDatalistWrap"></span>
       <div id="ekonomiReskontraBulkBar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; padding:8px 12px; background:var(--blue-soft); border:1px dashed var(--blue); border-radius:8px;">
         <span id="ekonomiReskontraBulkCount" style="font-size:13px; min-width:120px;">0 markerade</span>
         <select id="ekonomiReskontraBulkSelect" class="eko-inline-select" style="min-width:220px;"></select>
@@ -2537,7 +2538,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261007145615"></script>
-<script src="app.js?v=20261007145615"></script>
+<script src="db.js?v=20261007145920"></script>
+<script src="app.js?v=20261007145920"></script>
 </body>
 </html>
