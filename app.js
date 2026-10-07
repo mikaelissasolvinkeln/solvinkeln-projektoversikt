@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007131137';
+const APP_BUILD = '20261007131414';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4049,8 +4049,8 @@ function renderEkonomiPrognos(){
   const visaUtfall = document.getElementById('ekoPrognosVisaUtfall').checked;
   const tkr = (prog.enhet || 'tkr') === 'tkr';
   document.getElementById('ekoPrognosEnhet').value = tkr ? 'tkr' : 'kr';
-  const fmtV = v => tkr ? Math.round(v / 1000).toLocaleString('sv-SE') : formatKrFull(v);
-  const cell = v => v ? fmtV(v) : '';
+  const fmtV = v => { if(tkr){ const r = Math.round(v / 1000); return r === 0 ? '0' : r.toLocaleString('sv-SE'); } return formatKrFull(v); };
+  const cell = v => (v && Math.round(tkr ? v / 1000 : v) !== 0) ? fmtV(v) : ''; // inga "−0"
   const cellOpts = { fmt: fmtV, scale: tkr ? 1000 : 1 };
   const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
   const pdfRows = [];
@@ -4395,7 +4395,7 @@ async function ekonomiPrognosPdf(){
   const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const fmt = v => (v === '' || v == null) ? '' : (!v ? '' : (M.tkr ? Math.round(v / 1000) : Math.round(v)).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-'));
+  const fmt = v => (v === '' || v == null) ? '' : (!v || Math.round(M.tkr ? v / 1000 : v) === 0 ? '' : (M.tkr ? Math.round(v / 1000) : Math.round(v)).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-'));
   const chunks = [];
   for(let i = 0; i < M.months.length; i += 12) chunks.push(M.months.slice(i, i + 12));
   chunks.forEach((chunk, ci) => {
