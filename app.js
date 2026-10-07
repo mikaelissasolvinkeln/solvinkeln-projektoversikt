@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007114447';
+const APP_BUILD = '20261007114643';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4491,22 +4491,29 @@ function renderEkonomiOversikt(){
 }
 
 function renderEkonomiProjekt(){
+  // Samma format som Projektöversikten: statusfilter (sparas per användare) och listrader.
+  const statuses = buildStatusFilterBar(document.getElementById('ekoProjektFilters'), 'ekoProjektStatus', renderEkonomiProjekt);
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
   const tbody = document.getElementById('ekonomiProjektBody');
   tbody.innerHTML = '';
-  projects.forEach(p => {
+  const rows = projects.filter(p => statuses.includes(p.status || 'Pågående')).sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>'; return; }
+  rows.forEach(p => {
     const meta = companyEkonomiData.meta[p.id] || {};
     const status = p.status || 'Pågående';
     const sold = ekonomiSoldCounts[p.id] || { sold: 0, total: 0 };
     const row = document.createElement('tr');
+    row.className = 'home-list-row';
     row.onclick = () => openEkonomiProjektModal(p);
+    const pct = sold.total ? Math.round(sold.sold / sold.total * 100) : 0;
     row.innerHTML =
-      '<td>' + escapeHtml(p.name) + '</td>' +
-      '<td>' + escapeHtml(p.ort || '—') + '</td>' +
-      '<td>' + escapeHtml(meta.jvPartner || '—') + '</td>' +
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left; font-family:Inter,sans-serif; font-weight:400;">' + escapeHtml(p.ort || '—') + '</td>' +
+      '<td style="text-align:left; font-family:Inter,sans-serif; font-weight:400;">' + escapeHtml(meta.jvPartner || '—') + '</td>' +
       '<td>' + (meta.agarandel ? meta.agarandel + '%' : '—') + '</td>' +
-      '<td style="text-align:left;">' + status + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(status) + '</td>' +
       '<td>' + formatMSEK(meta.forvantadVinst || 0) + '</td>' +
-      '<td>' + sold.sold + ' / ' + sold.total + '</td>';
+      '<td><span class="home-salda"><span class="home-bar"><i style="width:' + pct + '%"></i></span>' + (sold.total ? sold.sold + ' av ' + sold.total : '—') + '</span></td>';
     tbody.appendChild(row);
   });
 }
