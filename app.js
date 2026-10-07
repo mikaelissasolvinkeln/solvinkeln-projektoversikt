@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007114643';
+const APP_BUILD = '20261007115840';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1484,7 +1484,14 @@ function homeStatusPillHtml(status){
   const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : '';
   return '<span class="home-status-pill ' + cls + '">' + escapeHtml(g ? g.heading : status) + '</span>';
 }
-// Likviditet: projektlista med statusfilter (Namn, Status) - klick öppnar likviditetsprognosen.
+function ekonomiSortedProjects(){
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  return projects.slice().sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+}
+function ekonomiFilteredProjects(statuses){
+  return ekonomiSortedProjects().filter(p => statuses.includes(p.status || 'Pågående'));
+}
+$1 (Namn, Status) - klick öppnar likviditetsprognosen.
 function renderEkonomiLikviditetList(){
   const statuses = buildStatusFilterBar(document.getElementById('ekoLikvFilters'), 'likvStatus', renderEkonomiLikviditetList);
   const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
@@ -1778,10 +1785,11 @@ async function saveEkonomiBudgetDetalj(){
 }
 
 function renderEkonomiBudgetList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoBudgetFilters'), 'budgetStatus', renderEkonomiBudgetList);
   const tbody = document.getElementById('ekonomiBudgetBody');
   tbody.innerHTML = '';
   let totalBudget = 0, totalUtfall = 0, totalVinst = 0;
-  projects.forEach(p => {
+  ekonomiFilteredProjects(statuses).forEach(p => {
     const { budget, utfall } = ekonomiProjectBudgetTotals(p.id);
     totalBudget += budget;
     totalUtfall += utfall;
@@ -1792,8 +1800,9 @@ function renderEkonomiBudgetList(){
     if(bVinst != null) totalVinst += bVinst;
     const row = document.createElement('tr');
     row.onclick = () => openEkonomiProjektBudget(p);
+    row.className = 'home-list-row';
     row.innerHTML =
-      '<td>' + escapeHtml(p.name) + '</td>' +
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
       '<td>' + formatMSEK(budget) + '</td>' +
       '<td>' + formatMSEK(utfall) + '</td>' +
       '<td class="' + (bVinst != null && bVinst < 0 ? 'eko-diff-negative' : '') + '">' + (bVinst != null ? formatMSEK(bVinst) : '—') + '</td>' +
@@ -1957,11 +1966,12 @@ function ekonomiMarkKostnader(pid){
   return { summa, items };
 }
 function renderEkonomiMarkList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoMarkFilters'), 'markStatus', renderEkonomiMarkList);
   const tbody = document.getElementById('ekonomiMarkBody');
   tbody.innerHTML = '';
   let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0, totalMarkkostnader = 0;
   let forvarvPagaende = 0, forvarvAvslutade = 0;
-  projects.forEach(p => {
+  ekonomiSortedProjects().forEach(p => {
     const fastigheter = companyEkonomiData.mark[p.id] || [];
     // Förvärv = fastighetsköp + ev. aktieköp (marken köps ibland uppdelat i båda)
     const sum = fastigheter.reduce((acc, f) => {
@@ -1975,17 +1985,19 @@ function renderEkonomiMarkList(){
     totalVattenanslutning += sum.vattenanslutning;
     const status = p.status || 'Pågående';
     if(status === 'Avslutat') forvarvAvslutade += sum.forvarvspris; else forvarvPagaende += sum.forvarvspris;
+    const mk = (companyEkonomiData.reskontra[p.id] || []).length || fastigheter.length ? ekonomiMarkKostnader(p.id).summa : 0;
+    totalMarkkostnader += mk;
+    if(!statuses.includes(status)) return; // nyckeltalen ovan räknar alla projekt, listan filtreras
     const row = document.createElement('tr');
+    row.className = 'home-list-row';
     row.onclick = () => openEkonomiProjektMark(p);
     row.innerHTML =
-      '<td>' + escapeHtml(p.name) + '</td>' +
-      '<td style="text-align:left; color:' + (status === 'Avslutat' ? 'var(--ink-soft)' : 'var(--ink)') + ';">' + escapeHtml(status) + '</td>' +
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(status) + '</td>' +
       '<td>' + fastigheter.length + '</td>' +
       '<td>' + (sum.forvarvspris ? formatKrFull(sum.forvarvspris) : '—') + '</td>' +
       '<td>' + (sum.vattenanslutning ? formatKrFull(sum.vattenanslutning) : '—') + '</td>' +
       '<td>' + (sum.gatukostnad ? formatKrFull(sum.gatukostnad) : '—') + '</td>';
-    const mk = (companyEkonomiData.reskontra[p.id] || []).length || fastigheter.length ? ekonomiMarkKostnader(p.id).summa : 0;
-    totalMarkkostnader += mk;
     row.innerHTML += '<td style="font-weight:600;">' + (mk ? formatKrFull(mk) : '—') + '</td>';
     tbody.appendChild(row);
   });
@@ -4519,19 +4531,20 @@ function renderEkonomiProjekt(){
 }
 
 function renderEkonomiVinstSolvinkeln(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoVinstFilters'), 'vinstStatus', renderEkonomiVinstSolvinkeln);
   const tbody = document.getElementById('ekonomiVinstSolvinkelnBody');
   tbody.innerHTML = '';
   let total = 0;
-  projects.forEach(p => {
+  ekonomiFilteredProjects(statuses).forEach(p => {
     const v = ekonomiVinstSolvinkeln(companyEkonomiData.meta[p.id]);
     total += v;
     const row = document.createElement('tr');
-    row.innerHTML = '<td>' + escapeHtml(p.name) + '</td><td>' + formatMSEK(v) + '</td>';
+    row.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td><td>' + formatMSEK(v) + '</td>';
     tbody.appendChild(row);
   });
   const totalRow = document.createElement('tr');
   totalRow.className = 'eko-row-resultat';
-  totalRow.innerHTML = '<td>Totalt</td><td>' + formatMSEK(total) + '</td>';
+  totalRow.innerHTML = '<td>Totalt</td><td></td><td>' + formatMSEK(total) + '</td>';
   tbody.appendChild(totalRow);
 }
 
@@ -7326,7 +7339,8 @@ function renderEkonomiNumberTab(tabKey){
   const doljNoll = tabKey === 'lan' && !!uiPrefs.lanDoljNoll;
   const lanBox = document.getElementById('ekoLanDoljNoll');
   if(lanBox) lanBox.checked = !!uiPrefs.lanDoljNoll;
-  projects.forEach(p => {
+  const lanList = tabKey === 'lan' ? ekonomiFilteredProjects(buildStatusFilterBar(document.getElementById('ekoLanFilters'), 'lanStatus', () => renderEkonomiNumberTab('lan'))) : projects;
+  lanList.forEach(p => {
     const rec = (companyEkonomiData[cfg.key] && companyEkonomiData[cfg.key][p.id]) || {};
     // Lån: dölj projekt där alla belopp (inkl. fastighetsvärde) är 0 kr om valet är ikryssat.
     if(doljNoll && cfg.fields.every(f => !(f.computed ? ekonomiMarkKostnader(p.id).summa : (f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0))))) return;
@@ -7336,7 +7350,8 @@ function renderEkonomiNumberTab(tabKey){
       else if(tabKey === 'likviditet') openEkonomiProjektLikviditet(p);
       else openEkonomiNumberModal(tabKey, p);
     };
-    let html = '<td style="white-space:nowrap;">' + escapeHtml(p.name) + '</td>';
+    if(tabKey === 'lan') row.className = 'home-list-row';
+    let html = '<td class="home-list-name">' + escapeHtml(p.name) + '</td>';
     cfg.fields.forEach(f => {
       // Fastighetsvärde räknas från Mark; lån med detaljuppgifter visar aktuellt saldo.
       const v = f.computed ? ekonomiMarkKostnader(p.id).summa : (tabKey === 'lan' && f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0));

@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261007114643">
+<meta name="app-build" content="20261007115840">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1099,11 +1099,12 @@
     </div>
 
     <div id="ekonomiBudgetView" style="display:none;">
+      <div id="ekoBudgetFilters" class="home-list-filters" style="margin-top:0;"></div>
       <div class="table-scroll">
-        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+        <table class="eko-compare-table ekonomi-clickable-table home-list-table">
           <thead>
             <tr>
-              <th style="text-align:left;">Brf</th>
+              <th style="text-align:left;">Namn</th>
               <th>Budget</th>
               <th>Tagna kostnader</th>
               <th>Budgeterad vinst</th>
@@ -1142,11 +1143,12 @@
           <div class="home-card-sub">Tagna markkostnader (Budget: förvärv, anslutningar, fastighetsavgift, förrättningar)</div>
         </div>
       </div>
+      <div id="ekoMarkFilters" class="home-list-filters" style="margin-top:0;"></div>
       <div class="table-scroll">
-        <table class="eko-compare-table ekonomi-clickable-table" style="width:100%;">
+        <table class="eko-compare-table ekonomi-clickable-table home-list-table">
           <thead>
             <tr>
-              <th style="text-align:left;">Brf</th>
+              <th style="text-align:left;">Namn</th>
               <th style="text-align:left;">Status</th>
               <th>Antal fastigheter</th>
               <th>Förvärv (fastighet + aktier)</th>
@@ -1172,12 +1174,13 @@
     </div>
 
     <div id="ekonomiLanView" style="display:none;">
+      <div id="ekoLanFilters" class="home-list-filters" style="margin-top:0;"></div>
       <label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft); margin-bottom:8px;"><input type="checkbox" id="ekoLanDoljNoll"> Dölj projekt där alla belopp är 0 kr</label>
       <div class="table-scroll">
-        <table class="eko-compare-table ekonomi-clickable-table" style="width:auto; min-width:100%; table-layout:auto; white-space:nowrap;">
+        <table class="eko-compare-table ekonomi-clickable-table home-list-table">
           <thead>
             <tr>
-              <th style="text-align:left;">Brf</th>
+              <th style="text-align:left;">Namn</th>
               <th>Fastighetsvärde</th>
               <th>Lån Kameo</th>
               <th>Lån Sparbanken</th>
@@ -1195,9 +1198,10 @@
 
     <div id="ekonomiVinstSolvinkelnView" style="display:none;">
       <p class="eko-sub" style="margin:0 0 10px;">Förväntad entreprenadsvinst + ägarandel × förväntad vinst, per projekt. Redigeras under fliken Projekt.</p>
+      <div id="ekoVinstFilters" class="home-list-filters" style="margin-top:0;"></div>
       <div class="table-scroll">
-        <table class="eko-compare-table" style="width:100%;">
-          <thead><tr><th style="text-align:left;">Brf</th><th>Förväntad vinst Solvinkeln</th></tr></thead>
+        <table class="eko-compare-table home-list-table">
+          <thead><tr><th style="text-align:left;">Namn</th><th style="text-align:left;">Status</th><th>Förväntad vinst Solvinkeln</th></tr></thead>
           <tbody id="ekonomiVinstSolvinkelnBody"></tbody>
         </table>
       </div>
@@ -2530,7 +2534,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261007114643"></script>
-<script src="app.js?v=20261007114643"></script>
+<script src="db.js?v=20261007115840"></script>
+<script src="app.js?v=20261007115840"></script>
 </body>
 </html>
