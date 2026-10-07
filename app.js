@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007132117';
+const APP_BUILD = '20261007140631';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3556,34 +3556,57 @@ function ekonomiPrognosInbetalningar(pid, start, months){
     });
     if(row.ib || Object.keys(row.per).length) lan.push(row);
   });
-  // Föreningslån: preliminära belopp per månad (prog.foreningslan) tills de markeras
-  // som genomförda (prog.foreningslanKlart, med datum och faktiskt belopp).
-  const flRow = { key: 'foreningslan', namn: 'Föreningslån', ib: 0, per: {}, items: {}, planerade: {}, budget: ekonomiForeningslanBudget(pid) };
-  (prog.foreningslanKlart || []).forEach(k => {
-    const m = String(k.datum || '').slice(0, 7);
-    if(m < start) flRow.ib += k.belopp || 0;
-    else if(monthSet.has(m)){
-      flRow.per[m] = (flRow.per[m] || 0) + (k.belopp || 0);
-      (flRow.items[m] = flRow.items[m] || []).push({ id: k.id, datum: k.datum, typ: (k.belopp || 0) < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(k.belopp || 0), text: k.text || 'Genomförd', kalla: 'likviditetsprognosen' });
-    }
-  });
-  Object.keys(prog.foreningslan || {}).forEach(m => {
-    const v = prog.foreningslan[m];
-    if(!v || !monthSet.has(m)) return;
-    flRow.per[m] = (flRow.per[m] || 0) + v;
-    (flRow.planerade[m] = flRow.planerade[m] || []).push({ id: 'fl-' + m, lanKey: 'foreningslan', belopp: v, manad: m, text: 'Föreningslån (preliminärt)' });
-  });
-  return { insatser, lan, foreningslan: flRow };
+  // Egna inbetalningsrader (föreningslån och övriga): preliminära belopp per månad
+  // tills de markeras som genomförda (med datum och faktiskt belopp).
+  const customRow = (key, namn, prel, klart) => {
+    const row = { key, namn, ib: 0, per: {}, items: {}, planerade: {} };
+    (klart || []).forEach(k => {
+      const m = String(k.datum || '').slice(0, 7);
+      if(m < start) row.ib += k.belopp || 0;
+      else if(monthSet.has(m)){
+        row.per[m] = (row.per[m] || 0) + (k.belopp || 0);
+        (row.items[m] = row.items[m] || []).push({ id: k.id, datum: k.datum, typ: (k.belopp || 0) < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(k.belopp || 0), text: k.text || 'Genomförd', kalla: 'likviditetsprognosen' });
+      }
+    });
+    Object.keys(prel || {}).forEach(m => {
+      const v = prel[m];
+      if(!v || !monthSet.has(m)) return;
+      row.per[m] = (row.per[m] || 0) + v;
+      (row.planerade[m] = row.planerade[m] || []).push({ id: key + '-' + m, lanKey: key, belopp: v, manad: m, text: namn + ' (preliminärt)' });
+    });
+    return row;
+  };
+  const flRow = customRow('foreningslan', 'Föreningslån', prog.foreningslan, prog.foreningslanKlart);
+  flRow.budget = ekonomiForeningslanBudget(pid);
+  const ovriga = (prog.ovriga || []).map(o => customRow('ovrig:' + o.id, o.namn || 'Övrigt', o.prel, o.klart));
+  return { insatser, lan, foreningslan: flRow, ovriga };
+
 }
 // Preliminär bokning i en lånerad (eller föreningslånet): sätter/ersätter månadens belopp.
+// Var preliminära/genomförda belopp för en egen rad ligger: föreningslånet eller en övrig inbetalning.
+function ekonomiPrognosCustomStore(prog, key){
+  if(key === 'foreningslan'){
+    return { namn: 'Föreningslån', prel: prog.foreningslan || (prog.foreningslan = {}), klart: prog.foreningslanKlart || (prog.foreningslanKlart = []) };
+  }
+  if(/^ovrig:/.test(key || '')){
+    const o = (prog.ovriga || []).find(x => 'ovrig:' + x.id === key);
+    if(!o) return null;
+    if(!o.prel) o.prel = {};
+    if(!Array.isArray(o.klart)) o.klart = [];
+    return { namn: o.namn || 'Övrigt', prel: o.prel, klart: o.klart, entry: o };
+  }
+  return null;
+}
 async function ekonomiPrognosSetPlanerad(pid, key, m, val, add, ranta){
   const prog = ekonomiPrognosRec(pid);
-  if(ranta != null && ranta !== '' && key !== 'foreningslan') (prog.senasteRanta = prog.senasteRanta || {})[key] = parseFloat(ranta) || 0;
-  if(key === 'foreningslan'){
-    const fl = prog.foreningslan || (prog.foreningslan = {});
+  const store = ekonomiPrognosCustomStore(prog, key);
+  if(ranta != null && ranta !== '' && !store) (prog.senasteRanta = prog.senasteRanta || {})[key] = parseFloat(ranta) || 0;
+  if(store){
+    const fl = store.prel;
     const nv = add ? (fl[m] || 0) + (val || 0) : val;
     if(nv == null || nv === 0) delete fl[m]; else fl[m] = nv;
   } else {
+
     if(!add) prog.planeradeLan = (prog.planeradeLan || []).filter(p => !(p.lanKey === key && p.manad === m));
     if(val != null && val !== 0) (prog.planeradeLan = prog.planeradeLan || []).push({ id: uid(), lanKey: key, belopp: val, manad: m, ranta: ranta != null && ranta !== '' ? parseFloat(ranta) || 0 : null, text: val < 0 ? 'Återbetalning (preliminär)' : 'Utökning (preliminär)', skapad: new Date().toISOString() });
   }
@@ -3863,7 +3886,7 @@ function showEkonomiInsatserPopup(pid, title, items){
 // Lånets rörelser en viss månad: bokningar från Lån-fliken och preliminärt bokad
 // finansiering som kan bekräftas (datum) – då bokas den som utökning i Lån-fliken.
 function showEkonomiLanManadPopup(pid, l, m){
-  const isFl = l.key === 'foreningslan';
+  const isFl = !!ekonomiPrognosCustomStore(ekonomiPrognosRec(pid), l.key); // egen rad (föreningslån/övrigt), inte ett lån
   const p = ekoPopup({ title: l.namn + ' · ' + ekonomiPrognosShortLabel(m), sub: isFl ? 'Röda belopp är preliminära. Markera som genomfört med datum och faktiskt belopp – då blir det svart.' : 'Röda belopp är preliminära. Markera som genomfört med datum och faktiskt belopp – då bokas det i Lån-fliken och blir svart (plus = utökning, minus = återbetalning).' });
   const items = l.items[m] || [];
   const plan = l.planerade[m] || [];
@@ -3895,10 +3918,11 @@ function showEkonomiLanManadPopup(pid, l, m){
       if(!b){ showToast('Ange belopp (minus = återbetalning).'); return; }
       try{
         if(isFl){
-          (prog.foreningslanKlart = prog.foreningslanKlart || []).push({ id: uid(), datum: date.value, belopp: b, text: 'Föreningslån' });
-          if(prog.foreningslan) delete prog.foreningslan[m];
+          const st = ekonomiPrognosCustomStore(prog, l.key);
+          st.klart.push({ id: uid(), datum: date.value, belopp: b, text: st.namn });
+          delete st.prel[m];
           await saveEkonomiPrognos();
-          showToast(formatKrFull(Math.abs(b)) + ' föreningslån markerat som genomfört ' + date.value);
+          showToast(formatKrFull(Math.abs(b)) + ' ' + st.namn + ' markerat som genomfört ' + date.value);
         } else {
           const d = ekonomiLanDetalj(pid, l.key, true);
           d.tx.push({ id: uid(), datum: date.value, typ: b < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(b), ranta: rInp.value !== '' ? parseFloat(rInp.value.replace(',', '.')) || 0 : null, text: pl.text || 'Enligt likviditetsprognosen', kalla: 'likviditetsprognosen' });
@@ -3913,7 +3937,7 @@ function showEkonomiLanManadPopup(pid, l, m){
     }));
     right.appendChild(ekoSmallBtn('Ta bort', async () => {
       if(!confirm('Ta bort den preliminära bokningen ' + formatKrFull(Math.abs(pl.belopp || 0)) + '?')) return;
-      if(isFl){ if(prog.foreningslan) delete prog.foreningslan[m]; } else prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
+      if(isFl){ const st = ekonomiPrognosCustomStore(prog, l.key); if(st) delete st.prel[m]; } else prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
       await saveEkonomiPrognos();
       p.close(); renderEkonomiPrognos();
     }, true));
@@ -4124,7 +4148,7 @@ function renderEkonomiPrognos(){
   const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
   const visadeLan = prog.visadeLan || [];
   const lanRows = lanFields.map(f => inb.lan.find(l => l.key === f.key) || (visadeLan.includes(f.key) ? { key: f.key, namn: f.label.replace(' (kr)', ''), ib: 0, per: {}, items: {}, planerade: {} } : null)).filter(Boolean);
-  lanRows.concat([inb.foreningslan]).forEach(l => {
+  lanRows.concat([inb.foreningslan], inb.ovriga).forEach(l => {
     inbTot.ib += l.ib;
     months.forEach(m => { inbTot.per[m] += l.per[m] || 0; });
     inbRows.push({ namn: l.namn, ib: l.ib, per: l.per });
@@ -4155,6 +4179,27 @@ function renderEkonomiPrognos(){
     lbl.textContent = l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : '');
     if(l.key === 'foreningslan') lbl.title = 'Skriv in beloppet den månad lånet väntas betalas ut (rött tills det markerats som genomfört).' + (l.budget ? ' Enligt kalkylen ' + formatKrFull(l.budget) + '.' : '');
     if(l.key === 'foreningslan'){ lbl.className = 'editable'; lbl.style.cursor = 'pointer'; lbl.onclick = () => showEkonomiForeningslanPopup(pid, l, months); }
+    if(/^ovrig:/.test(l.key)){
+      // Egen inbetalningsrad: klicka på namnet för att byta, ✕ tar bort raden.
+      lbl.className = 'editable'; lbl.style.cursor = 'pointer'; lbl.title = 'Klicka för att byta namn';
+      lbl.onclick = async () => {
+        const st = ekonomiPrognosCustomStore(prog, l.key);
+        const nytt = prompt('Namn på inbetalningen:', st ? st.namn : '');
+        if(nytt === null || !st) return;
+        st.entry.namn = nytt.trim() || 'Övrigt';
+        await saveEkonomiPrognos(); renderEkonomiPrognos();
+      };
+      const del = document.createElement('button');
+      del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort raden';
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; margin-left:6px; font-size:11px;';
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if(!confirm('Ta bort inbetalningsraden "' + l.namn + '" med alla belopp?')) return;
+        prog.ovriga = (prog.ovriga || []).filter(x => 'ovrig:' + x.id !== l.key);
+        await saveEkonomiPrognos(); renderEkonomiPrognos();
+      };
+      lbl.appendChild(del);
+    }
     addRow('', lbl, 6, [cell(l.budget || 0), cell(l.ib)].concat(cells, [cell(l.ib + sumPer(l.per))]), { bg: 'var(--blue-soft)', pdfLabel: l.namn }, [l.budget || 0, l.ib].concat(months.map(m => l.per[m] || 0), [l.ib + sumPer(l.per)]));
   });
   // "+ Visa lån": lägg till en lånerad som ännu inte har några bokningar.
@@ -4173,6 +4218,21 @@ function renderEkonomiPrognos(){
     const tr = addRow('', sel, 6, blank(nVal), { pdfLabel: '' });
     pdfRows.pop();
     tr.style.background = 'var(--blue-soft)';
+  }
+  // "+ Övrig inbetalning": egen rad med fritt namn, belopp skrivs direkt i cellerna.
+  {
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button'; addBtn.textContent = '+ Övrig inbetalning';
+    addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
+    addBtn.onclick = async () => {
+      const namn = prompt('Namn på inbetalningen (t.ex. Övrigt, Bidrag, Försäljning av tomt):', 'Övrigt');
+      if(namn === null) return;
+      (prog.ovriga = prog.ovriga || []).push({ id: uid(), namn: namn.trim() || 'Övrigt', prel: {}, klart: [] });
+      await saveEkonomiPrognos(); renderEkonomiPrognos();
+    };
+    const tr2 = addRow('', addBtn, 6, blank(nVal), { pdfLabel: '' });
+    pdfRows.pop();
+    tr2.style.background = 'var(--blue-soft)';
   }
   addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(inbTot.ib + sumPer(inbTot.per))]), { bold: true }, ['', inbTot.ib].concat(months.map(m => inbTot.per[m]), [inbTot.ib + sumPer(inbTot.per)]));
 
@@ -4343,20 +4403,22 @@ function renderEkonomiPrognos(){
   const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m]; saldoNums.push(s2); });
   addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
 
-  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.concat([inb.foreningslan]).map(l => ({ namn: l.namn, ib: l.ib || 0, per: l.per })) };
+  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.map(l => ({ key: l.key, namn: l.namn, ib: l.ib || 0, per: l.per })) };
   renderEkonomiPrognosNyckeltal();
   wrap.innerHTML = '';
   wrap.appendChild(table);
 }
 // ---------- Likviditetsprognos som PDF (liggande A4, 12 månader per sida) ----------
 let ekonomiPrognosPdfModel = null;
-// Högsta belåning under prognosperioden: summan av alla lånesaldon (inkl. föreningslån)
+// Högsta belåning under prognosperioden: summan av saldona på Kameo, Sparbanken och Triol
 // månad för månad, det högsta värdet. LTC = högsta belåning / totalkostnad.
+const EKONOMI_LTC_LAN = ['lanKameo', 'lanSparbanken', 'lanTriol'];
 function ekonomiPrognosMaxBelaning(M){
-  const bal = (M.lan || []).map(l => l.ib || 0);
+  const lan = (M.lan || []).filter(l => EKONOMI_LTC_LAN.includes(l.key)); // bara externa byggkreditiv
+  const bal = lan.map(l => l.ib || 0);
   let max = bal.reduce((s, v) => s + v, 0);
   M.months.forEach(m => {
-    (M.lan || []).forEach((l, i) => { bal[i] += l.per[m] || 0; });
+    lan.forEach((l, i) => { bal[i] += l.per[m] || 0; });
     const t = bal.reduce((s, v) => s + v, 0);
     if(t > max) max = t;
   });
