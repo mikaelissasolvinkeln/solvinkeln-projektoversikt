@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007115840';
+const APP_BUILD = '20261007115938';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1491,7 +1491,7 @@ function ekonomiSortedProjects(){
 function ekonomiFilteredProjects(statuses){
   return ekonomiSortedProjects().filter(p => statuses.includes(p.status || 'Pågående'));
 }
-$1 (Namn, Status) - klick öppnar likviditetsprognosen.
+// Likviditet: projektlista med statusfilter (Namn, Status) - klick öppnar likviditetsprognosen.
 function renderEkonomiLikviditetList(){
   const statuses = buildStatusFilterBar(document.getElementById('ekoLikvFilters'), 'likvStatus', renderEkonomiLikviditetList);
   const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
