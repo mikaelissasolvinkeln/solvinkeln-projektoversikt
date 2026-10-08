@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008163527';
+const APP_BUILD = '20261008163701';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1873,23 +1873,44 @@ async function renderEkonomiKoncern(){
     let acc = totalIngaende;
     addRow('Likviditet totalt', ['', sumCell(totalIngaende)].concat(months.map(m => { acc += total[m]; return sumCell(acc); }), ['']), { bold: true });
   }
-  // Gemensamma projekt: projekt där minst två av de valda aktörerna har skjutit in pengar.
-  // Per projekt: vad respektive part har ute (fordran), och projektets egen likviditet enligt dess prognos.
-  const gemensamma = Object.values(perProjekt).filter(x => Object.keys(x.aktorer).length >= 2);
-  if(valda.length > 1 && gemensamma.length){
-    sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')');
-    for(const g of gemensamma){
-      addRow(g.p.name, ['', ''].concat(blanks, ['']), { bold: true });
-      let fordranTot = 0;
-      aktorerValda.forEach(a => {
-        const r = g.aktorer[a.key];
-        if(!r) return;
-        let f = r.ib; fordranTot += r.ib;
-        const fCells = months.map(m => { f -= r.flow[m]; return sumCell(f); });
-        addRow('Insatt ' + a.namn + ' (fordran)', [sumCell(r.ib), ''].concat(fCells, [sumCell(f)]), { indent: 18 });
+  // Gemensamma projekt (visas när flera aktörer är valda): alla projekt där någon av de valda
+  // aktörerna har pengar ute. Per projekt: status, IB-fordran, och en rad per aktör med
+  // rörelserna från projektets likviditetsprognos (utökning/återbetalning av lånet).
+  if(valda.length > 1){
+    const gem = Object.values(perProjekt);
+    if(gem.length){
+      sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')');
+      gem.forEach(g => {
+        const ibTot = Object.values(g.aktorer).reduce((s, r) => s + r.ib, 0);
+        const lblEl = document.createElement('span');
+        lblEl.innerHTML = escapeHtml(g.p.name) + ' ' + homeStatusPillHtml(g.p.status || 'Pågående');
+        addRow(lblEl, [sumCell(ibTot), ''].concat(blanks, ['']), { bold: true });
+        aktorerValda.forEach(a => {
+          const r = g.aktorer[a.key];
+          if(!r) return;
+          let f = r.ib;
+          const cells = months.map(m => {
+            const v = r.flow[m];
+            const sp = document.createElement('span');
+            sp.textContent = tkr(v);
+            const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
+            if(plan) sp.style.color = 'var(--danger)';
+            if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = g.p.name + ' · ' + r.l.namn + ' · klicka för detaljer'; sp.onclick = () => showEkonomiLanManadPopup(g.p.id, r.l, m); }
+            f -= v;
+            return sp;
+          });
+          addRow(a.namn, [sumCell(r.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
+        });
       });
-      const likv = await ekonomiPrognosLikviditetPerManad(g.p.id, months);
-      addRow('Projektets likviditet enligt prognosen', ['', ''].concat(months.map(m => sumCell(likv[m] || 0)), ['']), { indent: 18, small: true });
+    }
+    // Gemensamma poster: egna poster markerade "flera aktörer", efter projekten.
+    const gemPoster = [];
+    aktorerValda.forEach(a => ekonomiKoncernRec(a.key).poster.forEach(post => { if(post.flera) gemPoster.push({ a, post }); }));
+    if(gemPoster.length){
+      sectionRow('Gemensamma poster');
+      gemPoster.forEach(({ a, post }) => {
+        addRow((post.namn || 'Egen post') + ' (' + a.namn + ')', ['', ''].concat(months.map(m => sumCell((post.per || {})[m] || 0)), [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+      });
     }
   }
   wrap.innerHTML = '';
