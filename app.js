@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008152054';
+const APP_BUILD = '20261008152432';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1442,7 +1442,7 @@ async function openCompanyEkonomi(){
 // ---------- Ekonomi: huvudflikar med underflikar ----------
 // Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
 const EKONOMI_TAB_GROUPS = {
-  projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
+  projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
   koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån']]
 };
 function ekonomiTabGroupOf(view){
