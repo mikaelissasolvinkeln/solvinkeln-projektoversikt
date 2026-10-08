@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008132754';
+const APP_BUILD = '20261008133435';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4027,7 +4027,8 @@ function ekonomiMonthFraction(datum){
   const days = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
   return (days - d.getUTCDate() + 1) / days;
 }
-// Ränta per månad på lånebokningar gjorda i prognosen (preliminära och genomförda).
+// Ränta per månad på lånen: IB och bokningar i Lån-fliken (lånets räntesats om bokningen saknar egen)
+// samt preliminära bokningar i prognosen (med sin ränta).
 // Varje bokning är en tranch med egen räntesats (ränta/12 per hel månad); en
 // amortering med samma sats minskar den tranchen. Samma månad som bokningen:
 // hela månaden om preliminär, annars exakt från datumet.
@@ -4035,8 +4036,18 @@ function ekonomiPrognosRanta(pid, lanKey, months){
   const prog = ekonomiPrognosRec(pid);
   const trancher = [];
   (prog.planeradeLan || []).filter(p => p.lanKey === lanKey && p.ranta).forEach(p => trancher.push({ manad: p.manad, belopp: p.belopp || 0, ranta: parseFloat(p.ranta) || 0, prelim: true }));
+  // Lån-fliken: IB och alla bokningar räknas också, med lånets räntesats när bokningen saknar egen.
   const d = ekonomiLanDetalj(pid, lanKey, false);
-  if(d) d.tx.filter(t => t.kalla === 'likviditetsprognosen' && t.ranta).forEach(t => trancher.push({ manad: String(t.datum || '').slice(0, 7), datum: t.datum, belopp: t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), ranta: parseFloat(t.ranta) || 0, prelim: false }));
+  if(d){
+    const basRanta = parseFloat(d.ranta) || 0;
+    const ibDatum = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
+    if((d.ib || 0) && basRanta) trancher.push({ manad: ibDatum.slice(0, 7), datum: ibDatum, belopp: d.ib || 0, ranta: basRanta, prelim: false });
+    d.tx.forEach(t => {
+      const r = (t.ranta != null && t.ranta !== '') ? parseFloat(t.ranta) || 0 : basRanta;
+      if(!r) return;
+      trancher.push({ manad: String(t.datum || '').slice(0, 7), datum: t.datum, belopp: t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), ranta: r, prelim: false });
+    });
+  }
   const per = {}, prelim = {};
   months.forEach(m => {
     let r = 0;
