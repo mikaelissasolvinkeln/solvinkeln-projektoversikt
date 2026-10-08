@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008170202';
+const APP_BUILD = '20261008171124';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4587,19 +4587,31 @@ function ekonomiMonthFraction(datum){
 function ekonomiPrognosRanta(pid, lanKey, months){
   const prog = ekonomiPrognosRec(pid);
   const trancher = [];
-  (prog.planeradeLan || []).filter(p => p.lanKey === lanKey && p.ranta).forEach(p => trancher.push({ manad: p.manad, belopp: p.belopp || 0, ranta: parseFloat(p.ranta) || 0, prelim: true }));
-  // Lån-fliken: IB och alla bokningar räknas också, med lånets räntesats när bokningen saknar egen.
   const d = ekonomiLanDetalj(pid, lanKey, false);
+  const basRanta = d ? parseFloat(d.ranta) || 0 : 0;
+  const planerade = (prog.planeradeLan || []).filter(p => p.lanKey === lanKey);
+  // Återbetalning utan egen räntesats ska ändå minska skulden: lånets ränta (Lån-fliken),
+  // annars senast använda ränta för lånet, annars snitträntan på det som lånats dittills.
+  const fallbackRanta = manad => {
+    if(basRanta) return basRanta;
+    const s = prog.senasteRanta && prog.senasteRanta[lanKey]; if(s && parseFloat(s)) return parseFloat(s);
+    const pos = trancher.filter(t => t.belopp > 0 && t.manad <= manad); const sum = pos.reduce((a, t) => a + t.belopp, 0);
+    return sum ? pos.reduce((a, t) => a + t.belopp * t.ranta, 0) / sum : 0;
+  };
+  planerade.filter(p => p.ranta).forEach(p => trancher.push({ manad: p.manad, belopp: p.belopp || 0, ranta: parseFloat(p.ranta) || 0, prelim: true }));
+  // Lån-fliken: IB och alla bokningar räknas också, med lånets räntesats när bokningen saknar egen.
   if(d){
-    const basRanta = parseFloat(d.ranta) || 0;
     const ibDatum = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
     if((d.ib || 0) && basRanta) trancher.push({ manad: ibDatum.slice(0, 7), datum: ibDatum, belopp: d.ib || 0, ranta: basRanta, prelim: false });
     d.tx.forEach(t => {
-      const r = (t.ranta != null && t.ranta !== '') ? parseFloat(t.ranta) || 0 : basRanta;
+      const manad = String(t.datum || '').slice(0, 7);
+      let r = (t.ranta != null && t.ranta !== '') ? parseFloat(t.ranta) || 0 : basRanta;
+      if(!r && t.typ === 'aterbetalning') r = fallbackRanta(manad);
       if(!r) return;
-      trancher.push({ manad: String(t.datum || '').slice(0, 7), datum: t.datum, belopp: t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), ranta: r, prelim: false });
+      trancher.push({ manad, datum: t.datum, belopp: t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), ranta: r, prelim: false });
     });
   }
+  planerade.filter(p => !p.ranta && (p.belopp || 0) < 0).forEach(p => { const r = fallbackRanta(p.manad); if(r) trancher.push({ manad: p.manad, belopp: p.belopp, ranta: r, prelim: true }); });
   const per = {}, prelim = {};
   months.forEach(m => {
     let r = 0;
@@ -4609,7 +4621,8 @@ function ekonomiPrognosRanta(pid, lanKey, months){
       r += t.belopp * (t.ranta / 100 / 12) * frac;
       if(t.prelim) prelim[m] = true;
     });
-    per[m] = Math.round(r);
+    // Löst lån ger ingen ränta: en återbetalning som är större än skulden får inte bli en intäkt.
+    per[m] = Math.max(0, Math.round(r));
   });
   return { per, prelim, any: trancher.length > 0 };
 }
