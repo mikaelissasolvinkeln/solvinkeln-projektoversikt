@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008163701';
+const APP_BUILD = '20261008164100';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1770,6 +1770,20 @@ async function renderEkonomiKoncern(){
     });
   });
 
+  // Utdelning vid preliminärt slutförande: projektets kvarvarande kapital fördelas enligt ägandet
+  // och landar som inbetalning hos respektive aktör den månaden.
+  for(const p of ekonomiSortedProjects()){
+    const sm = ekonomiPrognosRec(p.id).slutforandeManad;
+    if(!sm || !months.includes(sm)) continue;
+    const likv = await ekonomiPrognosLikviditetPerManad(p.id, months);
+    const slut = ekonomiPrognosSlutforande(p.id, months, likv);
+    if(!slut || !slut.belopp) continue;
+    slut.delar.forEach(d => {
+      if(!d.key || !perAktor[d.key] || !d.belopp) return;
+      const flow = {}; months.forEach(m => { flow[m] = m === sm ? d.belopp : 0; });
+      perAktor[d.key].push({ p, l: { key: d.key, namn: 'Utdelning', per: {}, items: {}, planerade: {} }, flow, ib: 0, utdelning: true });
+    });
+  }
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
@@ -1822,7 +1836,8 @@ async function renderEkonomiKoncern(){
         return sp;
       });
       // Summa = fordran vid periodens slut: IB − rörelserna (utökning ökar fordran, återbetalning minskar).
-      addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(r.ib - months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
+      if(r.utdelning){ cells.forEach(sp => { if(sp.textContent) sp.style.color = 'var(--danger)'; sp.title = 'Preliminär utdelning vid slutförande'; }); addRow(r.p.name + ' · utdelning vid slutförande', ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 }); }
+      else addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(r.ib - months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
     });
     if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
     rec.poster.forEach(post => {
@@ -1862,7 +1877,7 @@ async function renderEkonomiKoncern(){
     addRow('Summa ' + a.namn, ['', ''].concat(months.map(m => sumCell(sum[m])), [sumCell(months.reduce((s, m) => s + sum[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
     // Utestående fordran: IB-fordran − lånerörelser (minus = utökning ökar fordran, plus = återbetalning minskar den).
     let fordran = fordranIb;
-    const lanSum = {}; months.forEach(m => { lanSum[m] = rows.reduce((s, r) => s + r.flow[m], 0); });
+    const lanSum = {}; months.forEach(m => { lanSum[m] = rows.filter(r => !r.utdelning).reduce((s, r) => s + r.flow[m], 0); });
     const fordranCells = months.map(m => { fordran -= lanSum[m]; return sumCell(fordran); });
     addRow('Utestående fordran ' + a.namn, [sumCell(fordranIb), ''].concat(fordranCells, [sumCell(fordran)]), { bold: true });
     let acc = rec.ingaende || 0;
@@ -5191,6 +5206,29 @@ function showEkonomiPostKvarPopup(post, t, pp, months, prog){
     p.body.appendChild(ekoPopupLine('IB ' + ekonomiPrognosShortLabel(prog.start) + ' (betalt före start, ingår i tagna)', formatKrFull(pp.e.ib), { muted: true }));
   }
 }
+// Ägande i ett projekt: Solvinkelns andel (Ägarandel under Projekt) och JV-partnern.
+function ekonomiProjektAgande(pid){
+  const meta = companyEkonomiData.meta[pid] || {};
+  const andel = meta.agarandel != null && meta.agarandel !== '' ? Math.max(0, Math.min(100, parseFloat(meta.agarandel) || 0)) : 100;
+  const partner = (meta.jvPartner || '').trim();
+  return { solvinkeln: andel, partner: partner || null, partnerAndel: partner ? 100 - andel : 0 };
+}
+// Preliminärt slutförande: den månad projektet avslutas fördelas kvarvarande kapital
+// (likviditeten den månaden) enligt ägandet. Returnerar { manad, belopp, delar:[{namn, andel, belopp}] }.
+function ekonomiPrognosSlutforande(pid, months, saldoPerManad){
+  const prog = ekonomiPrognosRec(pid);
+  const m = prog.slutforandeManad;
+  if(!m || !months.includes(m)) return null;
+  const belopp = Math.max(0, saldoPerManad[m] || 0);
+  const ag = ekonomiProjektAgande(pid);
+  const delar = [{ namn: 'Solvinkeln', andel: ag.solvinkeln, belopp: Math.round(belopp * ag.solvinkeln / 100), key: 'lanSolvinkeln' }];
+  if(ag.partner){
+    const key = /derome/i.test(ag.partner) ? 'lanDerome' : /nbe/i.test(ag.partner) ? 'lanNBE' : /boro/i.test(ag.partner) ? 'lanBORO' : null;
+    delar.push({ namn: ag.partner, andel: ag.partnerAndel, belopp: belopp - delar[0].belopp, key });
+  }
+  return { manad: m, belopp, delar };
+}
+
 function renderEkonomiPrognos(){
   const pid = currentEkonomiLikviditetProjectId;
   const wrap = document.getElementById('ekoPrognosWrap');
@@ -5219,6 +5257,19 @@ function renderEkonomiPrognos(){
   thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost' + (tkr ? ' <span style="font-weight:400; text-transform:none;">(tkr)</span>' : '') + '</th><th ' + thc + '>Budget</th><th ' + thc + '>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
     months.map(m => '<th ' + thc + '>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th ' + thc + '>Prognos totalt</th></tr>';
   thead.querySelector('th:last-child').title = 'IB + alla månader i prognosen';
+  // Klick på en månadsrubrik = markera månaden som preliminärt slutförande (★).
+  [...thead.querySelectorAll('th')].slice(3, 3 + months.length).forEach((th, i) => {
+    const m = months[i];
+    th.style.cursor = 'pointer';
+    if(prog.slutforandeManad === m){ th.innerHTML = '★ ' + th.textContent; th.style.color = 'var(--blue)'; th.title = 'Preliminärt slutförande – klicka för att ta bort markeringen'; }
+    else th.title = 'Klicka för att markera som preliminärt slutförande';
+    th.onclick = async () => {
+      if(prog.slutforandeManad === m){ if(!confirm('Ta bort markeringen preliminärt slutförande ' + ekonomiPrognosShortLabel(m) + '?')) return; prog.slutforandeManad = null; }
+      else { if(!confirm('Markera ' + ekonomiPrognosShortLabel(m) + ' som preliminärt slutförande? Kvarvarande kapital den månaden fördelas enligt ägandet (Ägarandel under Projekt).')) return; prog.slutforandeManad = m; }
+      await saveEkonomiPrognos(); renderEkonomiPrognos();
+    };
+  });
+
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
@@ -5492,12 +5543,26 @@ function renderEkonomiPrognos(){
   if(visaUtfall && months.some(m => totals.utfall[m])) addRow('', 'Summa utfall', 6, ['', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(sumPer(totals.utfall))]), { small: true }, ['', ''].concat(months.map(m => totals.utfall[m]), [sumPer(totals.utfall)]));
 
   // ----- Netto och likviditet -----
-  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m])), [cell((inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos))]), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m]), [(inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos)]));
+  // Preliminärt slutförande: likviditeten den månaden (före fördelning) delas ut enligt ägandet.
   const ingaende = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
+  const saldoFore = {}; { let s0 = ingaende; months.forEach(m => { s0 += inbTot.per[m] - totals.prognos[m]; saldoFore[m] = s0; }); }
+  const slut = ekonomiPrognosSlutforande(pid, months, saldoFore);
+  const dist = {}; months.forEach(m => { dist[m] = 0; });
+  if(slut){
+    dist[slut.manad] = slut.belopp;
+    const red = v => { const sp = document.createElement('span'); sp.textContent = cell(v); sp.style.color = 'var(--danger)'; sp.title = 'Preliminärt – fördelas när projektet slutförs'; return sp; };
+    addRow('', '★ Fördelning av kapital vid slutförande ' + ekonomiPrognosShortLabel(slut.manad), 6, ['', ''].concat(months.map(m => m === slut.manad ? red(slut.belopp) : ''), [cell(slut.belopp)]), { bold: true, pdfLabel: 'Fördelning av kapital vid slutförande ' + ekonomiPrognosShortLabel(slut.manad) }, ['', ''].concat(months.map(m => dist[m]), [slut.belopp]));
+    slut.delar.forEach(d => {
+      addRow('', 'varav ' + d.namn + ' (' + d.andel + ' %)', 24, ['', ''].concat(months.map(m => m === slut.manad ? red(d.belopp) : ''), [cell(d.belopp)]), { small: true }, ['', ''].concat(months.map(m => m === slut.manad ? d.belopp : 0), [d.belopp]));
+    });
+    utRows.push({ namn: 'Fördelning av kapital vid slutförande', per: dist });
+  }
+  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m] - dist[m])), [cell((inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos) - sumPer(dist))]), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m] - dist[m]), [(inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos) - sumPer(dist)]));
   let saldo = ingaende;
+
   const saldoCells = months.map((m, i) => {
     const prev = saldo;
-    saldo += inbTot.per[m] - totals.prognos[m];
+    saldo += inbTot.per[m] - totals.prognos[m] - dist[m];
     const s = document.createElement('span');
     s.textContent = cell(saldo) || '0';
     s.className = 'editable';
@@ -5513,7 +5578,7 @@ function renderEkonomiPrognos(){
     s.onclick = () => showEkonomiLikviditetPopup(pid, m, info);
     return s;
   });
-  const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m]; saldoNums.push(s2); });
+  const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m] - dist[m]; saldoNums.push(s2); });
   addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
 
   ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.map(l => ({ key: l.key, namn: l.namn, ib: l.ib || 0, per: l.per })) };
