@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008164421';
+const APP_BUILD = '20261008165711';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1722,7 +1722,7 @@ async function renderEkonomiKoncern(){
   const antal = uiPrefs.koncernManader === 24 ? 24 : 12;
   const start = new Date().toISOString().slice(0, 7);
   const months = ekonomiPrognosMonths(start, antal);
-  const tkr = v => { const r = Math.round(v / 1000); return r === 0 ? '' : r.toLocaleString('sv-SE'); };
+  const tkr = v => { const r = Math.round((v || 0) / 1000); if(isNaN(r)) return ''; return r === 0 ? '' : r.toLocaleString('sv-SE'); };
   const cellOpts = { fmt: v => { const r = Math.round(v / 1000); return r === 0 ? '0' : r.toLocaleString('sv-SE'); }, scale: 1000 };
 
   ctl.innerHTML = '';
@@ -1745,6 +1745,14 @@ async function renderEkonomiKoncern(){
   const sel = per.querySelector('select'); sel.value = String(antal);
   sel.onchange = async () => { uiPrefs.koncernManader = parseInt(sel.value, 10); await saveUiPrefs(); renderEkonomiKoncern(); };
   ctl.appendChild(per);
+  if(valda.length > 1){
+    const lage = document.createElement('label');
+    lage.style.marginLeft = '10px';
+    lage.innerHTML = 'Gemensamma projekt <select class="eko-inline-select" style="margin-left:4px;"><option value="utokad">Utökad</option><option value="kompakt">Kompakt</option></select>';
+    const lsel = lage.querySelector('select'); lsel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
+    lsel.onchange = async () => { uiPrefs.koncernGemLage = lsel.value; await saveUiPrefs(); renderEkonomiKoncern(); };
+    ctl.appendChild(lage);
+  }
   const unit = document.createElement('span'); unit.className = 'eko-sub'; unit.style.margin = '0'; unit.textContent = 'tkr';
   ctl.appendChild(unit);
   const pdfBtn = document.createElement('button');
@@ -1895,18 +1903,24 @@ async function renderEkonomiKoncern(){
     // Bara projekt som ägs gemensamt: JV-partnern (under Projekt) ska vara en av de valda aktörerna.
     const partnerKey = name => /derome/i.test(name || '') ? 'lanDerome' : /nbe/i.test(name || '') ? 'lanNBE' : /boro/i.test(name || '') ? 'lanBORO' : null;
     const gem = ekonomiSortedProjects().filter(p => { const k = partnerKey((companyEkonomiData.meta[p.id] || {}).jvPartner); return k && valda.includes(k); }).map(p => perProjekt[p.id] || { p, aktorer: {} });
+    const kompakt = uiPrefs.koncernGemLage === 'kompakt';
     if(gem.length){
-      sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')');
+      sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')' + (kompakt ? ' · kompakt' : ''));
+      // Summering per aktör över alla gemensamma projekt: IB-fordran och rörelser per månad.
+      const gemTot = {};
+      aktorerValda.forEach(a => { gemTot[a.key] = { ib: 0, flow: {} }; months.forEach(m => { gemTot[a.key].flow[m] = 0; }); });
       gem.forEach(g => {
-        const ibTot = Object.values(g.aktorer).reduce((s, r) => s + r.ib, 0);
+        aktorerValda.forEach(a => { const r = g.aktorer[a.key]; if(!r) return; gemTot[a.key].ib += r.ib || 0; months.forEach(m => { gemTot[a.key].flow[m] += r.flow[m] || 0; }); });
+        if(kompakt) return;
+        const ibTot = Object.values(g.aktorer).reduce((s, r) => s + (r.ib || 0), 0);
         const lblEl = document.createElement('span');
         lblEl.innerHTML = escapeHtml(g.p.name) + ' ' + homeStatusPillHtml(g.p.status || 'Pågående');
         addRow(lblEl, [sumCell(ibTot), ''].concat(blanks, ['']), { bold: true });
         aktorerValda.forEach(a => {
           const r = g.aktorer[a.key] || { ib: 0, flow: {}, l: { planerade: {}, items: {} } };
-          let f = r.ib;
+          let f = r.ib || 0;
           const cells = months.map(m => {
-            const v = r.flow[m];
+            const v = r.flow[m] || 0;
             const sp = document.createElement('span');
             sp.textContent = tkr(v);
             const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
@@ -1917,6 +1931,19 @@ async function renderEkonomiKoncern(){
           });
           addRow(a.namn, [sumCell(r.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
         });
+      });
+      if(kompakt){
+        // Kompakt: en rad per aktör med alla fordringar ihopslagna och rörelserna framåt.
+        aktorerValda.forEach(a => {
+          const t = gemTot[a.key]; let f = t.ib;
+          const cells = months.map(m => { const sp = document.createElement('span'); sp.textContent = tkr(t.flow[m]); f -= t.flow[m]; return sp; });
+          addRow(a.namn + ' · rörelser alla gemensamma projekt', [sumCell(t.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
+        });
+      }
+      // Längst ner: utestående fordran per aktör (IB − rörelser), månad för månad.
+      aktorerValda.forEach(a => {
+        const t = gemTot[a.key]; let f = t.ib;
+        addRow('Utestående fordran ' + a.namn + ' (gemensamma projekt)', [sumCell(t.ib), ''].concat(months.map(m => { f -= t.flow[m]; return sumCell(f); }), [sumCell(f)]), { bold: true });
       });
     }
     // Gemensamma poster: egna poster markerade "flera aktörer", efter projekten.
@@ -1988,12 +2015,28 @@ function showEkonomiKoncernPdfPopup(){
   const mk = (label, checked, disabled) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:8px; align-items:center; margin:6px 0; cursor:pointer;' + (disabled ? ' opacity:0.5;' : ''); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = checked; cb.disabled = disabled; l.appendChild(cb); l.appendChild(document.createTextNode(label)); p.body.appendChild(l); return cb; };
   const cbF = mk('Ta med Fordran (Solvinkelns fordringar mot projekten + övriga fordringar)', harSolvinkeln, !harSolvinkeln);
   const cbL = mk('Ta med Lån (koncernens lån)', harSolvinkeln, !harSolvinkeln);
+  // Omfattning: hela koncernlikviditeten eller bara blocket Gemensamma projekt (kräver flera aktörer).
+  const flera = valda.length > 1;
+  const omf = document.createElement('div');
+  omf.style.cssText = 'margin:10px 0 4px; display:flex; flex-direction:column; gap:6px;' + (flera ? '' : ' opacity:0.5;');
+  omf.innerHTML = '<label style="display:flex; gap:8px; align-items:center; cursor:pointer;"><input type="radio" name="ekoKoncernPdfOmf" value="hela" checked> Hela koncernlikviditeten</label>' +
+    '<label style="display:flex; gap:8px; align-items:center; cursor:pointer;"><input type="radio" name="ekoKoncernPdfOmf" value="gemensamma"' + (flera ? '' : ' disabled') + '> Bara gemensamma projekt (' + EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn).join(' + ') + ')</label>' +
+    '<label style="display:flex; gap:8px; align-items:center; margin-left:24px;">Gemensamma projekt <select class="eko-inline-select"' + (flera ? '' : ' disabled') + '><option value="utokad">Utökad</option><option value="kompakt">Kompakt</option></select></label>';
+  p.body.appendChild(omf);
+  const lageSel = omf.querySelector('select'); lageSel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
   const btn = document.createElement('button');
   btn.type = 'button'; btn.textContent = 'Ladda ner PDF'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
-  btn.onclick = async () => { btn.disabled = true; try{ await ekonomiKoncernPdf(cbF.checked, cbL.checked); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; } };
+  btn.onclick = async () => { btn.disabled = true; try{ const bara = (omf.querySelector('input[name=ekoKoncernPdfOmf]:checked') || {}).value === 'gemensamma'; await ekonomiKoncernPdf(bara ? false : cbF.checked, bara ? false : cbL.checked, { bara: bara ? 'gemensamma' : 'hela', lage: flera ? lageSel.value : null }); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; } };
   p.actions.insertBefore(btn, p.actions.firstChild);
 }
-async function ekonomiKoncernPdf(medFordran, medLan){
+async function ekonomiKoncernPdf(medFordran, medLan, opts){
+  opts = opts || {};
+  const baraGem = opts.bara === 'gemensamma';
+  // Utökad/kompakt i utskriften kan skilja sig från skärmen: rendera om tillfälligt och återställ efteråt.
+  const lageFore = uiPrefs.koncernGemLage;
+  const lageAnnat = opts.lage && (opts.lage === 'kompakt') !== (lageFore === 'kompakt');
+  if(lageAnnat){ uiPrefs.koncernGemLage = opts.lage; await renderEkonomiKoncern(); }
+  try{
   const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
   const aktorer = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn).join(', ');
   const { jsPDF } = window.jspdf;
@@ -2006,12 +2049,20 @@ async function ekonomiKoncernPdf(medFordran, medLan){
   const kt = document.querySelector('#ekoKoncernWrap table');
   if(!kt) throw new Error('Koncernlikviditeten är inte renderad.');
   const K = ekonomiPdfRowsFromTable(kt);
-  const monthCount = K.head.length - 4; // Post, Ingående fordran, Ingående kassa, …månader…, Summa
+  if(baraGem){
+    // Bara blocket Gemensamma projekt (och Gemensamma poster): från den sektionsraden och framåt.
+    const i0 = K.rows.findIndex(r => r.section && /^Gemensamma projekt/i.test(r.cells[0] || ''));
+    if(i0 < 0) throw new Error('Inga gemensamma projekt att skriva ut – välj minst två aktörer.');
+    K.rows = K.rows.slice(i0);
+  }
+  const titel = baraGem ? 'Gemensamma projekt' : 'Koncernlikviditet';
+  const monthCount = K.head.length - 4;
+ // Post, Ingående fordran, Ingående kassa, …månader…, Summa
   const chunks = [];
   for(let i = 0; i < monthCount; i += 12) chunks.push([i, Math.min(i + 12, monthCount)]);
   chunks.forEach(([a, b], ci) => {
     if(ci > 0) doc.addPage();
-    const y = ekonomiPdfHeader(doc, 'Koncernlikviditet', aktorer + ' · belopp i tkr · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + datum, logo, logoW, logoH);
+    const y = ekonomiPdfHeader(doc, titel, aktorer + (opts.lage ? ' · ' + (opts.lage === 'kompakt' ? 'kompakt' : 'utökad') : '') + ' · belopp i tkr · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + datum, logo, logoW, logoH);
     const idx = [0, 1, 2].concat(Array.from({ length: b - a }, (_, i) => 3 + a + i), ci === chunks.length - 1 ? [K.head.length - 1] : []);
     ekonomiPdfTable(doc, y, idx.map(i => K.head[i]), K.rows.map(r => ({ cells: idx.map(i => r.cells[i] || ''), bold: r.bold, section: r.section })), { fontSize: 6.5, firstWidth: 52 });
   });
@@ -2033,8 +2084,12 @@ async function ekonomiKoncernPdf(medFordran, medLan){
     const L = ekonomiPdfRowsFromTable(lt);
     ekonomiPdfTable(doc, y, L.head.slice(0, -1), L.rows.map(r => ({ cells: r.cells.slice(0, -1), bold: r.bold, section: r.section })), { fontSize: 8, firstWidth: 60 });
   }
-  doc.save('Koncernlikviditet-' + datum + '.pdf');
+  doc.save((baraGem ? 'Gemensamma-projekt-' : 'Koncernlikviditet-') + datum + '.pdf');
+  }finally{
+    if(lageAnnat){ uiPrefs.koncernGemLage = lageFore; await renderEkonomiKoncern(); }
+  }
 }
+
 
 function ekonomiSortedProjects(){
   const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
