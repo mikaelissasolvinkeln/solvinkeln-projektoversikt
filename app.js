@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008134118';
+const APP_BUILD = '20261008134331';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4657,8 +4657,9 @@ function ekonomiForsaljningPdfPage(doc, pid){
 // Fördela en kostnadspost i prognosen: jämnt (kvar att fördela över N månader) eller
 // ett fast belopp per månad under N månader från vald månad.
 function showEkonomiFordelaPopup(pid, post, kvar, obetaltSum, months, prog){
-  const attFordela = Math.max(0, kvar - obetaltSum);
-  const p = ekoPopup({ title: 'Fördela: ' + post.namn, sub: 'Kvar att fördela ' + formatKrFull(attFordela) + (obetaltSum ? ' (efter obetalda fakturor ' + formatKrFull(obetaltSum) + ')' : '') + '. Välj hur beloppen ska läggas ut i månaderna.', maxWidth: 560 });
+  // Obetalda fakturor ingår redan i tagna kostnader (och ligger på sina förfallomånader), så de dras inte av igen.
+  const attFordela = Math.max(0, kvar);
+  const p = ekoPopup({ title: 'Fördela: ' + post.namn, sub: 'Kvar att fördela ' + formatKrFull(attFordela) + ' (budget minus tagna kostnader' + (obetaltSum ? ', varav obetalda fakturor ' + formatKrFull(obetaltSum) + ' redan ligger på sina förfallomånader' : '') + '). Välj hur beloppen ska läggas ut i månaderna.', maxWidth: 560 });
   const mk = (tag, css) => { const el = document.createElement(tag); if(css) el.style.cssText = css; return el; };
   const monthSel = () => { const s = mk('select'); s.className = 'eko-inline-select'; s.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join(''); return s; };
   const numInp = (val, ph, w) => { const i = mk('input', 'width:' + (w || 90) + 'px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;'); i.type = 'number'; i.value = val; i.placeholder = ph || ''; return i; };
@@ -4718,12 +4719,12 @@ function showEkonomiPostKvarPopup(post, t, pp, months, prog){
   const kvar = (post.budget || 0) - tagna;
   const obetalt = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
   const manuellt = months.reduce((s, m) => s + (pp.cells[m] || 0), 0);
-  const rest = kvar - obetalt - manuellt;
+  const rest = kvar - manuellt; // obetalda fakturor ingår redan i tagna
   const p = ekoPopup({ title: post.namn, sub: 'Kvar att fördela i likviditetsprognosen.' });
   p.body.appendChild(ekoPopupLine('Budget', formatKrFull(post.budget || 0)));
   p.body.appendChild(ekoPopupLine('− Tagna kostnader (reskontra ' + formatKrFull(t.reskontra) + (t.mark ? ' + Mark ' + formatKrFull(t.mark) : '') + ')', '−' + formatKrFull(tagna)));
   p.body.appendChild(ekoPopupLine('= Kvar att fördela', formatKrFull(kvar), { bold: true }));
-  p.body.appendChild(ekoPopupLine('− Obetalda fakturor (läggs automatiskt på förfallomånaden)', '−' + formatKrFull(obetalt), { muted: true }));
+  if(obetalt) p.body.appendChild(ekoPopupLine('Varav obetalda fakturor, ligger på sina förfallomånader (ingår i tagna)', formatKrFull(obetalt), { muted: true }));
   p.body.appendChild(ekoPopupLine('− Fördelat i prognosen (' + months.filter(m => pp.cells[m]).length + ' månader)', '−' + formatKrFull(manuellt), { muted: true }));
   const r = ekoPopupLine(Math.abs(rest) > 0.5 ? (rest > 0 ? '= Ofördelat' : '= Fördelat utöver budget') : '= Allt fördelat ✓', formatKrFull(rest), { bold: true });
   if(Math.abs(rest) > 0.5) r.style.color = 'var(--danger)';
@@ -4976,7 +4977,7 @@ function renderEkonomiPrognos(){
       nameSpan.onclick = () => showEkonomiPostKvarPopup(post, t, pp, months, prog);
       nameWrap.appendChild(nameSpan);
       const obetaltSum = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
-      const restEfter = kvar - pp.sum;
+      const restEfter = kvar - months.reduce((s, m) => s + (pp.cells[m] || 0), 0); // obetalda fakturor ingår redan i tagna
       // Status: gul = inte helt fördelad enligt budget, grön = helt fördelad, röd = över budget (visas inte i PDF).
       const statusBg = (!(post.budget || 0) && !(t.reskontra + t.mark) && !pp.sum) ? '' : (restEfter < -0.5 ? '#f8d7da' : (restEfter > 0.5 ? '#fff3bf' : '#d9f2dc'));
       nameSpan.title = restEfter < -0.5 ? 'Över budget med ' + formatKrFull(-restEfter) : (restEfter > 0.5 ? 'Kvar att fördela ' + formatKrFull(restEfter) : 'Helt fördelad enligt budget');
