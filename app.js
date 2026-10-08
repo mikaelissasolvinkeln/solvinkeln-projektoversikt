@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008161622';
+const APP_BUILD = '20261008162723';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1520,24 +1520,50 @@ function renderEkonomiKoncernFordran(){
   const tbody = document.getElementById('ekoKoncernFordranBody');
   tbody.innerHTML = '';
   let sum = 0;
+  const projOpts = ekonomiSortedProjects().map(p => '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</option>').join('');
   list.forEach(f => {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td></td><td></td><td></td><td></td><td class="row-actions"></td>';
-    ekonomiKoncernTextCell(tr.children[0], f.motpart, async v => { f.motpart = v; await saveEkonomiKoncern(); }, 'Motpart');
-    likviditetsbudgetEditableCell(tr.children[1], f.belopp || null, async v => { f.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernFordran(); });
-    ekonomiKoncernDateCell(tr.children[2], f.forfallodatum, async v => { f.forfallodatum = v; await saveEkonomiKoncern(); });
-    ekonomiKoncernTextCell(tr.children[3], f.anteckning, async v => { f.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernTextCell(tr.children[0], f.motpart, async v => { f.motpart = v; await ekonomiKoncernFordranSpara(f, f.projektPid); }, 'Motpart');
+    // Projekt: en fordran mot ett bolag som i sin tur har fordran mot ett projekt bokas som
+    // utökning av Lån Solvinkeln i projektet (och räknas därmed i IB, saldo, prognos och koncern).
+    const sel = document.createElement('select');
+    sel.className = 'eko-inline-select'; sel.style.width = '100%';
+    sel.innerHTML = '<option value="">– Inget projekt –</option>' + projOpts;
+    sel.value = f.projektPid || '';
+    sel.onchange = async () => { const old = f.projektPid || null; f.projektPid = sel.value || null; await ekonomiKoncernFordranSpara(f, old); renderEkonomiKoncernFordran(); };
+    tr.children[1].appendChild(sel);
+    likviditetsbudgetEditableCell(tr.children[2], f.belopp || null, async v => { f.belopp = v || 0; await ekonomiKoncernFordranSpara(f, f.projektPid); renderEkonomiKoncernFordran(); });
+    ekonomiKoncernDateCell(tr.children[3], f.datum, async v => { f.datum = v; await ekonomiKoncernFordranSpara(f, f.projektPid); });
+    ekonomiKoncernDateCell(tr.children[4], f.forfallodatum, async v => { f.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[5], f.anteckning, async v => { f.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
-    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?')) return; companyEkonomiData.koncern._fordringar = list.filter(x => x.id !== f.id); await saveEkonomiKoncern(); renderEkonomiKoncernFordran(); };
-    tr.children[4].appendChild(del);
+    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?' + (f.projektPid ? ' Bokningen på Lån Solvinkeln i projektet tas också bort.' : ''))) return; companyEkonomiData.koncern._fordringar = list.filter(x => x.id !== f.id); await ekonomiKoncernFordranSpara({ id: f.id, projektPid: null }, f.projektPid); renderEkonomiKoncernFordran(); };
+    tr.children[6].appendChild(del);
     sum += f.belopp || 0;
     tbody.appendChild(tr);
   });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td>' + formatKrFull(sum) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
+}
+// Sparar en övrig fordran och håller bokningen på Lån Solvinkeln i valt projekt i synk
+// (tx med kalla 'koncernfordran' och fordranId). Byts projekt tas bokningen bort i det gamla.
+async function ekonomiKoncernFordranSpara(f, oldPid){
+  const removeFrom = pid => { const d = pid ? ekonomiLanDetalj(pid, 'lanSolvinkeln', false) : null; if(d) d.tx = d.tx.filter(t => t.fordranId !== f.id); };
+  if(oldPid && oldPid !== f.projektPid) removeFrom(oldPid);
+  if(f.projektPid){
+    const d = ekonomiLanDetalj(f.projektPid, 'lanSolvinkeln', true);
+    let tx = d.tx.find(t => t.fordranId === f.id);
+    if(!tx){ tx = { id: uid(), fordranId: f.id, typ: 'utokning', ranta: null, kalla: 'koncernfordran' }; d.tx.push(tx); }
+    tx.datum = f.datum || tx.datum || new Date().toISOString().slice(0, 10);
+    tx.belopp = f.belopp || 0;
+    tx.text = 'Fordran via ' + (f.motpart || 'motpart');
+  } else if(oldPid) removeFrom(oldPid);
+  try{ await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }catch(e){ showDebugError('Kunde inte spara lånet', e); }
+  await saveEkonomiKoncern();
 }
 function renderEkonomiKoncernLan(){
   const list = ekonomiKoncernList('_lan');
@@ -1565,7 +1591,7 @@ function renderEkonomiKoncernLan(){
   tbody.appendChild(tot);
 }
 document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
-  ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', belopp: 0, forfallodatum: '', anteckning: '' });
+  ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
 };
 document.getElementById('ekoKoncernLanAdd').onclick = async () => {
