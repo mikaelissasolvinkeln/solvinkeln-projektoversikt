@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008153809';
+const APP_BUILD = '20261008154316';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1846,10 +1846,38 @@ function ekonomiBudgetBuildStruktur(pid){
   if(rest.length) groups.push({ id: uid(), grupp: 'Övrigt (tidigare budget)', underkategorier: [], poster: rest });
   return { kostnadsgrupper: groups, skapadFran: cand ? 'kalkyl:' + cand.name : 'mall', skapadAt: new Date().toISOString() };
 }
+// Budgetmallen = Brf Gladö Höjdens budget: nya projekt får alla dess grupper, underkategorier
+// och poster (utöver kalkylens), så att alla projekt har samma kategorier. Projektspecifika
+// "Mark - …"-poster tas aldrig med.
+const EKONOMI_BUDGET_MALL_PID = 'brf-gladö-höjden-mt06';
+function ekonomiBudgetMergeFromMall(pid, st){
+  if(pid === EKONOMI_BUDGET_MALL_PID) return;
+  const md = companyEkonomiData.budgetDetalj[EKONOMI_BUDGET_MALL_PID];
+  if(!md || !md.struktur || !Array.isArray(md.struktur.kostnadsgrupper)) return;
+  const norm = s => nyaProjektNormName(String(s || ''));
+  st.kostnadsgrupper.forEach(g => { g.poster = (g.poster || []).filter(p => !/^mark - /i.test(p.namn || '')); });
+  md.struktur.kostnadsgrupper.forEach(tg => {
+    let g = st.kostnadsgrupper.find(x => norm(x.grupp) === norm(tg.grupp));
+    if(!g){ g = { id: uid(), grupp: tg.grupp, underkategorier: [], poster: [] }; st.kostnadsgrupper.push(g); }
+    if(!Array.isArray(g.underkategorier)) g.underkategorier = [];
+    (tg.underkategorier || []).forEach(tu => { if(!g.underkategorier.find(u => norm(u.namn) === norm(tu.namn))) g.underkategorier.push({ id: uid(), namn: tu.namn }); });
+    (tg.poster || []).forEach(tp => {
+      if(/^mark - /i.test(tp.namn || '')) return;
+      const exists = g.poster.find(x => norm(x.namn) === norm(tp.namn)) || st.kostnadsgrupper.some(og => og !== g && (og.poster || []).find(x => norm(x.namn) === norm(tp.namn)));
+      if(exists) return;
+      const tuk = tp.underkategori ? (tg.underkategorier || []).find(u => u.id === tp.underkategori) : null;
+      const uk = tuk ? g.underkategorier.find(u => norm(u.namn) === norm(tuk.namn)) : null;
+      const np = { id: uid(), namn: tp.namn, budget: null, underkategori: uk ? uk.id : null };
+      if(tp.perBostad != null) np.perBostad = tp.perBostad;
+      g.poster.push(np);
+    });
+  });
+}
 function ekonomiBudgetStruktur(pid){
   const d = ekonomiBudgetDetail(pid);
   if(!d.struktur || !Array.isArray(d.struktur.kostnadsgrupper)){
     d.struktur = ekonomiBudgetBuildStruktur(pid);
+    ekonomiBudgetMergeFromMall(pid, d.struktur);
     d._strukturNy = true;
   }
   d.struktur.kostnadsgrupper.forEach(g => {
