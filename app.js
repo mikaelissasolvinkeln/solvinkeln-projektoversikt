@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008160848';
+const APP_BUILD = '20261008161053';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1487,6 +1487,35 @@ function ekonomiKoncernDateCell(td, value, onSave){
   td.appendChild(inp);
 }
 function renderEkonomiKoncernFordran(){
+  // Solvinkelns fordringar mot projekten = saldot på Lån Solvinkeln i varje projekt (Lån-fliken).
+  const pw = document.getElementById('ekoKoncernFordranProjekt');
+  if(pw){
+    pw.innerHTML = '';
+    const t = document.createElement('table');
+    t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
+    t.innerHTML = '<thead><tr><th style="text-align:left;">Projekt</th><th style="text-align:left;">Status</th><th>Fordran (saldo idag)</th><th>Upplupen ränta</th><th>Ränta</th><th style="text-align:left;">Förfallodatum</th></tr></thead>';
+    const tb = document.createElement('tbody');
+    let sum = 0, sumR = 0, n = 0;
+    ekonomiSortedProjects().forEach(p => {
+      const saldo = ekonomiLanSaldo(p.id, 'lanSolvinkeln');
+      const d = ekonomiLanDetalj(p.id, 'lanSolvinkeln', false);
+      if(!saldo && !(d && d.tx.length)) return;
+      const upp = d ? ekonomiLanUpplupen(d) : { belopp: 0, ranta: 0 };
+      const forfall = (companyEkonomiData.lan[p.id] || {}).lanSolvinkelnForfallodatum || '';
+      sum += saldo; sumR += upp.belopp; n++;
+      const tr = document.createElement('tr');
+      tr.className = 'home-list-row';
+      tr.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td><td style="font-weight:600;">' + formatKrFull(saldo) + '</td><td>' + formatKrFull(Math.round(upp.belopp)) + '</td><td>' + (upp.ranta ? upp.ranta + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>';
+      tr.onclick = () => { currentEkonomiLanKey = 'lanSolvinkeln'; openEkonomiProjektLan(p); };
+      tb.appendChild(tr);
+    });
+    const tot = document.createElement('tr');
+    tot.className = 'eko-row-resultat';
+    tot.innerHTML = '<td style="text-align:left;">Summa (' + n + ' projekt)</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(Math.round(sumR)) + '</td><td></td><td></td>';
+    tb.appendChild(tot);
+    t.appendChild(tb);
+    pw.appendChild(t);
+  }
   const list = ekonomiKoncernList('_fordringar');
   const tbody = document.getElementById('ekoKoncernFordranBody');
   tbody.innerHTML = '';
