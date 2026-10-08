@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008133435';
+const APP_BUILD = '20261008134118';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4654,6 +4654,64 @@ function ekonomiForsaljningPdfPage(doc, pid){
     styles: { fontSize: 7, cellPadding: 1.2, halign: 'center', textColor: 30 }, headStyles: { fillColor: [58, 44, 32], textColor: 255, fontSize: 7 }, columnStyles: { 0: { halign: 'left' } }, margin: { left: 12, right: 12 },
     didParseCell: h => { const p = pts[h.row.index]; if(h.section === 'body' && p && (h.column.index === 1 || h.column.index === 4) && p.planN && !p.n && !p.kr) h.cell.styles.textColor = [178, 58, 58]; } });
 }
+// Fördela en kostnadspost i prognosen: jämnt (kvar att fördela över N månader) eller
+// ett fast belopp per månad under N månader från vald månad.
+function showEkonomiFordelaPopup(pid, post, kvar, obetaltSum, months, prog){
+  const attFordela = Math.max(0, kvar - obetaltSum);
+  const p = ekoPopup({ title: 'Fördela: ' + post.namn, sub: 'Kvar att fördela ' + formatKrFull(attFordela) + (obetaltSum ? ' (efter obetalda fakturor ' + formatKrFull(obetaltSum) + ')' : '') + '. Välj hur beloppen ska läggas ut i månaderna.', maxWidth: 560 });
+  const mk = (tag, css) => { const el = document.createElement(tag); if(css) el.style.cssText = css; return el; };
+  const monthSel = () => { const s = mk('select'); s.className = 'eko-inline-select'; s.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join(''); return s; };
+  const numInp = (val, ph, w) => { const i = mk('input', 'width:' + (w || 90) + 'px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;'); i.type = 'number'; i.value = val; i.placeholder = ph || ''; return i; };
+  const row = (labelText, els) => { const r = mk('div', 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 12px;'); const l = mk('span', 'font-size:12.5px; color:var(--ink-soft); min-width:110px;'); l.textContent = labelText; r.appendChild(l); els.forEach(e => r.appendChild(e)); return r; };
+  const apply = async (from, n, fn) => {
+    const startIdx = months.indexOf(from);
+    if(startIdx < 0){ showToast('Från-månaden ligger utanför prognosen.'); return; }
+    if(!n || n < 1){ showToast('Ange antal månader.'); return; }
+    const slice = months.slice(startIdx, startIdx + n);
+    fn(slice);
+    await saveEkonomiPrognos();
+    p.close();
+    renderEkonomiPrognos();
+  };
+  // Alternativ 1: jämnt
+  const h1 = mk('div', 'font-weight:700; margin-top:4px;'); h1.textContent = 'Fördela jämnt';
+  const s1 = mk('div', 'font-size:12px; color:var(--ink-soft);'); s1.textContent = formatKrFull(attFordela) + ' delas lika över månaderna (ersätter tidigare fördelning på posten).';
+  const from1 = monthSel(); from1.value = prog.start;
+  const n1 = numInp(6, 'mån', 70);
+  const b1 = ekoSmallBtn('Fördela jämnt', () => apply(from1.value, parseInt(n1.value, 10), slice => {
+    const perM = Math.round(attFordela / slice.length);
+    const cells = prog.celler[post.id] = {};
+    slice.forEach((m, i) => { cells[m] = i === slice.length - 1 ? attFordela - perM * (slice.length - 1) : perM; });
+  }));
+  b1.style.cssText += 'background:var(--blue); color:#fff; border-color:var(--blue);';
+  p.body.appendChild(h1); p.body.appendChild(s1);
+  p.body.appendChild(row('Från månad', [from1, mk('span', 'font-size:12.5px; color:var(--ink-soft);'), n1, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'månader'; return t; })(), b1]));
+  // Alternativ 2: fast belopp per månad
+  const h2 = mk('div', 'font-weight:700; margin-top:10px; padding-top:12px; border-top:1px solid var(--line-soft);'); h2.textContent = 'Fast belopp per månad';
+  const s2 = mk('div', 'font-size:12px; color:var(--ink-soft);'); s2.textContent = 'Samma belopp bokas varje månad under valt antal månader från vald månad. Andra månader på posten rörs inte.';
+  const bel = numInp('', 'kr per månad', 130);
+  const from2 = monthSel(); from2.value = prog.start;
+  const n2 = numInp(12, 'mån', 70);
+  const sum2 = mk('span', 'font-size:12px; color:var(--ink-soft);');
+  const upd = () => { const b = parseFloat(String(bel.value).replace(',', '.')) || 0, n = parseInt(n2.value, 10) || 0; sum2.textContent = b && n ? '= ' + formatKrFull(b * n) + ' totalt' : ''; };
+  bel.oninput = upd; n2.oninput = upd;
+  const b2 = ekoSmallBtn('Boka belopp', () => {
+    const b = parseFloat(String(bel.value).replace(',', '.'));
+    if(!b){ showToast('Ange belopp per månad.'); return; }
+    return apply(from2.value, parseInt(n2.value, 10), slice => {
+      const cells = prog.celler[post.id] || (prog.celler[post.id] = {});
+      slice.forEach(m => { cells[m] = b; });
+    });
+  });
+  b2.style.cssText += 'background:var(--blue); color:#fff; border-color:var(--blue);';
+  p.body.appendChild(h2); p.body.appendChild(s2);
+  p.body.appendChild(row('Belopp', [bel, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'kr/mån'; return t; })()]));
+  p.body.appendChild(row('Från månad', [from2, n2, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'månader'; return t; })(), sum2, b2]));
+  // Rensa
+  const clr = ekoSmallBtn('Rensa fördelningen på posten', async () => { delete prog.celler[post.id]; await saveEkonomiPrognos(); p.close(); renderEkonomiPrognos(); }, true);
+  const cw = mk('div', 'margin-top:8px; padding-top:10px; border-top:1px solid var(--line-soft);'); cw.appendChild(clr);
+  p.body.appendChild(cw);
+}
 // Kvar att fördela för en kostnadspost (budget − tagna − det som ligger i prognosen).
 function showEkonomiPostKvarPopup(post, t, pp, months, prog){
   const tagna = t.reskontra + t.mark;
@@ -4924,26 +4982,10 @@ function renderEkonomiPrognos(){
       nameSpan.title = restEfter < -0.5 ? 'Över budget med ' + formatKrFull(-restEfter) : (restEfter > 0.5 ? 'Kvar att fördela ' + formatKrFull(restEfter) : 'Helt fördelad enligt budget');
       const spread = document.createElement('button');
       spread.type = 'button';
-      spread.textContent = 'Fördela jämnt';
-      spread.title = 'Fördela det som är kvar jämnt över ett antal månader';
+      spread.textContent = 'Fördela…';
+      spread.title = 'Fördela jämnt eller boka ett fast belopp per månad';
       spread.style.cssText = 'font-size:10px; padding:1px 6px; border:1px solid var(--line-soft); background:#fff; border-radius:4px; cursor:pointer; color:var(--ink-soft); margin-left:6px;';
-      spread.onclick = async () => {
-        const attFordela = Math.max(0, kvar - obetaltSum);
-        const raw = prompt('Fördela ' + formatKrFull(attFordela) + ' (kvar att fördela' + (obetaltSum ? ', efter obetalda fakturor ' + formatKrFull(obetaltSum) : '') + ') jämnt.\n\nAnge från-månad och antal månader, t.ex. "2026-11, 6" (tomt = från startmånaden).', prog.start + ', 6');
-        if(raw === null) return;
-        const mm = raw.match(/(\d{4}-\d{2})?\D*(\d+)\s*$/);
-        const from = mm && mm[1] ? mm[1] : prog.start;
-        const n = mm ? parseInt(mm[2], 10) : NaN;
-        if(!n || n < 1){ showToast('Ange antal månader.'); return; }
-        const startIdx = months.indexOf(from);
-        if(startIdx < 0){ showToast('Från-månaden ligger utanför prognosen.'); return; }
-        const slice = months.slice(startIdx, startIdx + n);
-        const perM = Math.round(attFordela / slice.length);
-        const cells = prog.celler[post.id] = {};
-        slice.forEach((m, i) => { cells[m] = i === slice.length - 1 ? attFordela - perM * (slice.length - 1) : perM; });
-        await saveEkonomiPrognos();
-        renderEkonomiPrognos();
-      };
+      spread.onclick = () => showEkonomiFordelaPopup(pid, post, kvar, obetaltSum, months, prog);
       nameWrap.appendChild(spread);
       const monthCells = months.map(m => {
         const td = document.createElement('span');
