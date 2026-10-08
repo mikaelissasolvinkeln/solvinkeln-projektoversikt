@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008154316';
+const APP_BUILD = '20261008160848';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1622,7 +1622,44 @@ function ekonomiKoncernRec(key){
 async function saveEkonomiKoncern(){
   try{ await DB.setPersonalData(EKONOMI_KEYS.koncern, JSON.stringify(companyEkonomiData.koncern || {})); }catch(e){ showDebugError('Kunde inte spara koncernlikviditeten', e); }
 }
-function renderEkonomiKoncern(){
+// Ett projekts likviditet per månad enligt dess likviditetsprognos (samma underlag som
+// Likviditet-raden i prognosvyn): ingående likviditet + inbetalningar − utbetalningar.
+// Används i Koncern för de gemensamma (JV-)projekten. Räknar från projektets startmånad
+// så att saldot är rätt även om koncernvyn börjar en annan månad.
+async function ekonomiPrognosLikviditetPerManad(pid, wantedMonths){
+  if(!ekonomiPrognosAptsCache[pid]){
+    try{ const raw = await fetchApartmentsRaw(pid); ekonomiPrognosAptsCache[pid] = raw.apartments.map(normalizeApartment); }catch(e){ ekonomiPrognosAptsCache[pid] = []; }
+  }
+  const prog = ekonomiPrognosRec(pid);
+  const start = prog.start < wantedMonths[0] ? prog.start : wantedMonths[0];
+  const end = wantedMonths[wantedMonths.length - 1];
+  const months = ekonomiPrognosMonths(start, 1);
+  while(months[months.length - 1] < end) months.push(ekonomiPrognosMonths(months[months.length - 1], 2)[1]);
+  const { per } = ekonomiPrognosData(pid);
+  const inb = ekonomiPrognosInbetalningar(pid, start, months);
+  const struktur = ekonomiBudgetStruktur(pid);
+  const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
+  const ranta = lanFields.map(f => ekonomiPrognosRanta(pid, f.key, months));
+  const out = {};
+  let saldo = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
+  months.forEach(m => {
+    let inn = inb.insatser.per[m] || 0;
+    inb.lan.forEach(l => { inn += l.per[m] || 0; });
+    inn += inb.foreningslan.per[m] || 0;
+    (inb.ovriga || []).forEach(o => { inn += o.per[m] || 0; });
+    let ut = 0;
+    struktur.kostnadsgrupper.forEach(g => g.poster.forEach(post => {
+      const cells = prog.celler[post.id] || {};
+      const e = per[post.id];
+      ut += (cells[m] || 0) + (e && e.obetalt[m] ? e.obetalt[m] : 0);
+    }));
+    ranta.forEach(r => { ut += r.per[m] || 0; });
+    saldo += inn - ut;
+    out[m] = saldo;
+  });
+  return out;
+}
+async function renderEkonomiKoncern(){
   const wrap = document.getElementById('ekoKoncernWrap');
   const ctl = document.getElementById('ekoKoncernControls');
   if(!wrap || !ctl) return;
@@ -1653,27 +1690,31 @@ function renderEkonomiKoncern(){
   const sel = per.querySelector('select'); sel.value = String(antal);
   sel.onchange = async () => { uiPrefs.koncernManader = parseInt(sel.value, 10); await saveUiPrefs(); renderEkonomiKoncern(); };
   ctl.appendChild(per);
-  const info = document.createElement('span'); info.className = 'eko-sub'; info.style.margin = '0';
-  info.textContent = 'Belopp i tkr · plus = pengar in till aktören (återbetalning), minus = pengar ut (utökning av lån). Röda belopp är preliminära. Egna poster skrivs direkt i cellerna (minus för utbetalning).';
-  ctl.appendChild(info);
+  const unit = document.createElement('span'); unit.className = 'eko-sub'; unit.style.margin = '0'; unit.textContent = 'tkr';
+  ctl.appendChild(unit);
 
-  // Underlag: lånerader per projekt för valda aktörer.
+  // Underlag: lånerader per projekt för valda aktörer (ur aktörens perspektiv:
+  // utökning = pengar ut = fordran ökar, återbetalning = pengar in = fordran minskar).
   const perAktor = {};
   valda.forEach(k => { perAktor[k] = []; });
+  const perProjekt = {}; // pid -> { p, aktorer: { key: row } }
   ekonomiSortedProjects().forEach(p => {
     const inb = ekonomiPrognosInbetalningar(p.id, start, months);
     inb.lan.forEach(l => {
       if(!perAktor[l.key]) return;
-      const flow = {}; let any = false;
+      const flow = {}; let any = !!l.ib;
       months.forEach(m => { const v = -(l.per[m] || 0); flow[m] = v; if(v) any = true; });
-      if(any) perAktor[l.key].push({ p, l, flow });
+      if(!any) return;
+      const row = { p, l, flow, ib: l.ib || 0 };
+      perAktor[l.key].push(row);
+      (perProjekt[p.id] = perProjekt[p.id] || { p, aktorer: {} }).aktorer[l.key] = row;
     });
   });
 
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
-  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post</th><th style="text-align:center;">Ingående kassa</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;">Summa</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post</th><th style="text-align:center;">Ingående fordran</th><th style="text-align:center;">Ingående kassa</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;">Summa</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
   const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
@@ -1695,17 +1736,19 @@ function renderEkonomiKoncern(){
     return tr;
   };
   const sumCell = v => { const s = document.createElement('span'); s.textContent = tkr(v) || (v === 0 ? '0' : ''); if(v < 0) s.style.color = 'var(--danger)'; return s; };
+  const sectionRow = text => { const tr = addRow(text, ['', ''].concat(months.map(() => ''), ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' }); tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;'; return tr; };
   const blanks = months.map(() => '');
   const total = {}; months.forEach(m => { total[m] = 0; });
-  let totalIngaende = 0;
-  EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).forEach(a => {
+  let totalIngaende = 0, totalFordranIb = 0;
+  const aktorerValda = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key));
+  aktorerValda.forEach(a => {
     const rec = ekonomiKoncernRec(a.key);
     const rows = perAktor[a.key];
-    // Rubrikrad med ingående kassa (redigerbar).
+    const fordranIb = rows.reduce((s, r) => s + r.ib, 0);
     const ibEl = document.createElement('div'); ibEl.style.minWidth = '80px';
     likviditetsbudgetEditableCell(ibEl, rec.ingaende || 0, async (val) => { rec.ingaende = val || 0; await saveEkonomiKoncern(); renderEkonomiKoncern(); }, cellOpts);
     ibEl.title = 'Ingående kassa för ' + a.namn + ' (klicka för att ändra)';
-    const tr = addRow(a.namn, [ibEl].concat(blanks, ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    const tr = addRow(a.namn, [sumCell(fordranIb), ibEl].concat(blanks, ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
     tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;';
     const sum = {}; months.forEach(m => { sum[m] = 0; });
     rows.forEach(r => {
@@ -1719,10 +1762,9 @@ function renderEkonomiKoncern(){
         sum[m] += v;
         return sp;
       });
-      addRow(r.p.name, [''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
+      addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
     });
-    if(!rows.length) addRow('Inga lånerörelser i perioden', [''].concat(blanks, ['']), { small: true, indent: 18 });
-    // Egna poster: namn (klick = byt namn), ✕, redigerbara celler per månad.
+    if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
     rec.poster.forEach(post => {
       const name = document.createElement('span');
       name.textContent = post.namn || 'Egen post';
@@ -1741,23 +1783,45 @@ function renderEkonomiKoncern(){
         sum[m] += v || 0;
         return el;
       });
-      addRow(lblEl, [''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+      addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
     });
     const addBtn = document.createElement('button');
     addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
     addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
     addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {} }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
-    addRow(addBtn, [''].concat(blanks, ['']), { indent: 18 });
+    addRow(addBtn, ['', ''].concat(blanks, ['']), { indent: 18 });
     months.forEach(m => { total[m] += sum[m]; });
-    totalIngaende += rec.ingaende || 0;
-    addRow('Summa ' + a.namn, [''].concat(months.map(m => sumCell(sum[m])), [sumCell(months.reduce((s, m) => s + sum[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    totalIngaende += rec.ingaende || 0; totalFordranIb += fordranIb;
+    addRow('Summa ' + a.namn, ['', ''].concat(months.map(m => sumCell(sum[m])), [sumCell(months.reduce((s, m) => s + sum[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    // Utestående fordran: IB-fordran − lånerörelser (minus = utökning ökar fordran, plus = återbetalning minskar den).
+    let fordran = fordranIb;
+    const lanSum = {}; months.forEach(m => { lanSum[m] = rows.reduce((s, r) => s + r.flow[m], 0); });
+    addRow('Utestående fordran ' + a.namn, [sumCell(fordranIb), ''].concat(months.map(m => { fordran -= lanSum[m]; return sumCell(fordran); }), ['']), { bold: true });
     let acc = rec.ingaende || 0;
-    addRow('Likviditet ' + a.namn + ' (ingående kassa + ackumulerat)', [sumCell(rec.ingaende || 0)].concat(months.map(m => { acc += sum[m]; return sumCell(acc); }), ['']), { bold: true });
+    addRow('Likviditet ' + a.namn, ['', sumCell(rec.ingaende || 0)].concat(months.map(m => { acc += sum[m]; return sumCell(acc); }), ['']), { bold: true });
   });
   if(valda.length > 1){
-    addRow('Totalt valda aktörer', [''].concat(months.map(m => sumCell(total[m])), [sumCell(months.reduce((s, m) => s + total[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    addRow('Totalt valda aktörer', ['', ''].concat(months.map(m => sumCell(total[m])), [sumCell(months.reduce((s, m) => s + total[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
     let acc = totalIngaende;
-    addRow('Likviditet totalt', [sumCell(totalIngaende)].concat(months.map(m => { acc += total[m]; return sumCell(acc); }), ['']), { bold: true });
+    addRow('Likviditet totalt', ['', sumCell(totalIngaende)].concat(months.map(m => { acc += total[m]; return sumCell(acc); }), ['']), { bold: true });
+  }
+  // Gemensamma projekt: projekt där minst två av de valda aktörerna har skjutit in pengar.
+  // Per projekt: vad respektive part har ute (fordran), och projektets egen likviditet enligt dess prognos.
+  const gemensamma = Object.values(perProjekt).filter(x => Object.keys(x.aktorer).length >= 2);
+  if(valda.length > 1 && gemensamma.length){
+    sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')');
+    for(const g of gemensamma){
+      addRow(g.p.name, ['', ''].concat(blanks, ['']), { bold: true });
+      let fordranTot = 0;
+      aktorerValda.forEach(a => {
+        const r = g.aktorer[a.key];
+        if(!r) return;
+        let f = r.ib; fordranTot += r.ib;
+        addRow('Insatt ' + a.namn + ' (fordran)', [sumCell(r.ib), ''].concat(months.map(m => { f -= r.flow[m]; return sumCell(f); }), ['']), { indent: 18 });
+      });
+      const likv = await ekonomiPrognosLikviditetPerManad(g.p.id, months);
+      addRow('Projektets likviditet enligt prognosen', ['', ''].concat(months.map(m => sumCell(likv[m] || 0)), ['']), { indent: 18, small: true });
+    }
   }
   wrap.innerHTML = '';
   if(!valda.length){ wrap.innerHTML = '<p class="eko-sub">Välj minst en aktör.</p>'; return; }
