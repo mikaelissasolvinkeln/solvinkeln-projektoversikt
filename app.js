@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008152432';
+const APP_BUILD = '20261008153809';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2148,6 +2148,7 @@ function renderEkonomiBudgetList(){
     row.className = 'home-list-row';
     row.innerHTML =
       '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td>' +
       '<td>' + formatMSEK(budget) + '</td>' +
       '<td>' + formatMSEK(utfall) + '</td>' +
       '<td class="' + (bVinst != null && bVinst < 0 ? 'eko-diff-negative' : '') + '">' + (bVinst != null ? formatMSEK(bVinst) : '—') + '</td>' +
@@ -2158,7 +2159,7 @@ function renderEkonomiBudgetList(){
   const totalRow = document.createElement('tr');
   totalRow.className = 'eko-row-resultat';
   totalRow.innerHTML =
-    '<td>Totalt</td><td>' + formatMSEK(totalBudget) + '</td><td>' + formatMSEK(totalUtfall) + '</td>' +
+    '<td>Totalt</td><td></td><td>' + formatMSEK(totalBudget) + '</td><td>' + formatMSEK(totalUtfall) + '</td>' +
     '<td>' + formatMSEK(totalVinst) + '</td>' +
     '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(totalDiff) + '</td>';
   tbody.appendChild(totalRow);
