@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008124205';
+const APP_BUILD = '20261008124811';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4460,7 +4460,7 @@ function renderEkonomiForsaljning(){
   wrap.appendChild(holder);
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
-  table.style.cssText = 'width:100%; margin-top:12px;';
+  table.style.cssText = 'width:100%; margin-top:12px; white-space:nowrap;';
   table.innerHTML = '<thead><tr><th style="text-align:left;">Månad</th><th>Sålda enheter</th><th>Ackumulerat</th><th>Andel enheter</th><th>Insatser (sålt)</th><th>Andel av insatser</th></tr></thead>';
   const tb = document.createElement('tbody');
   pts.forEach(p => {
@@ -4471,7 +4471,8 @@ function renderEkonomiForsaljning(){
     tb.appendChild(tr);
   });
   table.appendChild(tb);
-  wrap.appendChild(table);
+  const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(table);
+  wrap.appendChild(scroll);
 }
 // Försäljningsprognosen som sida 2 i PDF:en.
 function ekonomiForsaljningPdfPage(doc, pid){
