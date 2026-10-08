@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261008151141">
+<meta name="app-build" content="20261008152054">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1021,17 +1021,14 @@
       <h2 class="project-header-name">Ekonomi</h2>
     </div>
 
-    <div class="sub-tabs" id="ekonomiSubTabsBar" style="margin-bottom:16px;">
+    <div class="sub-tabs" id="ekonomiSubTabsBar" style="margin-bottom:10px;">
       <button class="ekonomi-sub-tab active" data-ekonomi-view="oversikt">Översikt</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="projekt">Projekt</button>
-      <button class="ekonomi-sub-tab" data-ekonomi-view="budget">Budget/förväntad vinst</button>
-      <button class="ekonomi-sub-tab" data-ekonomi-view="mark">Mark</button>
-      <button class="ekonomi-sub-tab" data-ekonomi-view="likviditet">Likviditet</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="koncern">Koncern</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="lan">Lån</button>
-      <button class="ekonomi-sub-tab" data-ekonomi-view="koncern">Koncernlikviditet</button>
-      <button class="ekonomi-sub-tab" data-ekonomi-view="vinstsolvinkeln">Förväntad vinst Solvinkeln</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="nyaprojekt">Nya projekt</button>
     </div>
+    <div class="sub-tabs" id="ekonomiSubTabsBar2" style="margin:0 0 16px; display:none; font-size:12px;"></div>
 
     <div id="ekonomiOversiktView">
       <div class="home-grid">
@@ -1212,6 +1209,30 @@
           <tbody id="ekonomiVinstSolvinkelnBody"></tbody>
         </table>
       </div>
+    </div>
+
+    <div id="ekonomiKoncernFordranView" style="display:none;">
+      <p class="eko-sub" style="margin:0 0 10px;">Koncernens fordringar: vem som är skyldig, belopp och när det förfaller.</p>
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <colgroup><col style="width:28%;"><col><col style="width:170px;"><col><col style="width:44px;"></colgroup>
+          <thead><tr><th style="text-align:left;">Motpart</th><th>Belopp</th><th style="text-align:left;">Förfallodatum</th><th style="text-align:left;">Anteckning</th><th></th></tr></thead>
+          <tbody id="ekoKoncernFordranBody"></tbody>
+        </table>
+      </div>
+      <button id="ekoKoncernFordranAdd" class="add-inline-btn" style="margin-top:8px;">+ Lägg till fordran</button>
+    </div>
+
+    <div id="ekonomiKoncernLanView" style="display:none;">
+      <p class="eko-sub" style="margin:0 0 10px;">Koncernens lån: långivare, lånebelopp, räntebelopp per år och förfallodatum.</p>
+      <div class="table-scroll">
+        <table class="eko-compare-table" style="width:100%;">
+          <colgroup><col style="width:24%;"><col><col><col style="width:170px;"><col><col style="width:44px;"></colgroup>
+          <thead><tr><th style="text-align:left;">Långivare</th><th>Belopp</th><th>Räntebelopp (kr/år)</th><th style="text-align:left;">Förfallodatum</th><th style="text-align:left;">Anteckning</th><th></th></tr></thead>
+          <tbody id="ekoKoncernLanBody"></tbody>
+        </table>
+      </div>
+      <button id="ekoKoncernLanAdd" class="add-inline-btn" style="margin-top:8px;">+ Lägg till lån</button>
     </div>
 
     <div id="ekonomiNyaProjektListView" style="display:none;">
@@ -2549,7 +2570,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261008151141"></script>
-<script src="app.js?v=20261008151141"></script>
+<script src="db.js?v=20261008152054"></script>
+<script src="app.js?v=20261008152054"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008151141';
+const APP_BUILD = '20261008152054';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1439,9 +1439,118 @@ async function openCompanyEkonomi(){
   setEkonomiSubView(ekonomiSubView || 'oversikt');
 }
 
+// ---------- Ekonomi: huvudflikar med underflikar ----------
+// Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
+const EKONOMI_TAB_GROUPS = {
+  projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
+  koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån']]
+};
+function ekonomiTabGroupOf(view){
+  return Object.keys(EKONOMI_TAB_GROUPS).find(g => EKONOMI_TAB_GROUPS[g].some(x => x[0] === view)) || null;
+}
+function ekonomiRenderSubTabs2(view, group){
+  const bar = document.getElementById('ekonomiSubTabsBar2');
+  if(!bar) return;
+  bar.innerHTML = '';
+  if(!group){ bar.style.display = 'none'; return; }
+  EKONOMI_TAB_GROUPS[group].forEach(([v, label]) => {
+    const b = document.createElement('button');
+    b.className = 'ekonomi-sub-tab' + (v === view ? ' active' : '');
+    b.dataset.ekonomiView = v;
+    b.textContent = label;
+    b.onclick = () => setEkonomiSubView(v);
+    bar.appendChild(b);
+  });
+  bar.style.display = document.getElementById('ekonomiSubTabsBar').style.display === 'none' ? 'none' : 'flex';
+}
+
+// ---------- Koncern: fordringar och lån på koncernnivå ----------
+// companyEkonomiData.koncern._fordringar = [{ id, motpart, belopp, forfallodatum, anteckning }]
+// companyEkonomiData.koncern._lan = [{ id, langivare, belopp, rantebelopp, forfallodatum, anteckning }]
+function ekonomiKoncernList(key){
+  if(!companyEkonomiData.koncern) companyEkonomiData.koncern = {};
+  if(!Array.isArray(companyEkonomiData.koncern[key])) companyEkonomiData.koncern[key] = [];
+  return companyEkonomiData.koncern[key];
+}
+function ekonomiKoncernTextCell(td, value, onSave, placeholder){
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'eko-inline-input'; inp.style.textAlign = 'left';
+  inp.value = value || ''; inp.placeholder = placeholder || '';
+  inp.onchange = () => onSave(inp.value.trim());
+  td.appendChild(inp);
+}
+function ekonomiKoncernDateCell(td, value, onSave){
+  const inp = document.createElement('input');
+  inp.type = 'date'; inp.className = 'eko-inline-input'; inp.style.cssText = 'text-align:left; width:150px;';
+  inp.value = value || '';
+  inp.onchange = () => onSave(inp.value);
+  td.appendChild(inp);
+}
+function renderEkonomiKoncernFordran(){
+  const list = ekonomiKoncernList('_fordringar');
+  const tbody = document.getElementById('ekoKoncernFordranBody');
+  tbody.innerHTML = '';
+  let sum = 0;
+  list.forEach(f => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernTextCell(tr.children[0], f.motpart, async v => { f.motpart = v; await saveEkonomiKoncern(); }, 'Motpart');
+    likviditetsbudgetEditableCell(tr.children[1], f.belopp || null, async v => { f.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernFordran(); });
+    ekonomiKoncernDateCell(tr.children[2], f.forfallodatum, async v => { f.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[3], f.anteckning, async v => { f.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
+    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?')) return; companyEkonomiData.koncern._fordringar = list.filter(x => x.id !== f.id); await saveEkonomiKoncern(); renderEkonomiKoncernFordran(); };
+    tr.children[4].appendChild(del);
+    sum += f.belopp || 0;
+    tbody.appendChild(tr);
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td>' + formatKrFull(sum) + '</td><td></td><td></td><td></td>';
+  tbody.appendChild(tot);
+}
+function renderEkonomiKoncernLan(){
+  const list = ekonomiKoncernList('_lan');
+  const tbody = document.getElementById('ekoKoncernLanBody');
+  tbody.innerHTML = '';
+  let sum = 0, sumRanta = 0;
+  list.forEach(l => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
+    likviditetsbudgetEditableCell(tr.children[1], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    likviditetsbudgetEditableCell(tr.children[2], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    ekonomiKoncernDateCell(tr.children[3], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[4], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
+    del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+    tr.children[5].appendChild(del);
+    sum += l.belopp || 0; sumRanta += l.rantebelopp || 0;
+    tbody.appendChild(tr);
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
+  tbody.appendChild(tot);
+}
+document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
+  ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', belopp: 0, forfallodatum: '', anteckning: '' });
+  await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
+};
+document.getElementById('ekoKoncernLanAdd').onclick = async () => {
+  ekonomiKoncernList('_lan').push({ id: uid(), langivare: '', belopp: 0, rantebelopp: 0, forfallodatum: '', anteckning: '' });
+  await saveEkonomiKoncern(); renderEkonomiKoncernLan();
+};
+
 function setEkonomiSubView(view){
   ekonomiSubView = view;
-  document.querySelectorAll('.ekonomi-sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.ekonomiView === view));
+  const tabGroup = ekonomiTabGroupOf(view);
+  document.querySelectorAll('#ekonomiSubTabsBar .ekonomi-sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.ekonomiView === view || (!!tabGroup && btn.dataset.ekonomiView === tabGroup)));
+  ekonomiRenderSubTabs2(view, tabGroup);
+  document.getElementById('ekonomiKoncernFordranView').style.display = view === 'koncernfordran' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernLanView').style.display = view === 'koncernlan' ? 'block' : 'none';
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
@@ -1462,6 +1571,8 @@ function setEkonomiSubView(view){
   else if(view === 'nyaprojekt') loadNyaProjektList();
   else if(view === 'likviditet') renderEkonomiLikviditetList();
   else if(view === 'koncern') renderEkonomiKoncern();
+  else if(view === 'koncernfordran') renderEkonomiKoncernFordran();
+  else if(view === 'koncernlan') renderEkonomiKoncernLan();
   else renderEkonomiNumberTab(view);
 }
 
@@ -2080,8 +2191,9 @@ async function openEkonomiProjektBudget(project){
   currentEkonomiBudgetProjectId = project.id;
   document.getElementById('ekonomiProjektBudgetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektBudgetView').style.display = 'block';
@@ -2247,6 +2359,7 @@ function openEkonomiProjektMark(project){
   currentEkonomiMarkProjectId = project.id;
   document.getElementById('ekonomiProjektMarkTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
     'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView',
     'ekonomiProjektLikviditetView'].forEach(id => {
@@ -3455,8 +3568,9 @@ function openEkonomiProjektLan(project){
   currentEkonomiLanKey = null;
   document.getElementById('ekonomiProjektLanTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLanView').style.display = 'block';
@@ -3873,8 +3987,9 @@ async function openEkonomiProjektLikviditet(project){
   currentEkonomiLikviditetProjectId = project.id;
   document.getElementById('ekonomiProjektLikviditetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLikviditetView').style.display = 'block';
@@ -8401,7 +8516,7 @@ document.getElementById('goToEkonomiCard').onclick = openCompanyEkonomi;
 document.getElementById('goToEkonomiBtn').onclick = openCompanyEkonomi;
 document.getElementById('backToPersonalFromEkonomiBtn').onclick = openPersonal;
 document.getElementById('ekoKpiAktivaProjektCard').onclick = openHome;
-document.querySelectorAll('.ekonomi-sub-tab').forEach(btn => {
+document.querySelectorAll('#ekonomiSubTabsBar .ekonomi-sub-tab').forEach(btn => {
   btn.onclick = () => setEkonomiSubView(btn.dataset.ekonomiView);
 });
 document.getElementById('ekonomiProjektModalCancel').onclick = () => document.getElementById('ekonomiProjektModalOverlay').classList.remove('open');
