@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008170048';
+const APP_BUILD = '20261008170202';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1974,8 +1974,7 @@ async function renderEkonomiKoncern(){
   }
 }
 
-// ---------- Koncern: PDF-utskrift
- (koncernlikviditet, valfritt Fordran och Lån) ----------
+// ---------- Koncern: PDF-utskrift (koncernlikviditet, gemensamma projekt, valfritt Fordran och Lån) ----------
 // Tabellerna hämtas från det som visas på skärmen (samma siffror, tkr i likviditeten).
 function ekonomiPdfRowsFromTable(table){
   const cellText = td => {
