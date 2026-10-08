@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008164100';
+const APP_BUILD = '20261008164421';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1892,7 +1892,9 @@ async function renderEkonomiKoncern(){
   // aktörerna har pengar ute. Per projekt: status, IB-fordran, och en rad per aktör med
   // rörelserna från projektets likviditetsprognos (utökning/återbetalning av lånet).
   if(valda.length > 1){
-    const gem = Object.values(perProjekt);
+    // Bara projekt som ägs gemensamt: JV-partnern (under Projekt) ska vara en av de valda aktörerna.
+    const partnerKey = name => /derome/i.test(name || '') ? 'lanDerome' : /nbe/i.test(name || '') ? 'lanNBE' : /boro/i.test(name || '') ? 'lanBORO' : null;
+    const gem = ekonomiSortedProjects().filter(p => { const k = partnerKey((companyEkonomiData.meta[p.id] || {}).jvPartner); return k && valda.includes(k); }).map(p => perProjekt[p.id] || { p, aktorer: {} });
     if(gem.length){
       sectionRow('Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')');
       gem.forEach(g => {
@@ -1901,8 +1903,7 @@ async function renderEkonomiKoncern(){
         lblEl.innerHTML = escapeHtml(g.p.name) + ' ' + homeStatusPillHtml(g.p.status || 'Pågående');
         addRow(lblEl, [sumCell(ibTot), ''].concat(blanks, ['']), { bold: true });
         aktorerValda.forEach(a => {
-          const r = g.aktorer[a.key];
-          if(!r) return;
+          const r = g.aktorer[a.key] || { ib: 0, flow: {}, l: { planerade: {}, items: {} } };
           let f = r.ib;
           const cells = months.map(m => {
             const v = r.flow[m];
@@ -8009,6 +8010,48 @@ document.getElementById('nyaProjektAddBostadBtn').onclick = async () => {
   renderNyaProjektList();
 };
 
+// Kalkyl -> befintligt projekt: kalkylens poster läggs in i projektets budget. Poster som
+// saknas läggs till, tomma belopp fylls i, och där projektet redan har ett annat belopp
+// frågas det om det ska skrivas över. Samma för budgeterad intäkt och föreningslån.
+async function ekonomiKalkylMergeIntoProjekt(candidate, pid){
+  const d = migrateNyaProjektData(candidate.data);
+  const detail = ekonomiBudgetDetail(pid);
+  const st = ekonomiBudgetStruktur(pid);
+  const norm = s => nyaProjektNormName(String(s || ''));
+  const posts = []; st.kostnadsgrupper.forEach(g => g.poster.forEach(p => posts.push({ p, g })));
+  let added = 0, filled = 0, replaced = 0, kept = 0;
+  (d.kostnadsgrupper || []).filter(g => !g.oplacerade).forEach(kg => {
+    let g = st.kostnadsgrupper.find(x => norm(x.grupp) === norm(kg.grupp));
+    if(!g){ g = { id: uid(), grupp: kg.grupp, underkategorier: [], poster: [] }; st.kostnadsgrupper.push(g); }
+    (kg.poster || []).forEach(kp => {
+      if(!(kp.namn || '').trim() || /^mark - /i.test(kp.namn)) return;
+      const val = kp.belopp != null ? kp.belopp : null;
+      const hit = posts.find(x => norm(x.p.namn) === norm(kp.namn));
+      if(!hit){
+        const np = { id: uid(), namn: kp.namn.trim(), budget: val, underkategori: null };
+        if(kp.perBostad != null){ np.perBostad = kp.perBostad; np.perBostadAntal = kp.perBostadAntal; }
+        g.poster.push(np); posts.push({ p: np, g }); added++; return;
+      }
+      if(val == null || val === 0) return;
+      if(!hit.p.budget){ hit.p.budget = val; filled++; return; }
+      if(Math.abs(hit.p.budget - val) < 0.5){ kept++; return; }
+      if(confirm('Posten "' + hit.p.namn + '" har redan budget ' + formatKrFull(hit.p.budget) + ' i projektet. Skriva över med kalkylens ' + formatKrFull(val) + '?')){ hit.p.budget = val; replaced++; } else kept++;
+    });
+  });
+  const tot = nyaProjektTotals(d);
+  const flRow = nyaProjektForeningslanRow(d);
+  const fl = flRow && flRow.belopp ? parseFloat(flRow.belopp) || 0 : 0;
+  const askSet = (label, cur, val, set) => {
+    if(!val) return;
+    if(!cur){ set(val); filled++; return; }
+    if(Math.abs(cur - val) < 0.5) return;
+    if(confirm(label + ' är ' + formatKrFull(cur) + ' i projektet. Skriva över med kalkylens ' + formatKrFull(val) + '?')){ set(val); replaced++; } else kept++;
+  };
+  askSet('Budgeterad intäkt', detail.budgetIntakt, tot.totalIntakter, v => { detail.budgetIntakt = v; });
+  askSet('Föreningslån', detail.foreningslan, fl, v => { detail.foreningslan = v; });
+  await saveEkonomiBudgetDetalj();
+  return { added, filled, replaced, kept };
+}
 document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate || candidate.status === 'promoted') return;
@@ -8056,7 +8099,11 @@ document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
       showDebugError('Kunde inte spara att projektet omvandlats', e);
     }
     p.close();
-    showToast(r1.checked ? 'Skapat som projekt: ' + name : 'Kalkylen kopplad till ' + name);
+    if(r1.checked) showToast('Skapat som projekt: ' + name);
+    else {
+      try{ const r = await ekonomiKalkylMergeIntoProjekt(candidate, pid); showToast('Kalkylen inlagd i ' + name + ': ' + r.added + ' nya poster, ' + r.filled + ' ifyllda, ' + r.replaced + ' ersatta, ' + r.kept + ' behållna.'); }
+      catch(e){ showDebugError('Kunde inte lägga in kalkylen i projektet', e); }
+    }
     renderNyaProjektDetail();
     renderNyaProjektList();
   };
