@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008105830';
+const APP_BUILD = '20261008124205';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4385,8 +4385,8 @@ function ekonomiForsaljningsData(pid){
     const f = ekonomiForsaljningManad(a, prog);
     if(!f.m){ utanDatum++; return; }
     const kr = f.sald ? (parseKr(a.sald.price) || parseKr(a.totalpris) || 0) : (parseKr(a.totalpris) || 0);
-    per[f.m] = per[f.m] || { n: 0, kr: 0, sald: 0 };
-    per[f.m].n++; per[f.m].kr += kr; if(f.sald) per[f.m].sald++;
+    per[f.m] = per[f.m] || { n: 0, kr: 0, planN: 0, planKr: 0 };
+    if(f.sald){ per[f.m].n++; per[f.m].kr += kr; } else { per[f.m].planN++; per[f.m].planKr += kr; }
   });
   const prognosMonths = ekonomiPrognosMonths(prog.start, prog.manader);
   const all = Object.keys(per).concat(prognosMonths).sort();
@@ -4394,13 +4394,15 @@ function ekonomiForsaljningsData(pid){
   const months = ekonomiPrognosMonths(all[0], 1);
   while(months[months.length - 1] < all[all.length - 1]) months.push(ekonomiPrognosMonths(months[months.length - 1], 2)[1]);
   const today = new Date().toISOString().slice(0, 7);
-  let cn = 0, ckr = 0, saldaN = 0, saldaKr = 0;
+  let soldN = 0, soldKr = 0, planN = 0, planKr = 0, saldaKr = 0;
   const pts = months.map(m => {
-    const s = per[m] || { n: 0, kr: 0, sald: 0 };
-    cn += s.n; ckr += s.kr;
-    if(m <= today){ saldaN += s.sald; }
-    apts.forEach(a => { if(a.sald && a.sald.done && (a.sald.at || '').slice(0, 7) === m) saldaKr += parseKr(a.sald.price) || parseKr(a.totalpris) || 0; });
-    return { m, n: s.n, kr: s.kr, cn, ckr, pn: total ? cn / total : 0, pk: totalKr ? ckr / totalKr : 0, prognos: m > today || s.sald < s.n };
+    const s = per[m] || { n: 0, kr: 0, planN: 0, planKr: 0 };
+    soldN += s.n; soldKr += s.kr; planN += s.planN; planKr += s.planKr; saldaKr += s.kr;
+    // Ackumulerat: t.o.m. innevarande månad bara det som faktiskt sålts; framåt läggs det
+    // planerade till (även planerat i tidigare månader som ännu inte sålts).
+    const fut = m > today;
+    const cn = soldN + (fut ? planN : 0), ckr = soldKr + (fut ? planKr : 0);
+    return { m, n: s.n, kr: s.kr, planN: s.planN, planKr: s.planKr, cn, ckr, pn: total ? cn / total : 0, pk: totalKr ? ckr / totalKr : 0, prognos: fut };
   });
   return { pts, total, totalKr, utanDatum, saldaN: apts.filter(a => a.sald && a.sald.done).length, saldaKr };
 }
@@ -4450,7 +4452,7 @@ function renderEkonomiForsaljning(){
   svg.addEventListener('mousemove', e => {
     const r = e.target.closest('rect[data-i]'); if(!r){ tip.style.display = 'none'; return; }
     const p = pts[+r.dataset.i];
-    tip.innerHTML = '<div style="font-weight:700;">' + lbl(p.m) + (p.prognos ? ' · prognos' : '') + '</div>' + p.n + ' ' + (p.prognos ? 'beräknade' : 'sålda') + ' enheter<br>Ackumulerat <b>' + p.cn + ' av ' + D.total + '</b> (' + Math.round(p.pn * 100) + ' %)<br>Insatser ' + (p.ckr / 1e6).toFixed(1) + ' MSEK (' + Math.round(p.pk * 100) + ' %)';
+    tip.innerHTML = '<div style="font-weight:700;">' + lbl(p.m) + (p.prognos ? ' · prognos' : '') + '</div>' + p.n + ' sålda' + (p.planN ? ' <span style="color:var(--danger);">(' + p.planN + ' planerade)</span>' : '') + '<br>Ackumulerat <b>' + p.cn + ' av ' + D.total + '</b> (' + Math.round(p.pn * 100) + ' %)<br>Insatser ' + (p.ckr / 1e6).toFixed(1) + ' MSEK (' + Math.round(p.pk * 100) + ' %)';
     tip.style.display = 'block'; tip.style.left = (e.offsetX + 16) + 'px'; tip.style.top = (e.offsetY - 10) + 'px';
   });
   svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
@@ -4463,8 +4465,9 @@ function renderEkonomiForsaljning(){
   const tb = document.createElement('tbody');
   pts.forEach(p => {
     const tr = document.createElement('tr');
-    const red = p.prognos ? ' style="color:var(--danger); font-size:12.5px; padding:6px 10px;"' : ' style="font-size:12.5px; padding:6px 10px;"';
-    tr.innerHTML = '<td style="font-size:12.5px; padding:6px 10px;">' + lbl(p.m) + (p.prognos ? ' <span style="font-size:10px; color:var(--ink-soft);">prognos</span>' : '') + '</td><td' + red + '>' + p.n + '</td><td style="font-size:12.5px; padding:6px 10px;">' + p.cn + ' av ' + D.total + '</td><td style="font-size:12.5px; padding:6px 10px;">' + Math.round(p.pn * 100) + ' %</td><td' + red + '>' + formatKrFull(p.kr) + '</td><td style="font-size:12.5px; padding:6px 10px;">' + Math.round(p.pk * 100) + ' %</td>';
+    const st = ' style="font-size:12.5px; padding:6px 10px;"';
+    const pl = (v, txt) => v ? ' <span style="color:var(--danger);">(' + txt + ')</span>' : '';
+    tr.innerHTML = '<td' + st + '>' + lbl(p.m) + (p.prognos ? ' <span style="font-size:10px; color:var(--ink-soft);">prognos</span>' : '') + '</td><td' + st + '>' + p.n + pl(p.planN, p.planN) + '</td><td' + st + '>' + p.cn + ' av ' + D.total + '</td><td' + st + '>' + Math.round(p.pn * 100) + ' %</td><td' + st + '>' + formatKrFull(p.kr) + pl(p.planKr, formatKrFull(p.planKr)) + '</td><td' + st + '>' + Math.round(p.pk * 100) + ' %</td>';
     tb.appendChild(tr);
   });
   table.appendChild(tb);
@@ -4499,9 +4502,9 @@ function ekonomiForsaljningPdfPage(doc, pid){
   };
   series('pk', [176, 138, 0], 'insatser', overlap ? 2.5 : 0); series('pn', [47, 95, 143], 'enheter', overlap ? -2.5 : 0);
   doc.autoTable({ startY: Bt + 10, head: [['Månad', 'Sålda enheter', 'Ackumulerat', 'Andel enheter', 'Insatser (sålt)', 'Andel av insatser']],
-    body: pts.map(p => [lbl(p.m) + (p.prognos ? ' (prognos)' : ''), String(p.n), p.cn + ' av ' + D.total, Math.round(p.pn * 100) + ' %', fmtSp(Math.round(p.kr / 1000).toLocaleString('sv-SE')) + ' tkr', Math.round(p.pk * 100) + ' %']),
+    body: pts.map(p => [lbl(p.m) + (p.prognos ? ' (prognos)' : ''), String(p.n) + (p.planN ? ' (' + p.planN + ')' : ''), p.cn + ' av ' + D.total, Math.round(p.pn * 100) + ' %', fmtSp(Math.round(p.kr / 1000).toLocaleString('sv-SE')) + (p.planKr ? ' (' + fmtSp(Math.round(p.planKr / 1000).toLocaleString('sv-SE')) + ')' : '') + ' tkr', Math.round(p.pk * 100) + ' %']),
     styles: { fontSize: 7, cellPadding: 1.2, halign: 'center', textColor: 30 }, headStyles: { fillColor: [58, 44, 32], textColor: 255, fontSize: 7 }, columnStyles: { 0: { halign: 'left' } }, margin: { left: 12, right: 12 },
-    didParseCell: h => { if(h.section === 'body' && pts[h.row.index] && pts[h.row.index].prognos && (h.column.index === 1 || h.column.index === 4)) h.cell.styles.textColor = [178, 58, 58]; } });
+    didParseCell: h => { const p = pts[h.row.index]; if(h.section === 'body' && p && (h.column.index === 1 || h.column.index === 4) && p.planN && !p.n && !p.kr) h.cell.styles.textColor = [178, 58, 58]; } });
 }
 // Kvar att fördela för en kostnadspost (budget − tagna − det som ligger i prognosen).
 function showEkonomiPostKvarPopup(post, t, pp, months, prog){
