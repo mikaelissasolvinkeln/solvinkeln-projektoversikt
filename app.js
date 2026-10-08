@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008162723';
+const APP_BUILD = '20261008163114';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1747,6 +1747,10 @@ async function renderEkonomiKoncern(){
   ctl.appendChild(per);
   const unit = document.createElement('span'); unit.className = 'eko-sub'; unit.style.margin = '0'; unit.textContent = 'tkr';
   ctl.appendChild(unit);
+  const pdfBtn = document.createElement('button');
+  pdfBtn.type = 'button'; pdfBtn.className = 'upload-btn'; pdfBtn.textContent = '📄 Ladda ner PDF'; pdfBtn.style.marginLeft = '10px';
+  pdfBtn.onclick = showEkonomiKoncernPdfPopup;
+  ctl.appendChild(pdfBtn);
 
   // Underlag: lånerader per projekt för valda aktörer (ur aktörens perspektiv:
   // utökning = pengar ut = fordran ökar, återbetalning = pengar in = fordran minskar).
@@ -1822,6 +1826,8 @@ async function renderEkonomiKoncern(){
     });
     if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
     rec.poster.forEach(post => {
+      // Egna poster gäller bara sin aktör; visas flera aktörer tas posten bara med om den är markerad "flera aktörer".
+      if(valda.length > 1 && !post.flera) return;
       const name = document.createElement('span');
       name.textContent = post.namn || 'Egen post';
       name.className = 'editable'; name.style.cursor = 'pointer'; name.title = 'Klicka för att byta namn';
@@ -1830,7 +1836,12 @@ async function renderEkonomiKoncern(){
       del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort posten';
       del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; margin-left:6px; font-size:11px;';
       del.onclick = async () => { if(!confirm('Ta bort posten "' + (post.namn || 'Egen post') + '"?')) return; rec.poster = rec.poster.filter(x => x.id !== post.id); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
-      const lblEl = document.createElement('span'); lblEl.appendChild(name); lblEl.appendChild(del);
+      const fl = document.createElement('span');
+      fl.textContent = post.flera ? 'flera aktörer' : 'bara ' + a.namn;
+      fl.title = 'Klicka för att växla: gäller posten bara ' + a.namn + ' eller även när flera aktörer visas?';
+      fl.style.cssText = 'font-size:10px; color:' + (post.flera ? 'var(--blue)' : 'var(--ink-soft)') + '; margin-left:8px; cursor:pointer; border:1px solid var(--line-soft); border-radius:999px; padding:0 6px;';
+      fl.onclick = async () => { post.flera = !post.flera; await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+      const lblEl = document.createElement('span'); lblEl.appendChild(name); lblEl.appendChild(fl); lblEl.appendChild(del);
       const cells = months.map(m => {
         const el = document.createElement('div'); el.style.minWidth = '70px';
         const v = (post.per || {})[m];
@@ -1844,7 +1855,9 @@ async function renderEkonomiKoncern(){
     const addBtn = document.createElement('button');
     addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
     addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
-    addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {} }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+    addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; const flera = confirm('Ska posten även räknas med när flera aktörer visas tillsammans?
+
+OK = ja, gäller flera aktörer. Avbryt = nej, bara ' + a.namn + '.'); rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {}, flera }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
     addRow(addBtn, ['', ''].concat(blanks, ['']), { indent: 18 });
     months.forEach(m => { total[m] += sum[m]; });
     totalIngaende += rec.ingaende || 0; totalFordranIb += fordranIb;
@@ -1884,6 +1897,108 @@ async function renderEkonomiKoncern(){
   wrap.innerHTML = '';
   if(!valda.length){ wrap.innerHTML = '<p class="eko-sub">Välj minst en aktör.</p>'; return; }
   wrap.appendChild(table);
+}
+
+// ---------- Koncern: PDF-utskrift (koncernlikviditet, valfritt Fordran och Lån) ----------
+// Tabellerna hämtas från det som visas på skärmen (samma siffror, tkr i likviditeten).
+function ekonomiPdfRowsFromTable(table){
+  const cellText = td => {
+    const inp = td.querySelector('input, select');
+    if(inp){ if(inp.tagName === 'SELECT') return inp.selectedOptions[0] ? inp.selectedOptions[0].textContent.replace(/^– .* –$/, '') : ''; return inp.value || ''; }
+    const t = (td.textContent || '').replace(/\s+/g, ' ').trim();
+    return t === '—' ? '' : t.replace(/[  ]/g, ' ').replace(/−/g, '-').replace(/\s*(✕|✎)\s*$/, '');
+  };
+  const head = [...table.querySelectorAll('thead th')].map(th => th.textContent.replace(/\s+/g, ' ').trim());
+  const rows = [...table.querySelectorAll('tbody tr')].map(tr => {
+    const tds = [...tr.children];
+    const first = tds[0];
+    if(first.querySelector('button') && tds.slice(1).every(td => !cellText(td))) return null; // "+ Egen post"-rader m.m.
+    const bold = tr.classList.contains('eko-row-resultat') || /700/.test(first.style.fontWeight || '') || (first.querySelector('b') != null);
+    const section = /uppercase/.test(first.style.cssText || '');
+    return { cells: tds.map(cellText), bold, section };
+  }).filter(Boolean);
+  return { head, rows };
+}
+function ekonomiPdfTable(doc, startY, head, rows, opts){
+  doc.autoTable({
+    startY, head: [head], body: rows.map(r => r.cells),
+    styles: { fontSize: (opts && opts.fontSize) || 7, cellPadding: 1.2, halign: 'center', textColor: 30 },
+    headStyles: { fillColor: [58, 44, 32], textColor: 255, halign: 'center', fontSize: (opts && opts.fontSize) || 7 },
+    columnStyles: Object.assign({ 0: { halign: 'left', cellWidth: (opts && opts.firstWidth) || 48 } }, (opts && opts.columnStyles) || {}),
+    margin: { left: 12, right: 12 },
+    didParseCell: h => {
+      const r = rows[h.row.index];
+      if(h.section !== 'body' || !r) return;
+      if(r.bold) h.cell.styles.fontStyle = 'bold';
+      if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; h.cell.styles.fontStyle = 'bold'; }
+      if(/^-/.test(String(h.cell.raw || ''))) h.cell.styles.textColor = [178, 58, 58];
+    }
+  });
+  return doc.lastAutoTable.finalY;
+}
+function ekonomiPdfHeader(doc, title, sub, logo, logoW, logoH){
+  if(logo){ try{ doc.addImage(logo, 'PNG', 12, 9, logoW, logoH); }catch(e){ /* utan logga */ } }
+  doc.setFontSize(15); doc.setTextColor(31, 26, 20);
+  doc.text(title, 285, 14, { align: 'right' });
+  doc.setFontSize(8); doc.setTextColor(120);
+  doc.text(sub, 285, 20, { align: 'right' });
+  doc.setDrawColor(217, 211, 199); doc.setLineWidth(0.4);
+  doc.line(12, 24, 285, 24);
+  return 29;
+}
+function showEkonomiKoncernPdfPopup(){
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const harSolvinkeln = valda.includes('lanSolvinkeln');
+  const p = ekoPopup({ title: 'Skriv ut koncernlikviditet', sub: 'PDF i liggande A4 med det som visas på skärmen (' + EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn).join(', ') + ', ' + (uiPrefs.koncernManader === 24 ? 24 : 12) + ' månader).' + (harSolvinkeln ? ' Eftersom Solvinkeln ingår kan du även ta med flikarna Fordran och Lån.' : ' Fordran och Lån kan tas med när Solvinkeln är vald.'), maxWidth: 520 });
+  const mk = (label, checked, disabled) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:8px; align-items:center; margin:6px 0; cursor:pointer;' + (disabled ? ' opacity:0.5;' : ''); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = checked; cb.disabled = disabled; l.appendChild(cb); l.appendChild(document.createTextNode(label)); p.body.appendChild(l); return cb; };
+  const cbF = mk('Ta med Fordran (Solvinkelns fordringar mot projekten + övriga fordringar)', harSolvinkeln, !harSolvinkeln);
+  const cbL = mk('Ta med Lån (koncernens lån)', harSolvinkeln, !harSolvinkeln);
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Ladda ner PDF'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = async () => { btn.disabled = true; try{ await ekonomiKoncernPdf(cbF.checked, cbL.checked); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; } };
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
+async function ekonomiKoncernPdf(medFordran, medLan){
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const aktorer = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn).join(', ');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const logoEl = document.querySelector('.brand-logo');
+  const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
+  const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
+  const datum = new Date().toLocaleDateString('sv-SE');
+  // Sida 1+: Koncernlikviditet (tabellen som visas). Många månader -> kolumnerna blir smala; 24 mån delas i två tabeller.
+  const kt = document.querySelector('#ekoKoncernWrap table');
+  if(!kt) throw new Error('Koncernlikviditeten är inte renderad.');
+  const K = ekonomiPdfRowsFromTable(kt);
+  const monthCount = K.head.length - 4; // Post, Ingående fordran, Ingående kassa, …månader…, Summa
+  const chunks = [];
+  for(let i = 0; i < monthCount; i += 12) chunks.push([i, Math.min(i + 12, monthCount)]);
+  chunks.forEach(([a, b], ci) => {
+    if(ci > 0) doc.addPage();
+    const y = ekonomiPdfHeader(doc, 'Koncernlikviditet', aktorer + ' · belopp i tkr · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + datum, logo, logoW, logoH);
+    const idx = [0, 1, 2].concat(Array.from({ length: b - a }, (_, i) => 3 + a + i), ci === chunks.length - 1 ? [K.head.length - 1] : []);
+    ekonomiPdfTable(doc, y, idx.map(i => K.head[i]), K.rows.map(r => ({ cells: idx.map(i => r.cells[i] || ''), bold: r.bold, section: r.section })), { fontSize: 6.5, firstWidth: 52 });
+  });
+  if(medFordran){
+    const prev = ekonomiSubView;
+    if(prev !== 'koncernfordran'){ renderEkonomiKoncernFordran(); }
+    doc.addPage();
+    let y = ekonomiPdfHeader(doc, 'Fordran', 'Solvinkelns fordringar mot projekten · skapad ' + datum, logo, logoW, logoH);
+    const pt = document.querySelector('#ekoKoncernFordranProjekt table');
+    if(pt){ const P = ekonomiPdfRowsFromTable(pt); y = ekonomiPdfTable(doc, y, P.head, P.rows, { fontSize: 8, firstWidth: 70 }) + 8; }
+    const ot = document.querySelector('#ekoKoncernFordranBody') ? document.getElementById('ekoKoncernFordranBody').closest('table') : null;
+    if(ot){ doc.setFontSize(11); doc.setTextColor(31, 26, 20); doc.text('Övriga fordringar', 12, y); const O = ekonomiPdfRowsFromTable(ot); ekonomiPdfTable(doc, y + 3, O.head.slice(0, -1), O.rows.map(r => ({ cells: r.cells.slice(0, -1), bold: r.bold, section: r.section })), { fontSize: 8, firstWidth: 60 }); }
+  }
+  if(medLan){
+    renderEkonomiKoncernLan();
+    doc.addPage();
+    const y = ekonomiPdfHeader(doc, 'Lån', 'Koncernens lån · skapad ' + datum, logo, logoW, logoH);
+    const lt = document.getElementById('ekoKoncernLanBody').closest('table');
+    const L = ekonomiPdfRowsFromTable(lt);
+    ekonomiPdfTable(doc, y, L.head.slice(0, -1), L.rows.map(r => ({ cells: r.cells.slice(0, -1), bold: r.bold, section: r.section })), { fontSize: 8, firstWidth: 60 });
+  }
+  doc.save('Koncernlikviditet-' + datum + '.pdf');
 }
 
 function ekonomiSortedProjects(){
@@ -7813,25 +7928,58 @@ document.getElementById('nyaProjektAddBostadBtn').onclick = async () => {
 document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
   const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
   if(!candidate || candidate.status === 'promoted') return;
-  const name = candidate.name;
-  if(!name){ showToast('Projektet saknar namn'); return; }
-  if(projects.some(p => p.name.toLowerCase() === name.toLowerCase())){
-    showToast('Det finns redan ett projekt med det namnet');
-    return;
-  }
-  const newProject = { id: slugId(name), name, status: 'Kommande' };
-  projects.push(newProject);
-  await persistProjects();
-  candidate.status = 'promoted';
-  candidate.promoted_project_id = newProject.id;
-  try{
-    await DB.updateNyaProjekt(candidate.id, { status: 'promoted', promoted_project_id: newProject.id });
-  }catch(e){
-    showDebugError('Kunde inte spara att projektet omvandlats', e);
-  }
-  showToast('Skapat som projekt: ' + name);
-  renderNyaProjektDetail();
-  renderNyaProjektList();
+  // Popup: nytt projekt (välj namn) eller lägg in kalkylen i ett befintligt projekt.
+  const p = ekoPopup({ title: 'Gör till projekt', sub: 'Skapa ett nytt projekt i Projektöversikten med valfritt namn, eller koppla kalkylen till ett projekt som redan finns.', maxWidth: 520 });
+  const mk = (tag, css) => { const el = document.createElement(tag); if(css) el.style.cssText = css; return el; };
+  const opt1 = mk('label', 'display:flex; gap:8px; align-items:center; font-weight:600; margin:4px 0 6px; cursor:pointer;');
+  const r1 = mk('input'); r1.type = 'radio'; r1.name = 'nyaPromoteMode'; r1.value = 'new'; r1.checked = true;
+  opt1.appendChild(r1); opt1.appendChild(document.createTextNode('Nytt projekt'));
+  const nameInp = mk('input', 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:14px; margin-bottom:14px;');
+  nameInp.type = 'text'; nameInp.value = candidate.name || ''; nameInp.placeholder = 'Projektnamn, t.ex. Brf Skogslunden';
+  const opt2 = mk('label', 'display:flex; gap:8px; align-items:center; font-weight:600; margin:4px 0 6px; cursor:pointer;');
+  const r2 = mk('input'); r2.type = 'radio'; r2.name = 'nyaPromoteMode'; r2.value = 'existing';
+  opt2.appendChild(r2); opt2.appendChild(document.createTextNode('Lägg in i befintligt projekt'));
+  const sel = mk('select'); sel.className = 'eko-inline-select'; sel.style.width = '100%';
+  sel.innerHTML = '<option value="">– Välj projekt –</option>' + ekonomiSortedProjects().map(x => '<option value="' + escapeHtml(x.id) + '">' + escapeHtml(x.name) + (nyaProjektList.some(c => c.promoted_project_id === x.id) ? ' (har redan en kalkyl)' : '') + '</option>').join('');
+  sel.disabled = true;
+  const sync = () => { nameInp.disabled = !r1.checked; sel.disabled = !r2.checked; };
+  r1.onchange = sync; r2.onchange = sync;
+  sel.onfocus = () => { r2.checked = true; sync(); };
+  nameInp.onfocus = () => { r1.checked = true; sync(); };
+  const note = mk('p', 'font-size:12px; color:var(--ink-soft); margin:8px 0 0;');
+  note.textContent = 'Kopplar du kalkylen till ett befintligt projekt används kalkylen som underlag för budgeterad intäkt och föreningslån där. Projektets befintliga budgetposter behålls.';
+  p.body.appendChild(opt1); p.body.appendChild(nameInp); p.body.appendChild(opt2); p.body.appendChild(sel); p.body.appendChild(note);
+  const go = async () => {
+    let pid, name;
+    if(r1.checked){
+      name = nameInp.value.trim();
+      if(!name){ showToast('Ange ett projektnamn.'); return; }
+      if(projects.some(x => x.name.toLowerCase() === name.toLowerCase())){ showToast('Det finns redan ett projekt med det namnet - välj "Lägg in i befintligt projekt" i stället.'); return; }
+      const newProject = { id: slugId(name), name, status: 'Kommande' };
+      projects.push(newProject);
+      await persistProjects();
+      pid = newProject.id;
+    } else {
+      pid = sel.value;
+      if(!pid){ showToast('Välj ett projekt.'); return; }
+      name = (projects.find(x => x.id === pid) || {}).name || pid;
+    }
+    candidate.status = 'promoted';
+    candidate.promoted_project_id = pid;
+    try{
+      await DB.updateNyaProjekt(candidate.id, { status: 'promoted', promoted_project_id: pid });
+    }catch(e){
+      showDebugError('Kunde inte spara att projektet omvandlats', e);
+    }
+    p.close();
+    showToast(r1.checked ? 'Skapat som projekt: ' + name : 'Kalkylen kopplad till ' + name);
+    renderNyaProjektDetail();
+    renderNyaProjektList();
+  };
+  const btn = mk('button', 'background:var(--blue); color:#fff; margin-right:8px;');
+  btn.type = 'button'; btn.textContent = 'Gör till projekt'; btn.onclick = go;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+  setTimeout(() => { nameInp.focus(); nameInp.select(); }, 0);
 };
 
 document.getElementById('nyaProjektShareBtn').onclick = async () => {
