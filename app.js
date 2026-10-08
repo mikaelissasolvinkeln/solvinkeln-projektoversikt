@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008125127';
+const APP_BUILD = '20261008132754';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1771,8 +1771,73 @@ const EKONOMI_MARK_POST_REGEX = {
   gatukostnad: /gatukostnad|gatuavgift/i,
   vattenanslutning: /va-?\s?anslutning|vattenanslutning|^va$/i
 };
+// ---------- Mark: fastighet såld vidare till ett annat projekt ----------
+// fast.salj = { tillPid, status: 'ej'|'sald', belopp, datum }. I det köpande projektet syns
+// fastigheten som inkommande: "ej insåld" tills säljaren markerar såld, då räknas beloppet
+// som förvärvspris där (Mark-listan, budgetens tagna kostnader, fastighetsvärde).
+function ekonomiMarkInkommande(pid){
+  const out = [];
+  Object.keys(companyEkonomiData.mark || {}).forEach(fromPid => {
+    if(fromPid === pid) return;
+    (companyEkonomiData.mark[fromPid] || []).forEach(f => {
+      if(!f.salj || f.salj.tillPid !== pid) return;
+      const fromP = projects.find(p => p.id === fromPid);
+      const sald = f.salj.status === 'sald';
+      out.push({ id: 'in:' + f.id, fastighetsbeteckning: f.fastighetsbeteckning || '', forvarvspris: sald ? (f.salj.belopp || 0) : 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0, fakturor: [],
+        inkommande: { fromPid, fromNamn: fromP ? fromP.name : fromPid, sald, belopp: f.salj.belopp || 0, datum: f.salj.datum || '' } });
+    });
+  });
+  return out;
+}
+function ekonomiMarkFastigheterMedInkommande(pid){
+  return (companyEkonomiData.mark[pid] || []).concat(ekonomiMarkInkommande(pid));
+}
+function ekonomiMarkSaljText(fast){
+  if(!fast.salj || !fast.salj.tillPid) return '';
+  const p = projects.find(x => x.id === fast.salj.tillPid);
+  const namn = p ? p.name : fast.salj.tillPid;
+  return fast.salj.status === 'sald' ? 'Såld till ' + namn + ' · ' + formatKrFull(fast.salj.belopp || 0) + (fast.salj.datum ? ' · ' + fast.salj.datum : '') : 'Till ' + namn + ' · ej insåld';
+}
+function showEkonomiMarkSaljPopup(pid, fast){
+  const s = fast.salj || { tillPid: '', status: 'ej', belopp: null, datum: '' };
+  const p = ekoPopup({ title: 'Sälj vidare: ' + (fast.fastighetsbeteckning || 'fastighet'), sub: 'Välj vilket projekt fastigheten ska säljas till. Den syns där som "ej insåld" tills du markerar Såld och anger beloppet – då räknas beloppet som förvärvspris i det projektet.', maxWidth: 560 });
+  const field = (label, el) => { const w = document.createElement('div'); w.style.margin = '0 0 10px'; const l = document.createElement('label'); l.style.cssText = 'display:block; font-size:12px; color:var(--ink-soft); margin-bottom:4px;'; l.textContent = label; w.appendChild(l); w.appendChild(el); return w; };
+  const sel = document.createElement('select');
+  sel.className = 'eko-inline-select'; sel.style.width = '100%';
+  sel.innerHTML = '<option value="">– Inte såld vidare –</option>' + ekonomiSortedProjects().filter(x => x.id !== pid).map(x => '<option value="' + escapeHtml(x.id) + '">' + escapeHtml(x.name) + '</option>').join('');
+  sel.value = s.tillPid || '';
+  const status = document.createElement('select');
+  status.className = 'eko-inline-select'; status.style.width = '100%';
+  status.innerHTML = '<option value="ej">Ej insåld (avtal/planerad)</option><option value="sald">Såld</option>';
+  status.value = s.status === 'sald' ? 'sald' : 'ej';
+  const belopp = document.createElement('input');
+  belopp.type = 'number'; belopp.value = s.belopp != null ? s.belopp : ''; belopp.placeholder = 'Försäljningspris (kr)';
+  belopp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:14px;';
+  const datum = document.createElement('input');
+  datum.type = 'date'; datum.value = s.datum || '';
+  datum.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:6px 9px; font-size:13px;';
+  p.body.appendChild(field('Säljs till projekt', sel));
+  p.body.appendChild(field('Status', status));
+  p.body.appendChild(field('Belopp (krävs när den är såld)', belopp));
+  p.body.appendChild(field('Datum (valfritt)', datum));
+  const save = async () => {
+    if(!sel.value){ delete fast.salj; }
+    else {
+      const b = parseFloat(String(belopp.value).replace(',', '.'));
+      if(status.value === 'sald' && !(b > 0)){ showToast('Ange beloppet för försäljningen.'); return; }
+      fast.salj = { tillPid: sel.value, status: status.value, belopp: isNaN(b) ? null : b, datum: datum.value || '' };
+    }
+    try{ await persistEkonomiMark(); }catch(e){ showDebugError('Kunde inte spara', e); }
+    p.close();
+    renderEkonomiProjektMark();
+  };
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Spara'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = save;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
 function ekonomiMarkSums(pid){
-  return (companyEkonomiData.mark[pid] || []).reduce((acc, f) => {
+  return ekonomiMarkFastigheterMedInkommande(pid).reduce((acc, f) => {
     acc.forvarv += (f.forvarvspris || 0) + (f.aktiekop || 0);
     acc.gatukostnad += f.gatukostnad || 0;
     acc.vattenanslutning += f.vattenanslutning || 0;
@@ -1851,7 +1916,7 @@ function ekonomiBudgetTagna(pid){
       e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: base + (split ? ' · del av faktura på ' + formatKrFull(ekonomiLedgerAmount(line)) : '') + (!split && line.justeratBelopp != null ? ' · justerat från ' + formatKrFull(line.belopp || 0) : ''), belopp: part.belopp });
     });
   });
-  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const fastigheter = ekonomiMarkFastigheterMedInkommande(pid);
   const ms = ekonomiMarkSums(pid);
   const addMark = (key, total, describe) => {
     if(!total) return;
@@ -1863,7 +1928,7 @@ function ekonomiBudgetTagna(pid){
   };
   addMark('forvarv', ms.forvarv, f => {
     const v = (f.forvarvspris || 0) + (f.aktiekop || 0);
-    return v ? [{ typ: 'mark', text: 'Förvärv ' + (f.fastighetsbeteckning || 'fastighet') + ((f.aktiekop || 0) ? ' (fastighet ' + formatKrFull(f.forvarvspris || 0) + ' + aktier ' + formatKrFull(f.aktiekop || 0) + ')' : ''), belopp: v }] : [];
+    return v ? [{ typ: 'mark', text: 'Förvärv ' + (f.fastighetsbeteckning || 'fastighet') + (f.inkommande ? ' (köpt från ' + f.inkommande.fromNamn + ')' : ((f.aktiekop || 0) ? ' (fastighet ' + formatKrFull(f.forvarvspris || 0) + ' + aktier ' + formatKrFull(f.aktiekop || 0) + ')' : '')), belopp: v }] : [];
   });
   addMark('gatukostnad', ms.gatukostnad, f => {
     const fakt = (f.fakturor || []).filter(fk => fk.typ === 'gatukostnad');
@@ -2140,7 +2205,7 @@ function renderEkonomiMarkList(){
   let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0, totalMarkkostnader = 0;
   let forvarvPagaende = 0, forvarvAvslutade = 0;
   ekonomiSortedProjects().forEach(p => {
-    const fastigheter = companyEkonomiData.mark[p.id] || [];
+    const fastigheter = ekonomiMarkFastigheterMedInkommande(p.id);
     // Förvärv = fastighetsköp + ev. aktieköp (marken köps ibland uppdelat i båda)
     const sum = fastigheter.reduce((acc, f) => {
       acc.forvarvspris += (f.forvarvspris || 0) + (f.aktiekop || 0);
@@ -2211,7 +2276,7 @@ function renderEkonomiProjektMark(){
   empty.style.display = fastigheter.length ? 'none' : 'block';
   fastigheter.forEach(fast => {
     const row = document.createElement('tr');
-    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
 
     const textFields = [
       { key: 'fastighetsbeteckning', cell: 0 }
@@ -2247,16 +2312,40 @@ function renderEkonomiProjektMark(){
     removeBtn.title = 'Ta bort fastighet';
     removeBtn.textContent = '✕';
     removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
-    row.children[6].appendChild(removeBtn);
-    row.children[6].className = 'row-actions';
+    row.children[7].appendChild(removeBtn);
+    row.children[7].className = 'row-actions';
+    // Såld vidare till annat projekt: knapp + status.
+    const saljTd = row.children[6];
+    saljTd.style.cssText = 'text-align:left; font-size:12px;';
+    const saljBtn = document.createElement('button');
+    saljBtn.type = 'button';
+    saljBtn.textContent = fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'Såld' : 'Ej insåld') : 'Sälj vidare…';
+    saljBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid ' + (fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'var(--good, #2e7d32)' : 'var(--danger)') : 'var(--line-soft)') + '; background:#fff; border-radius:5px; cursor:pointer; color:' + (fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'var(--good, #2e7d32)' : 'var(--danger)') : 'var(--ink-soft)') + ';';
+    saljBtn.onclick = () => showEkonomiMarkSaljPopup(pid, fast);
+    saljTd.appendChild(saljBtn);
+    const st = ekonomiMarkSaljText(fast);
+    if(st){ const d = document.createElement('div'); d.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;'; d.textContent = st; saljTd.appendChild(d); }
 
     tbody.appendChild(row);
   });
+  // Inkommande fastigheter (sålda hit från andra projekt): visas men redigeras hos säljaren.
+  const inkommande = ekonomiMarkInkommande(pid);
+  inkommande.forEach(f => {
+    const row = document.createElement('tr');
+    row.style.background = 'var(--paper-soft, #f6f4ef)';
+    const i = f.inkommande;
+    row.innerHTML = '<td style="text-align:left;">' + escapeHtml(f.fastighetsbeteckning || '—') + '<div style="font-size:10.5px; color:var(--ink-soft);">från ' + escapeHtml(i.fromNamn) + '</div></td>' +
+      '<td style="' + (i.sald ? '' : 'color:var(--danger);') + '">' + (i.sald ? formatKrFull(i.belopp) : (i.belopp ? formatKrFull(i.belopp) + ' (prel.)' : '—')) + '</td><td>—</td>' +
+      '<td style="font-weight:600;">' + (i.sald ? formatKrFull(i.belopp) : '—') + '</td><td>—</td><td>—</td>' +
+      '<td style="text-align:left; font-size:12px;"><span style="color:' + (i.sald ? 'var(--good, #2e7d32)' : 'var(--danger)') + ';">' + (i.sald ? 'Köpt från ' + escapeHtml(i.fromNamn) + (i.datum ? ' · ' + escapeHtml(i.datum) : '') : 'Ej insåld – säljs från ' + escapeHtml(i.fromNamn)) + '</span></td><td></td>';
+    tbody.appendChild(row);
+  });
+  if(inkommande.length) empty.style.display = 'none';
 
   const foot = document.getElementById('ekonomiMarkFastigheterFoot');
   foot.innerHTML = '';
-  if(fastigheter.length){
-    const sum = fastigheter.reduce((acc, f) => {
+  if(fastigheter.length || inkommande.length){
+    const sum = fastigheter.concat(inkommande).reduce((acc, f) => {
       acc.forvarvspris += f.forvarvspris || 0;
       acc.aktiekop += f.aktiekop || 0;
       acc.vattenanslutning += f.vattenanslutning || 0;
@@ -2268,7 +2357,7 @@ function renderEkonomiProjektMark(){
       '<td>' + formatKrFull(sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.forvarvspris + sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.vattenanslutning) + '</td>' +
-      '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td></tr>';
+      '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td><td></td></tr>';
   }
   renderEkonomiMarkFakturor(fastigheter);
 }
