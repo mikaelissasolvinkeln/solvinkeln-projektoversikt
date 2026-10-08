@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261007151943';
+const APP_BUILD = '20261008105830';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1444,6 +1444,7 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiMarkView').style.display = view === 'mark' ? 'block' : 'none';
   document.getElementById('ekonomiLikviditetView').style.display = view === 'likviditet' ? 'block' : 'none';
   document.getElementById('ekonomiLanView').style.display = view === 'lan' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernView').style.display = view === 'koncern' ? 'block' : 'none';
   document.getElementById('ekonomiVinstSolvinkelnView').style.display = view === 'vinstsolvinkeln' ? 'block' : 'none';
   document.getElementById('ekonomiNyaProjektListView').style.display = view === 'nyaprojekt' ? 'block' : 'none';
   document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
@@ -1456,6 +1457,7 @@ function setEkonomiSubView(view){
   else if(view === 'vinstsolvinkeln') renderEkonomiVinstSolvinkeln();
   else if(view === 'nyaprojekt') loadNyaProjektList();
   else if(view === 'likviditet') renderEkonomiLikviditetList();
+  else if(view === 'koncern') renderEkonomiKoncern();
   else renderEkonomiNumberTab(view);
 }
 
@@ -1484,6 +1486,125 @@ function homeStatusPillHtml(status){
   const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : '';
   return '<span class="home-status-pill ' + cls + '">' + escapeHtml(g ? g.heading : status) + '</span>';
 }
+// ---------- Koncernlikviditet: koncernens aktörer (Solvinkeln, Derome, NBE, BORO) ----------
+// Visar lånerörelserna i alla projekt ur aktörens perspektiv: en utökning av t.ex. Lån
+// Solvinkeln i ett projekt är pengar ut (minus) för Solvinkeln, en återbetalning är
+// pengar in (plus). Underlaget är samma som lånraderna i projektens likviditetsprognoser
+// (bokningar i Lån-fliken, preliminära bokningar och förfallodatum).
+const EKONOMI_KONCERN_AKTORER = [
+  { key: 'lanSolvinkeln', namn: 'Solvinkeln' },
+  { key: 'lanDerome', namn: 'Derome' },
+  { key: 'lanNBE', namn: 'NBE' },
+  { key: 'lanBORO', namn: 'BORO' }
+];
+function renderEkonomiKoncern(){
+  const wrap = document.getElementById('ekoKoncernWrap');
+  const ctl = document.getElementById('ekoKoncernControls');
+  if(!wrap || !ctl) return;
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const antal = uiPrefs.koncernManader === 24 ? 24 : 12;
+  const start = new Date().toISOString().slice(0, 7);
+  const months = ekonomiPrognosMonths(start, antal);
+  const tkr = v => { const r = Math.round(v / 1000); return r === 0 ? '' : r.toLocaleString('sv-SE'); };
+
+  ctl.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.textContent = 'Aktörer:'; ctl.appendChild(lbl);
+  EKONOMI_KONCERN_AKTORER.forEach(a => {
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = valda.includes(a.key);
+    cb.onchange = async () => {
+      uiPrefs.koncernAktorer = EKONOMI_KONCERN_AKTORER.map(x => x.key).filter(k => [...ctl.querySelectorAll('input[type=checkbox]')].find(i => i.dataset.k === k).checked);
+      await saveUiPrefs(); renderEkonomiKoncern();
+    };
+    cb.dataset.k = a.key;
+    l.appendChild(cb); l.appendChild(document.createTextNode(' ' + a.namn));
+    ctl.appendChild(l);
+  });
+  const per = document.createElement('label');
+  per.style.marginLeft = '10px';
+  per.innerHTML = 'Period <select class="eko-inline-select" style="margin-left:4px;"><option value="12">12 månader</option><option value="24">24 månader</option></select>';
+  const sel = per.querySelector('select'); sel.value = String(antal);
+  sel.onchange = async () => { uiPrefs.koncernManader = parseInt(sel.value, 10); await saveUiPrefs(); renderEkonomiKoncern(); };
+  ctl.appendChild(per);
+  const info = document.createElement('span'); info.className = 'eko-sub'; info.style.margin = '0';
+  info.textContent = 'Belopp i tkr · plus = pengar in till aktören (återbetalning), minus = pengar ut (utökning av lån). Röda belopp är preliminära. Klicka på ett belopp för att se eller bekräfta bokningen.';
+  ctl.appendChild(info);
+
+  // Underlag: lånerader per projekt för valda aktörer.
+  const perAktor = {};
+  valda.forEach(k => { perAktor[k] = []; });
+  ekonomiSortedProjects().forEach(p => {
+    const inb = ekonomiPrognosInbetalningar(p.id, start, months);
+    inb.lan.forEach(l => {
+      if(!perAktor[l.key]) return;
+      const flow = {}; let any = false;
+      months.forEach(m => { const v = -(l.per[m] || 0); flow[m] = v; if(v) any = true; });
+      if(any) perAktor[l.key].push({ p, l, flow });
+    });
+  });
+
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Projekt</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;">Summa</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
+  const addRow = (label, values, opts) => {
+    const tr = document.createElement('tr');
+    if(opts && opts.cls) tr.className = opts.cls;
+    const first = document.createElement('td');
+    first.style.cssText = 'font-size:12.5px; text-align:left; padding-left:' + ((opts && opts.indent) || 6) + 'px; position:sticky; left:0; background:' + ((opts && opts.bg) || 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    if(typeof label === 'string') first.textContent = label; else first.appendChild(label);
+    tr.appendChild(first);
+    values.forEach(v => {
+      const td = document.createElement('td');
+      td.style.cssText = mono + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11px; color:var(--ink-soft);' : '');
+      if(v && v.nodeType) td.appendChild(v); else td.textContent = v == null ? '' : v;
+      tr.appendChild(td);
+    });
+    if(opts && opts.bg) tr.style.background = opts.bg;
+    tbody.appendChild(tr);
+    return tr;
+  };
+  const sumCell = v => { const s = document.createElement('span'); s.textContent = tkr(v); if(v < 0) s.style.color = 'var(--danger)'; return s; };
+  const total = {}; months.forEach(m => { total[m] = 0; });
+  let anyRows = false;
+  EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).forEach(a => {
+    const rows = perAktor[a.key];
+    const tr = addRow(a.namn, months.map(() => '').concat(['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;';
+    if(!rows.length){ addRow('Inga lånerörelser i perioden', months.map(() => '').concat(['']), { small: true, indent: 18 }); return; }
+    anyRows = true;
+    const sum = {}; months.forEach(m => { sum[m] = 0; });
+    rows.forEach(r => {
+      const cells = months.map(m => {
+        const v = r.flow[m];
+        const sp = document.createElement('span');
+        sp.textContent = tkr(v);
+        const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
+        if(plan) sp.style.color = 'var(--danger)';
+        if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = r.p.name + ' · ' + r.l.namn + ' · klicka för detaljer'; sp.onclick = () => showEkonomiLanManadPopup(r.p.id, r.l, m); }
+        sum[m] += v; total[m] += v;
+        return sp;
+      });
+      addRow(r.p.name, cells.concat([sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
+    });
+    addRow('Summa ' + a.namn, months.map(m => sumCell(sum[m])).concat([sumCell(months.reduce((s, m) => s + sum[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    let acc = 0;
+    addRow('Ackumulerat ' + a.namn, months.map(m => { acc += sum[m]; return sumCell(acc); }).concat(['']), { small: true });
+  });
+  if(valda.length > 1 && anyRows){
+    addRow('Totalt valda aktörer', months.map(m => sumCell(total[m])).concat([sumCell(months.reduce((s, m) => s + total[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    let acc = 0;
+    addRow('Ackumulerat totalt', months.map(m => { acc += total[m]; return sumCell(acc); }).concat(['']), { small: true });
+  }
+  wrap.innerHTML = '';
+  if(!valda.length){ wrap.innerHTML = '<p class="eko-sub">Välj minst en aktör.</p>'; return; }
+  wrap.appendChild(table);
+}
+
 function ekonomiSortedProjects(){
   const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
   return projects.slice().sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
@@ -1847,7 +1968,7 @@ async function openEkonomiProjektBudget(project){
   document.getElementById('ekonomiProjektBudgetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektBudgetView').style.display = 'block';
@@ -3141,7 +3262,7 @@ function openEkonomiProjektLan(project){
   document.getElementById('ekonomiProjektLanTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLanView').style.display = 'block';
@@ -3559,7 +3680,7 @@ async function openEkonomiProjektLikviditet(project){
   document.getElementById('ekonomiProjektLikviditetTitle').textContent = project.name;
   document.getElementById('ekonomiSubTabsBar').style.display = 'none';
   ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
-    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
   document.getElementById('ekonomiProjektLikviditetView').style.display = 'block';
@@ -4019,7 +4140,7 @@ function showEkonomiInsatserPopup(pid, title, items){
     Object.keys(pendingF).forEach(id => { if(pendingF[id]) prog.forsaljningManad[id] = pendingF[id]; else delete prog.forsaljningManad[id]; });
     await saveEkonomiPrognos();
     showToast('Månader uppdaterade i likviditetsprognosen.');
-    p.close(); renderEkonomiPrognos();
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
   };
   p.actions.insertBefore(applyBtn, p.actions.firstChild);
   render();
@@ -4075,13 +4196,13 @@ function showEkonomiLanManadPopup(pid, l, m){
         }
       }catch(e){ showDebugError('Kunde inte spara', e); }
 
-      p.close(); renderEkonomiPrognos();
+      p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
     }));
     right.appendChild(ekoSmallBtn('Ta bort', async () => {
       if(!confirm('Ta bort den preliminära bokningen ' + formatKrFull(Math.abs(pl.belopp || 0)) + '?')) return;
       if(isFl){ const st = ekonomiPrognosCustomStore(prog, l.key); if(st) delete st.prel[m]; } else prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
       await saveEkonomiPrognos();
-      p.close(); renderEkonomiPrognos();
+      p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
     }, true));
     p.body.appendChild(ekoPopupLine('<div style="font-size:13px;"><span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Preliminär</span>' + escapeHtml(pl.text || 'Finansiering') + '</div><div style="font-size:11px; color:var(--ink-soft);">' + (pl.skapad ? 'bokad ' + escapeHtml(pl.skapad.slice(0, 10)) + ' · ' : '') + 'ej genomförd' + (isFl ? '' : ' · ännu inte i Lån-fliken') + '</div>', right));
   });
@@ -4101,7 +4222,7 @@ function showEkonomiLanManadPopup(pid, l, m){
     const b = parseFloat(String(addInp.value).replace(',', '.'));
     if(!b){ showToast('Ange belopp.'); return; }
     await ekonomiPrognosSetPlanerad(pid, l.key, m, b, true, isFl ? null : (parseFloat(addR.value.replace(',', '.')) || 0));
-    p.close(); renderEkonomiPrognos();
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
   }));
   p.body.appendChild(addRowEl);
 }
@@ -4136,7 +4257,7 @@ function showEkonomiForeningslanPopup(pid, l, months){
     if(!b){ showToast('Ange belopp.'); return; }
     await ekonomiPrognosSetPlanerad(pid, 'foreningslan', sel.value, b, true);
     showToast(formatKrFull(b) + ' föreningslån bokat preliminärt ' + ekonomiPrognosShortLabel(sel.value));
-    p.close(); renderEkonomiPrognos();
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
   }));
   p.body.appendChild(form);
 }
@@ -4178,7 +4299,7 @@ function showEkonomiLikviditetPopup(pid, m, info){
     await saveEkonomiPrognos();
     const f = EKONOMI_TAB_CONFIG.lan.fields.find(x => x.key === sel.value);
     showToast(formatKrFull(b) + ' bokat preliminärt på ' + (f ? f.label.replace(' (kr)', '') : sel.value) + ' ' + ekonomiPrognosShortLabel(m));
-    p.close(); renderEkonomiPrognos();
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
   };
   row.appendChild(sel); row.appendChild(belopp); row.appendChild(text); row.appendChild(btn);
   form.appendChild(row);
