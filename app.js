@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008135015';
+const APP_BUILD = '20261008151141';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -521,6 +521,7 @@ const HOME_STATUS_GROUPS = [
   { status: 'Pågående', heading: 'Pågående projekt' },
   { status: 'Bygglov/projektering', heading: 'Bygg/projektering' },
   { status: 'Kommande', heading: 'Kommande' },
+  { status: 'Slutförd', heading: 'Slutförd' },
   { status: 'Avslutat', heading: 'Avslutat' }
 ];
 
@@ -646,7 +647,7 @@ async function renderHomeProjectList(wrap){
     const pct = r.antal ? Math.round(r.salda / r.antal * 100) : 0;
     tr.innerHTML =
       '<td class="home-list-name">' + escapeHtml(r.name) + '</td>' +
-      '<td style="text-align:left;"><span class="home-status-pill ' + (r.status === 'Pågående' ? 'pag' : r.status === 'Bygglov/projektering' ? 'bygg' : r.status === 'Kommande' ? 'komm' : '') + '">' + escapeHtml(HOME_STATUS_GROUPS.find(g => g.status === r.status)?.heading || r.status) + '</span></td>' +
+      '<td style="text-align:left;"><span class="home-status-pill ' + (r.status === 'Pågående' ? 'pag' : r.status === 'Bygglov/projektering' ? 'bygg' : r.status === 'Kommande' ? 'komm' : r.status === 'Slutförd' ? 'slut' : '') + '">' + escapeHtml(HOME_STATUS_GROUPS.find(g => g.status === r.status)?.heading || r.status) + '</span></td>' +
       '<td>' + formatMSEK(r.totalpris) + '</td>' +
       '<td>' + formatMSEK(r.lan) + '</td>' +
       '<td style="font-weight:700;">' + formatMSEK(r.oms) + '</td>' +
@@ -1486,7 +1487,7 @@ function buildStatusFilterBar(wrap, prefKey, onChange){
 }
 function homeStatusPillHtml(status){
   const g = HOME_STATUS_GROUPS.find(x => x.status === status);
-  const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : '';
+  const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : status === 'Slutförd' ? 'slut' : '';
   return '<span class="home-status-pill ' + cls + '">' + escapeHtml(g ? g.heading : status) + '</span>';
 }
 // ---------- Koncernlikviditet: koncernens aktörer (Solvinkeln, Derome, NBE, BORO) ----------
@@ -5397,6 +5398,7 @@ const EKO_PROJEKT_STATUS_LABELS = [
   { status: 'Pågående', label: 'aktiva' },
   { status: 'Bygglov/projektering', label: 'bygg/projektering' },
   { status: 'Kommande', label: 'kommande' },
+  { status: 'Slutförd', label: 'slutförda' },
   { status: 'Avslutat', label: 'avslutade' }
 ];
 
