@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008161448';
+const APP_BUILD = '20261008161622';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1764,7 +1764,7 @@ async function renderEkonomiKoncern(){
     tbody.appendChild(tr);
     return tr;
   };
-  const sumCell = v => { const s = document.createElement('span'); s.textContent = tkr(v) || (v === 0 ? '0' : ''); if(v < 0) s.style.color = 'var(--danger)'; return s; };
+  const sumCell = v => { const s = document.createElement('span'); const r = Math.round((v || 0) / 1000); s.textContent = r === 0 ? '0' : r.toLocaleString('sv-SE'); if(r < 0) s.style.color = 'var(--danger)'; return s; };
   const sectionRow = text => { const tr = addRow(text, ['', ''].concat(months.map(() => ''), ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' }); tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;'; return tr; };
   const blanks = months.map(() => '');
   const total = {}; months.forEach(m => { total[m] = 0; });
