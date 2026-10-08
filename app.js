@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008161053';
+const APP_BUILD = '20261008161448';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1743,7 +1743,7 @@ async function renderEkonomiKoncern(){
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
-  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post</th><th style="text-align:center;">Ingående fordran</th><th style="text-align:center;">Ingående kassa</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;">Summa</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post</th><th style="text-align:center;">Ingående fordran</th><th style="text-align:center;">Ingående kassa</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;" title="Projektrader: fordran vid periodens slut. Summarader: summa av rörelserna.">Summa / UB fordran</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
   const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
@@ -1791,7 +1791,8 @@ async function renderEkonomiKoncern(){
         sum[m] += v;
         return sp;
       });
-      addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
+      // Summa = fordran vid periodens slut: IB − rörelserna (utökning ökar fordran, återbetalning minskar).
+      addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(r.ib - months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
     });
     if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
     rec.poster.forEach(post => {
@@ -1825,7 +1826,8 @@ async function renderEkonomiKoncern(){
     // Utestående fordran: IB-fordran − lånerörelser (minus = utökning ökar fordran, plus = återbetalning minskar den).
     let fordran = fordranIb;
     const lanSum = {}; months.forEach(m => { lanSum[m] = rows.reduce((s, r) => s + r.flow[m], 0); });
-    addRow('Utestående fordran ' + a.namn, [sumCell(fordranIb), ''].concat(months.map(m => { fordran -= lanSum[m]; return sumCell(fordran); }), ['']), { bold: true });
+    const fordranCells = months.map(m => { fordran -= lanSum[m]; return sumCell(fordran); });
+    addRow('Utestående fordran ' + a.namn, [sumCell(fordranIb), ''].concat(fordranCells, [sumCell(fordran)]), { bold: true });
     let acc = rec.ingaende || 0;
     addRow('Likviditet ' + a.namn, ['', sumCell(rec.ingaende || 0)].concat(months.map(m => { acc += sum[m]; return sumCell(acc); }), ['']), { bold: true });
   });
@@ -1846,7 +1848,8 @@ async function renderEkonomiKoncern(){
         const r = g.aktorer[a.key];
         if(!r) return;
         let f = r.ib; fordranTot += r.ib;
-        addRow('Insatt ' + a.namn + ' (fordran)', [sumCell(r.ib), ''].concat(months.map(m => { f -= r.flow[m]; return sumCell(f); }), ['']), { indent: 18 });
+        const fCells = months.map(m => { f -= r.flow[m]; return sumCell(f); });
+        addRow('Insatt ' + a.namn + ' (fordran)', [sumCell(r.ib), ''].concat(fCells, [sumCell(f)]), { indent: 18 });
       });
       const likv = await ekonomiPrognosLikviditetPerManad(g.p.id, months);
       addRow('Projektets likviditet enligt prognosen', ['', ''].concat(months.map(m => sumCell(likv[m] || 0)), ['']), { indent: 18, small: true });
