@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261008134331">
+<meta name="app-build" content="20261008135015">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1473,9 +1473,11 @@
         <button type="button" id="ekonomiReskontraManuellBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink);">＋ Lägg till kostnad utanför reskontran</button>
         <button type="button" id="ekoVerExcelBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink);">📊 Läs in verifikationer (Excel, A-serien)</button>
         <input type="file" id="ekoVerExcelInput" accept=".xlsx,.xls,.csv" style="display:none;">
+        <button type="button" id="ekoKontoanalysBtn" style="background:none; border:1px solid var(--line-soft); color:var(--ink);">📄 Läs in kontoanalys (PDF, bara A-serien)</button>
+        <input type="file" id="ekoKontoanalysInput" accept="application/pdf" style="display:none;">
         <span id="ekoVerExcelStatus" class="contract-upload-status"></span>
       </div>
-      <p class="eko-sub" style="margin:6px 0 0;">Excel-filen ska ha kolumnerna Vernummer, Datum, Text och Belopp (rubrikerna får variera). Varje rad läses in som en egen kostnadsrad som du sorterar och kategoriserar. Redan inlästa rader hoppas över.</p>
+      <p class="eko-sub" style="margin:6px 0 0;">Excel-filen ska ha kolumnerna Vernummer, Datum, Text och Belopp (rubrikerna får variera). Varje rad läses in som en egen kostnadsrad som du sorterar och kategoriserar. Redan inlästa rader hoppas över. Kontoanalys-PDF läses med AI och bara verifikationer i A-serien tas med. Rader från Skatteverket läses aldrig in.</p>
       <div id="ekonomiReskontraManuellForm" style="display:none; margin:10px 0; padding:10px 12px; border:1px dashed var(--line-soft); border-radius:8px;">
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
           <label style="display:flex; flex-direction:column; font-size:11px; color:var(--ink-soft); gap:3px;">Verifikationsnummer
@@ -2545,7 +2547,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261008134331"></script>
-<script src="app.js?v=20261008134331"></script>
+<script src="db.js?v=20261008135015"></script>
+<script src="app.js?v=20261008135015"></script>
 </body>
 </html>

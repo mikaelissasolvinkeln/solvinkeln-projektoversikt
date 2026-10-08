@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008134331';
+const APP_BUILD = '20261008135015';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3301,6 +3301,7 @@ document.getElementById('ekoVerExcelInput').addEventListener('change', async (e)
     let added = 0, skipped = 0, zero = 0;
     parsed.list.forEach(v => {
       const lopnr = 'M:' + v.key;
+      if(ekonomiLevIgnorerad(v.leverantor)) return; // t.ex. Skatteverket läses aldrig in
       if(existing.has(lopnr)){ skipped++; return; }
       if(!v.belopp){ zero++; return; }
       lines.push({ lopnr, vernr: v.key, manuell: true, leverantor: v.leverantor || '', fakturadatum: v.datum || '', forfallodatum: v.datum || '', belopp: v.belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name });
@@ -3315,6 +3316,62 @@ document.getElementById('ekoVerExcelInput').addEventListener('change', async (e)
   }catch(err){
     setStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
   }finally{
+    e.target.value = '';
+  }
+});
+// Leverantörer som aldrig ska läsas in (bokningarna är inte resultatpåverkande), t.ex. Skatteverket.
+const EKONOMI_IGNORERADE_LEVERANTORER = /skatteverket/i;
+function ekonomiLevIgnorerad(namn){ return EKONOMI_IGNORERADE_LEVERANTORER.test(String(namn || '')); }
+// Kontoanalys (PDF) → bara A-serien → kostnader utanför reskontran. AI-inläsning via
+// Edge Function extract-kontoanalys; samma dedup som Excel-inläsningen (lopnr "M:A 123").
+document.getElementById('ekoKontoanalysBtn').onclick = () => document.getElementById('ekoKontoanalysInput').click();
+document.getElementById('ekoKontoanalysInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiBudgetProjectId;
+  const statusEl = document.getElementById('ekoVerExcelStatus');
+  const setStatus = (msg, kind) => { statusEl.textContent = msg; statusEl.className = 'contract-upload-status' + (kind ? ' ' + kind : ''); };
+  if(!pid){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){ setStatus('Filen är för stor (max 8 MB).', 'err'); e.target.value = ''; return; }
+  const btn = document.getElementById('ekoKontoanalysBtn');
+  btn.disabled = true;
+  setStatus('Läser kontoanalysen… (AI, kan ta en halv minut)');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kontoanalys', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    const rows = (data && data.rows) || [];
+    const norm = v => { const m = String(v || '').trim().toUpperCase().match(/^([A-ZÅÄÖ]{1,3})\s*[-:.]?\s*(\d+)$/); return m ? m[1] + ' ' + m[2] : String(v || '').trim(); };
+    const aRows = rows.map(r => ({ ...r, key: norm(r.vernr) })).filter(r => /^A \d+$/.test(r.key));
+    if(!rows.length) throw new Error('Hittade inga transaktionsrader i filen.');
+    if(!aRows.length) throw new Error('Hittade ' + rows.length + ' rader men ingen i A-serien.');
+    const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+    const existing = new Set(lines.map(l => String(l.lopnr)));
+    let added = 0, skipped = 0, zero = 0;
+    const seen = {};
+    aRows.forEach(r => {
+      const belopp = Math.round(((r.debet || 0) - (r.kredit || 0)) * 100) / 100;
+      // Samma vernr kan förekomma på flera konton: numrera #2, #3 … precis som Excel-inläsningen.
+      seen[r.key] = (seen[r.key] || 0) + 1;
+      const key = seen[r.key] > 1 ? r.key + ' #' + seen[r.key] : r.key;
+      const lopnr = 'M:' + key;
+      if(ekonomiLevIgnorerad(r.text)) return; // t.ex. Skatteverket läses aldrig in
+      if(existing.has(lopnr)){ skipped++; return; }
+      if(!belopp){ zero++; return; }
+      lines.push({ lopnr, vernr: key, manuell: true, leverantor: (r.text || '').trim(), fakturadatum: r.datum || '', forfallodatum: r.datum || '', belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name, konto: r.konto ? String(r.konto) + (r.kontonamn ? ' ' + r.kontonamn : '') : '' });
+      existing.add(lopnr);
+      added++;
+    });
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    setStatus(added + ' A-verifikationer inlästa av ' + rows.length + ' rader i filen' + (skipped ? ', ' + skipped + ' fanns redan' : '') + (zero ? ', ' + zero + ' utan belopp hoppades över' : '') + '.', added ? 'ok' : 'err');
+    renderEkonomiProjektBudget();
+  }catch(err){
+    setStatus('Kunde inte läsa kontoanalysen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
     e.target.value = '';
   }
 });
@@ -8446,7 +8503,8 @@ document.getElementById('reskontraFileInput').addEventListener('change', async (
       uppdaterade++;
       if(varObetald && !ekonomiLineObetald(l)) blevBetalda++;
     });
-    const fresh = invoices.filter(inv => inv.lopnr && !existingByLopnr.has(String(inv.lopnr)));
+    const ignorerade = invoices.filter(inv => ekonomiLevIgnorerad(inv.leverantor)).length;
+    const fresh = invoices.filter(inv => inv.lopnr && !existingByLopnr.has(String(inv.lopnr)) && !ekonomiLevIgnorerad(inv.leverantor));
     const newLines = fresh.map(inv => ({
       lopnr: inv.lopnr,
       leverantor: inv.leverantor || '',
@@ -8462,7 +8520,7 @@ document.getElementById('reskontraFileInput').addEventListener('change', async (
     companyEkonomiData.reskontra[pid] = existing.concat(newLines);
     await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
     const obetaldaNya = newLines.filter(ekonomiLineObetald).length;
-    setReskontraStatus(newLines.length + ' nya rader inlästa' + (obetaldaNya ? ' (' + obetaldaNya + ' obetalda)' : '') + ', ' + (invoices.length - newLines.length) + ' fanns redan' + (uppdaterade ? ' - betalstatus uppdaterad på ' + uppdaterade + (blevBetalda ? ', ' + blevBetalda + ' har blivit betalda' : '') : '') + '.', 'ok');
+    setReskontraStatus(newLines.length + ' nya rader inlästa' + (obetaldaNya ? ' (' + obetaldaNya + ' obetalda)' : '') + ', ' + (invoices.length - newLines.length - ignorerade) + ' fanns redan' + (ignorerade ? ', ' + ignorerade + ' från Skatteverket hoppades över' : '') + (uppdaterade ? ' - betalstatus uppdaterad på ' + uppdaterade + (blevBetalda ? ', ' + blevBetalda + ' har blivit betalda' : '') : '') + '.', 'ok');
     renderEkonomiProjektBudget();
   }catch(err){
     setReskontraStatus('Kunde inte läsa reskontran: ' + (err.message || err), 'err');
