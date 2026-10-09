@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261008171124';
+const APP_BUILD = '20261009093745';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1674,6 +1674,14 @@ function ekonomiKoncernRec(key){
   if(!Array.isArray(r.poster)) r.poster = [];
   return r;
 }
+// JV-bolagets egna uppgifter (ingående kassa) per kombination av aktörer.
+function ekonomiKoncernJvRec(keys){
+  if(!companyEkonomiData.koncern) companyEkonomiData.koncern = {};
+  const k = companyEkonomiData.koncern;
+  if(!k._jv) k._jv = {};
+  const id = keys.slice().sort().join('+');
+  return k._jv[id] || (k._jv[id] = { ingaende: 0 });
+}
 async function saveEkonomiKoncern(){
   try{ await DB.setPersonalData(EKONOMI_KEYS.koncern, JSON.stringify(companyEkonomiData.koncern || {})); }catch(e){ showDebugError('Kunde inte spara koncernlikviditeten', e); }
 }
@@ -1761,10 +1769,16 @@ async function renderEkonomiKoncern(){
     const inb = ekonomiPrognosInbetalningar(p.id, start, months);
     inb.lan.forEach(l => {
       if(!perAktor[l.key]) return;
-      const flow = {}; let any = !!l.ib;
-      months.forEach(m => { const v = -(l.per[m] || 0); flow[m] = v; if(v) any = true; });
+      // Återbetalningar markerade "till JV-kassan" går inte till aktören utan till JV-bolagets kassa.
+      const flow = {}, jv = {}; let any = !!l.ib;
+      months.forEach(m => {
+        const jvV = (l.planerade[m] || []).filter(x => x.jvKassa).reduce((s, x) => s + (x.belopp || 0), 0) + (l.items[m] || []).filter(x => x.jvKassa).reduce((s, x) => s - (x.belopp || 0), 0);
+        jv[m] = -jvV;
+        const v = -((l.per[m] || 0) - jvV); flow[m] = v; if(v || jv[m]) any = true;
+      });
       if(!any) return;
-      const row = { p, l, flow, ib: l.ib || 0 };
+      const row = { p, l, flow, jv, ib: l.ib || 0 };
+
       perAktor[l.key].push(row);
       (perProjekt[p.id] = perProjekt[p.id] || { p, aktorer: {} }).aktorer[l.key] = row;
     });
@@ -1772,12 +1786,15 @@ async function renderEkonomiKoncern(){
 
   // Utdelning vid preliminärt slutförande: projektets kvarvarande kapital fördelas enligt ägandet
   // och landar som inbetalning hos respektive aktör den månaden.
+  const slutPerProjekt = {}; // pid -> { manad, belopp, delar } för Vinst-raden under Gemensamma projekt
   for(const p of ekonomiSortedProjects()){
     const sm = ekonomiPrognosRec(p.id).slutforandeManad;
     if(!sm || !months.includes(sm)) continue;
     const likv = await ekonomiPrognosLikviditetPerManad(p.id, months);
     const slut = ekonomiPrognosSlutforande(p.id, months, likv);
+    if(slut) slutPerProjekt[p.id] = slut;
     if(!slut || !slut.belopp) continue;
+
     slut.delar.forEach(d => {
       if(!d.key || !perAktor[d.key] || !d.belopp) return;
       const flow = {}; months.forEach(m => { flow[m] = m === sm ? d.belopp : 0; });
@@ -1898,24 +1915,37 @@ async function renderEkonomiKoncern(){
     const partnerKey = name => /derome/i.test(name || '') ? 'lanDerome' : /nbe/i.test(name || '') ? 'lanNBE' : /boro/i.test(name || '') ? 'lanBORO' : null;
     const gem = ekonomiSortedProjects().filter(p => { const k = partnerKey((companyEkonomiData.meta[p.id] || {}).jvPartner); return k && valda.includes(k); }).map(p => perProjekt[p.id] || { p, aktorer: {} });
     const kompakt = uiPrefs.koncernGemLage === 'kompakt';
-    // Egen tabell, fristående från koncernlikviditeten (skrivs ut separat).
+    // Egen tabell, fristående från koncernlikviditeten (skrivs ut separat). Ses som ett
+    // JV-bolag: aktörernas fordringar per projekt, återbetalningar till JV-kassan, vinst
+    // vid slutförande (delas ut eller behålls) och längst ner JV-bolagets ackumulerade kassa.
     gemTable = document.createElement('table');
     gemTable.className = table.className; gemTable.style.cssText = table.style.cssText; gemTable.id = 'ekoKoncernGemTable';
     gemTable.innerHTML = table.querySelector('thead').outerHTML;
     tbody = document.createElement('tbody'); gemTable.appendChild(tbody);
-    if(gem.length){
-      // Summering per aktör över alla gemensamma projekt: IB-fordran och rörelser per månad.
-      const gemTot = {};
+    const gemPoster = [];
+    aktorerValda.forEach(a => ekonomiKoncernRec(a.key).poster.forEach(post => { if(post.flera) gemPoster.push({ a, post }); }));
+    if(gem.length || gemPoster.length){
+      const jvNamn = aktorerValda.map(a => a.namn).join(' + ');
+      const jvRec = ekonomiKoncernJvRec(aktorerValda.map(a => a.key));
+      const gemTot = {}; const jvIn = {}, vinstKassa = {}, vinstAlla = {}, posterPer = {};
+      months.forEach(m => { jvIn[m] = 0; vinstKassa[m] = 0; vinstAlla[m] = 0; posterPer[m] = 0; });
       aktorerValda.forEach(a => { gemTot[a.key] = { ib: 0, flow: {} }; months.forEach(m => { gemTot[a.key].flow[m] = 0; }); });
+      const redCell = (v, title) => { const sp = sumCell(v); sp.style.color = 'var(--danger)'; if(title) sp.title = title; return sp; };
       gem.forEach(g => {
-        aktorerValda.forEach(a => { const r = g.aktorer[a.key]; if(!r) return; gemTot[a.key].ib += r.ib || 0; months.forEach(m => { gemTot[a.key].flow[m] += r.flow[m] || 0; }); });
+        const rowsJv = {}; months.forEach(m => { rowsJv[m] = 0; });
+        aktorerValda.forEach(a => { const r = g.aktorer[a.key]; if(!r) return; gemTot[a.key].ib += r.ib || 0; months.forEach(m => { gemTot[a.key].flow[m] += r.flow[m] || 0; rowsJv[m] += (r.jv || {})[m] || 0; }); });
+        months.forEach(m => { jvIn[m] += rowsJv[m]; });
+        const slut = slutPerProjekt[g.p.id] || null;
+        const gprog = ekonomiPrognosRec(g.p.id);
+        const tillKassa = gprog.vinstHantering === 'kassa';
+        if(slut && slut.belopp){ vinstAlla[slut.manad] += slut.belopp; if(tillKassa) vinstKassa[slut.manad] += slut.belopp; }
         if(kompakt) return;
         const ibTot = Object.values(g.aktorer).reduce((s, r) => s + (r.ib || 0), 0);
         const lblEl = document.createElement('span');
         lblEl.innerHTML = escapeHtml(g.p.name) + ' ' + homeStatusPillHtml(g.p.status || 'Pågående');
         addRow(lblEl, [sumCell(ibTot), ''].concat(blanks, ['']), { bold: true });
         aktorerValda.forEach(a => {
-          const r = g.aktorer[a.key] || { ib: 0, flow: {}, l: { planerade: {}, items: {} } };
+          const r = g.aktorer[a.key] || { ib: 0, flow: {}, jv: {}, l: { planerade: {}, items: {} } };
           let f = r.ib || 0;
           const cells = months.map(m => {
             const v = r.flow[m] || 0;
@@ -1923,12 +1953,26 @@ async function renderEkonomiKoncern(){
             sp.textContent = tkr(v);
             const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
             if(plan) sp.style.color = 'var(--danger)';
-            if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = g.p.name + ' · ' + r.l.namn + ' · klicka för detaljer'; sp.onclick = () => showEkonomiLanManadPopup(g.p.id, r.l, m); }
+            if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = g.p.name + ' · ' + r.l.namn + ' · klicka för detaljer (preliminär/genomförd/ta bort, till JV-kassan)'; sp.onclick = () => showEkonomiLanManadPopup(g.p.id, r.l, m); }
             f -= v;
             return sp;
           });
           addRow(a.namn, [sumCell(r.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
         });
+        if(months.some(m => rowsJv[m])){
+          addRow('Till JV-kassan (återbetalningar)', ['', ''].concat(months.map(m => { const sp = sumCell(rowsJv[m]); if(rowsJv[m]) sp.style.color = 'var(--blue)'; return sp; }), [sumCell(months.reduce((s, m) => s + rowsJv[m], 0))]), { indent: 18 });
+        }
+        // Vinst: likviditeten kvar den månad projektet slutförs (★ i projektets prognos).
+        const vl = document.createElement('span');
+        vl.textContent = 'Vinst' + (slut ? ' ' + ekonomiPrognosShortLabel(slut.manad) : '') + ' ';
+        const tog = document.createElement('span');
+        tog.style.cssText = 'font-size:10px; cursor:pointer; border:1px solid var(--line-soft); border-radius:999px; padding:0 6px; margin-left:4px; color:' + (tillKassa ? 'var(--blue)' : 'var(--ink-soft)') + ';';
+        tog.textContent = tillKassa ? 'behålls i JV-kassan' : 'delas ut till aktörerna';
+        tog.title = 'Klicka för att växla: dela ut vinsten enligt ägarandel (syns som utdelning hos aktörerna) eller låta den ligga kvar i JV-kassan';
+        tog.onclick = async () => { gprog.vinstHantering = tillKassa ? 'utdelning' : 'kassa'; await saveEkonomiPrognos(); renderEkonomiKoncern(); };
+        vl.appendChild(tog);
+        if(!slut){ const n = document.createElement('span'); n.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; n.textContent = 'ingen slutförandemånad (★) i projektets likviditetsprognos'; vl.appendChild(n); }
+        addRow(vl, ['', ''].concat(months.map(m => (!slut || m !== slut.manad) ? '' : redCell(slut.belopp, 'Preliminär vinst = likviditeten vid slutförandet')), [slut ? sumCell(slut.belopp) : '']), { indent: 18 });
       });
       if(kompakt){
         // Kompakt: en rad per aktör med alla fordringar ihopslagna och rörelserna framåt.
@@ -1937,21 +1981,29 @@ async function renderEkonomiKoncern(){
           const cells = months.map(m => { const sp = document.createElement('span'); sp.textContent = tkr(t.flow[m]); f -= t.flow[m]; return sp; });
           addRow(a.namn + ' · rörelser alla gemensamma projekt', [sumCell(t.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
         });
+        if(months.some(m => jvIn[m])) addRow('Till JV-kassan (återbetalningar, alla projekt)', ['', ''].concat(months.map(m => { const sp = sumCell(jvIn[m]); if(jvIn[m]) sp.style.color = 'var(--blue)'; return sp; }), [sumCell(months.reduce((s, m) => s + jvIn[m], 0))]), { indent: 18 });
+        if(months.some(m => vinstAlla[m])) addRow('Vinst alla gemensamma projekt', ['', ''].concat(months.map(m => vinstAlla[m] ? redCell(vinstAlla[m]) : ''), [sumCell(months.reduce((s, m) => s + vinstAlla[m], 0))]), { indent: 18 });
       }
-      // Längst ner: utestående fordran per aktör (IB − rörelser), månad för månad.
+      // Gemensamma poster: egna poster markerade "flera aktörer" – räknas in i JV-kassan.
+      if(gemPoster.length){
+        sectionRow('Gemensamma poster');
+        gemPoster.forEach(({ a, post }) => {
+          months.forEach(m => { posterPer[m] += (post.per || {})[m] || 0; });
+          addRow((post.namn || 'Egen post') + ' (' + a.namn + ')', ['', ''].concat(months.map(m => sumCell((post.per || {})[m] || 0)), [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+        });
+      }
+      // Längst ner: utestående fordran per aktör (IB − rörelser) och JV-bolagets ackumulerade kassa.
       aktorerValda.forEach(a => {
         const t = gemTot[a.key]; let f = t.ib;
         addRow('Utestående fordran ' + a.namn + ' (gemensamma projekt)', [sumCell(t.ib), ''].concat(months.map(m => { f -= t.flow[m]; return sumCell(f); }), [sumCell(f)]), { bold: true });
       });
-    }
-    // Gemensamma poster: egna poster markerade "flera aktörer", efter projekten.
-    const gemPoster = [];
-    aktorerValda.forEach(a => ekonomiKoncernRec(a.key).poster.forEach(post => { if(post.flera) gemPoster.push({ a, post }); }));
-    if(gemPoster.length){
-      sectionRow('Gemensamma poster');
-      gemPoster.forEach(({ a, post }) => {
-        addRow((post.namn || 'Egen post') + ' (' + a.namn + ')', ['', ''].concat(months.map(m => sumCell((post.per || {})[m] || 0)), [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
-      });
+      const jvIbEl = document.createElement('div'); jvIbEl.style.minWidth = '80px';
+      likviditetsbudgetEditableCell(jvIbEl, jvRec.ingaende || 0, async (val) => { jvRec.ingaende = val || 0; await saveEkonomiKoncern(); renderEkonomiKoncern(); }, cellOpts);
+      jvIbEl.title = 'Ingående kassa i JV-bolaget ' + jvNamn + ' (klicka för att ändra). Aktörernas egna ingående kassor räknas inte hit.';
+      let kassa = jvRec.ingaende || 0;
+      const kassaCells = months.map(m => { kassa += jvIn[m] + vinstKassa[m] + posterPer[m]; return sumCell(kassa); });
+      const kassaTr = addRow('Ackumulerad kassa JV (' + jvNamn + ')', ['', jvIbEl].concat(kassaCells, [sumCell(kassa)]), { bold: true, cls: 'eko-row-resultat' });
+      kassaTr.title = 'Ingående kassa + återbetalningar till JV-kassan + vinst som behålls + gemensamma poster';
     }
   }
   wrap.innerHTML = '';
@@ -2287,6 +2339,97 @@ function ekonomiMarkSaljText(fast){
   const p = projects.find(x => x.id === fast.salj.tillPid);
   const namn = p ? p.name : fast.salj.tillPid;
   return fast.salj.status === 'sald' ? 'Såld till ' + namn + ' · ' + formatKrFull(fast.salj.belopp || 0) + (fast.salj.datum ? ' · ' + fast.salj.datum : '') : 'Till ' + namn + ' · ej insåld';
+}
+// ---------- Mark: betalningsplan för förvärvet ----------
+// fast.betalningar = [{ id, manad:'YYYY-MM', belopp, aktor:'lanDerome'|'', klart:bool, datum }]
+// Obetalda delbetalningar flyttas från IB till sin månad i likviditetsprognosen. Betalas delen
+// av en aktör (Solvinkeln/Derome/NBE/BORO) läggs den som preliminär utökning av det lånet samma
+// månad, så att den syns som utlägg (fordran) i koncernlikviditeten.
+const EKONOMI_MARK_AKTORER = [['lanSolvinkeln', 'Solvinkeln'], ['lanDerome', 'Derome'], ['lanNBE', 'NBE'], ['lanBORO', 'BORO']];
+function ekonomiMarkAktorNamn(key){ const a = EKONOMI_MARK_AKTORER.find(x => x[0] === key); return a ? a[1] : (key || ''); }
+function ekonomiMarkBetalningar(fast){ return Array.isArray(fast.betalningar) ? fast.betalningar : []; }
+function ekonomiMarkBetalningText(fast){
+  const b = ekonomiMarkBetalningar(fast);
+  if(!b.length) return '';
+  const kvar = b.filter(x => !x.klart);
+  if(!kvar.length) return 'Betald (' + b.length + ' del' + (b.length > 1 ? 'ar' : '') + ')';
+  return kvar.map(x => (x.manad ? ekonomiPrognosShortLabel(x.manad) : '?') + ' ' + formatKrFull(x.belopp || 0) + (x.aktor ? ' · ' + ekonomiMarkAktorNamn(x.aktor) : '')).join(', ');
+}
+// Obetalda delbetalningar i ett projekt (egna fastigheter, inte inkommande).
+function ekonomiMarkPlaneradeBetalningar(pid){
+  const out = [];
+  (companyEkonomiData.mark[pid] || []).forEach(f => ekonomiMarkBetalningar(f).forEach(b => { if(!b.klart && b.manad && b.belopp) out.push({ fast: f, b }); }));
+  return out;
+}
+function showEkonomiMarkBetalningPopup(pid, fast){
+  const p = ekoPopup({ title: 'Betalningsplan: ' + (fast.fastighetsbeteckning || 'fastighet'), sub: 'Dela upp förvärvet i delbetalningar med månad. Obetalda delar ligger i likviditetsprognosen den månaden i stället för som betalt (IB). Anger du vem som betalar läggs beloppet som preliminär utökning av det lånet och syns i koncernlikviditeten. Markera betald när pengarna gått – då bokas det i Lån-fliken.', maxWidth: 760 });
+  if(!Array.isArray(fast.betalningar)) fast.betalningar = [];
+  const total = (fast.forvarvspris || 0) + (fast.aktiekop || 0);
+  const list = document.createElement('div');
+  p.body.appendChild(list);
+  const sumEl = document.createElement('div'); sumEl.style.cssText = 'margin-top:10px; font-size:12.5px;';
+  const save = async () => { await saveEkonomiMarkFastighet(fast.id, { betalningar: fast.betalningar }); renderEkonomiProjektMark(); };
+  const inpCss = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+  const render = () => {
+    list.innerHTML = '';
+    if(!fast.betalningar.length) list.innerHTML = '<p class="eko-sub">Inga delbetalningar – hela förvärvet räknas som betalt (IB) i prognosen.</p>';
+    fast.betalningar.forEach(b => {
+      const left = document.createElement('div'); left.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+      const mon = document.createElement('input'); mon.type = 'month'; mon.value = b.manad || ''; mon.style.cssText = inpCss;
+      mon.onchange = async () => { b.manad = mon.value; await save(); render(); };
+      const sel = document.createElement('select'); sel.className = 'eko-inline-select';
+      sel.innerHTML = '<option value="">Projektets kassa</option>' + EKONOMI_MARK_AKTORER.map(a => '<option value="' + a[0] + '">Betalas av ' + a[1] + '</option>').join('');
+      sel.value = b.aktor || '';
+      sel.onchange = async () => { b.aktor = sel.value; await save(); render(); };
+      left.appendChild(mon); left.appendChild(sel);
+      if(b.klart){ const t = document.createElement('span'); t.style.cssText = 'font-size:11px; color:var(--good, #2e7d32);'; t.textContent = 'Betald ' + (b.datum || ''); left.appendChild(t); mon.disabled = true; sel.disabled = true; }
+      const right = document.createElement('div'); right.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.value = b.belopp || ''; inp.placeholder = 'Belopp (kr)';
+      inp.style.cssText = 'width:130px; text-align:right; ' + inpCss;
+      inp.onchange = async () => { b.belopp = parseFloat(String(inp.value).replace(',', '.')) || 0; await save(); render(); };
+      inp.disabled = !!b.klart;
+      right.appendChild(inp);
+      if(!b.klart){
+        const date = document.createElement('input'); date.type = 'date'; date.value = new Date().toISOString().slice(0, 10); date.style.cssText = inpCss;
+        right.appendChild(date);
+        right.appendChild(ekoSmallBtn('Markera betald', async () => {
+          if(!date.value){ showToast('Ange datum.'); return; }
+          b.klart = true; b.datum = date.value;
+          if(b.aktor){
+            const d = ekonomiLanDetalj(pid, b.aktor, true);
+            d.tx.push({ id: uid(), datum: date.value, typ: 'utokning', belopp: b.belopp || 0, ranta: null, text: 'Markförvärv ' + (fast.fastighetsbeteckning || ''), kalla: 'Mark' });
+            try{ await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }catch(e){ showDebugError('Kunde inte spara lånet', e); }
+          }
+          await save(); render();
+          showToast(formatKrFull(b.belopp || 0) + ' markerad som betald' + (b.aktor ? ' och bokad som utökning av Lån ' + ekonomiMarkAktorNamn(b.aktor) : ''));
+        }));
+      } else {
+        right.appendChild(ekoSmallBtn('Ångra betald', async () => { if(!confirm('Ångra markeringen betald? En bokning i Lån-fliken tas inte bort automatiskt.')) return; b.klart = false; b.datum = ''; await save(); render(); }));
+      }
+      right.appendChild(ekoSmallBtn('Ta bort', async () => { if(!confirm('Ta bort delbetalningen?')) return; fast.betalningar = fast.betalningar.filter(x => x !== b); await save(); render(); }, true));
+      list.appendChild(ekoPopupLine(left, right));
+    });
+    const sum = fast.betalningar.reduce((s, b) => s + (b.belopp || 0), 0);
+    sumEl.innerHTML = 'Delbetalningar ' + formatKrFull(sum) + ' av totalt förvärv ' + formatKrFull(total) + (Math.abs(total - sum) > 0.5 ? ' · <span style="color:var(--danger);">' + (total > sum ? 'kvar ' + formatKrFull(total - sum) : 'överstiger med ' + formatKrFull(sum - total)) + '</span>' : ' · <span style="color:var(--good, #2e7d32);">stämmer ✓</span>');
+    list.appendChild(sumEl);
+  };
+  render();
+  const addRowEl = document.createElement('div'); addRowEl.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap;';
+  addRowEl.appendChild(ekoSmallBtn('+ Lägg till delbetalning', async () => {
+    const sum = fast.betalningar.reduce((s, b) => s + (b.belopp || 0), 0);
+    fast.betalningar.push({ id: uid(), manad: new Date().toISOString().slice(0, 7), belopp: Math.max(0, total - sum), aktor: '', klart: false });
+    await save(); render();
+  }));
+  addRowEl.appendChild(ekoSmallBtn('Dela 10 % nu / 90 % om två månader', async () => {
+    if(!total){ showToast('Fyll i förvärvspris först.'); return; }
+    if(fast.betalningar.length && !confirm('Ersätta befintliga delbetalningar?')) return;
+    const m0 = new Date().toISOString().slice(0, 7);
+    const m1 = ekonomiPrognosMonths(m0, 3)[2];
+    const a = Math.round(total * 0.1);
+    fast.betalningar = [{ id: uid(), manad: m0, belopp: a, aktor: '', klart: false }, { id: uid(), manad: m1, belopp: total - a, aktor: '', klart: false }];
+    await save(); render();
+  }));
+  p.body.appendChild(addRowEl);
 }
 function showEkonomiMarkSaljPopup(pid, fast){
   const s = fast.salj || { tillPid: '', status: 'ej', belopp: null, datum: '' };
@@ -2769,7 +2912,7 @@ function renderEkonomiProjektMark(){
   empty.style.display = fastigheter.length ? 'none' : 'block';
   fastigheter.forEach(fast => {
     const row = document.createElement('tr');
-    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
 
     const textFields = [
       { key: 'fastighetsbeteckning', cell: 0 }
@@ -2805,10 +2948,25 @@ function renderEkonomiProjektMark(){
     removeBtn.title = 'Ta bort fastighet';
     removeBtn.textContent = '✕';
     removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
-    row.children[7].appendChild(removeBtn);
-    row.children[7].className = 'row-actions';
+    row.children[8].appendChild(removeBtn);
+    row.children[8].className = 'row-actions';
+    // Betalningsplan: delbetalningar med månad och vem som betalar.
+    const betTd = row.children[6];
+    betTd.style.cssText = 'text-align:left; font-size:12px;';
+    const betBtn = document.createElement('button');
+    betBtn.type = 'button';
+    const betAlla = ekonomiMarkBetalningar(fast).length;
+    const betKvar = ekonomiMarkBetalningar(fast).filter(b => !b.klart).length;
+    const betColor = betAlla ? (betKvar ? 'var(--danger)' : 'var(--good, #2e7d32)') : 'var(--line-soft)';
+    betBtn.textContent = betAlla ? (betKvar ? betKvar + ' obetald' + (betKvar > 1 ? 'a' : '') : 'Betald') : 'Betalningsplan…';
+    betBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid ' + betColor + '; background:#fff; border-radius:5px; cursor:pointer; color:' + (betAlla ? betColor : 'var(--ink-soft)') + ';';
+    betBtn.onclick = () => showEkonomiMarkBetalningPopup(pid, fast);
+    betTd.appendChild(betBtn);
+    const bt = ekonomiMarkBetalningText(fast);
+    if(bt){ const d = document.createElement('div'); d.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;'; d.textContent = bt; betTd.appendChild(d); }
     // Såld vidare till annat projekt: knapp + status.
-    const saljTd = row.children[6];
+    const saljTd = row.children[7];
+
     saljTd.style.cssText = 'text-align:left; font-size:12px;';
     const saljBtn = document.createElement('button');
     saljBtn.type = 'button';
@@ -2829,7 +2987,7 @@ function renderEkonomiProjektMark(){
     const i = f.inkommande;
     row.innerHTML = '<td style="text-align:left;">' + escapeHtml(f.fastighetsbeteckning || '—') + '<div style="font-size:10.5px; color:var(--ink-soft);">från ' + escapeHtml(i.fromNamn) + '</div></td>' +
       '<td style="' + (i.sald ? '' : 'color:var(--danger);') + '">' + (i.sald ? formatKrFull(i.belopp) : (i.belopp ? formatKrFull(i.belopp) + ' (prel.)' : '—')) + '</td><td>—</td>' +
-      '<td style="font-weight:600;">' + (i.sald ? formatKrFull(i.belopp) : '—') + '</td><td>—</td><td>—</td>' +
+      '<td style="font-weight:600;">' + (i.sald ? formatKrFull(i.belopp) : '—') + '</td><td>—</td><td>—</td><td>—</td>' +
       '<td style="text-align:left; font-size:12px;"><span style="color:' + (i.sald ? 'var(--good, #2e7d32)' : 'var(--danger)') + ';">' + (i.sald ? 'Köpt från ' + escapeHtml(i.fromNamn) + (i.datum ? ' · ' + escapeHtml(i.datum) : '') : 'Ej insåld – säljs från ' + escapeHtml(i.fromNamn)) + '</span></td><td></td>';
     tbody.appendChild(row);
   });
@@ -2850,7 +3008,7 @@ function renderEkonomiProjektMark(){
       '<td>' + formatKrFull(sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.forvarvspris + sum.aktiekop) + '</td>' +
       '<td>' + formatKrFull(sum.vattenanslutning) + '</td>' +
-      '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td><td></td></tr>';
+      '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td><td></td><td></td></tr>';
   }
   renderEkonomiMarkFakturor(fastigheter);
 }
@@ -4460,7 +4618,7 @@ function ekonomiPrognosInbetalningar(pid, start, months){
       d.tx.forEach(t => {
         const m = String(t.datum || '').slice(0, 7);
         if(!monthSet.has(m)) return;
-        add(m, t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), { datum: t.datum, typ: t.typ, belopp: t.belopp || 0, text: t.text || '', kalla: t.kalla });
+        add(m, t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), { datum: t.datum, typ: t.typ, belopp: t.belopp || 0, text: t.text || '', kalla: t.kalla, jvKassa: !!t.jvKassa });
       });
     } else {
       // Inga bokningar: fältets belopp är lånets saldo och räknas som IB.
@@ -4477,6 +4635,11 @@ function ekonomiPrognosInbetalningar(pid, start, months){
       if(!monthSet.has(p.manad)) return;
       row.per[p.manad] = (row.per[p.manad] || 0) + (p.belopp || 0);
       (row.planerade[p.manad] = row.planerade[p.manad] || []).push(p);
+    });
+    // Delbetalningar av markförvärv som betalas av den här aktören (Mark → Betalningsplan).
+    ekonomiMarkPlaneradeBetalningar(pid).filter(x => x.b.aktor === f.key && monthSet.has(x.b.manad)).forEach(({ fast, b }) => {
+      row.per[b.manad] = (row.per[b.manad] || 0) + (b.belopp || 0);
+      (row.planerade[b.manad] = row.planerade[b.manad] || []).push({ id: 'mark:' + fast.id + ':' + b.id, lanKey: f.key, belopp: b.belopp || 0, manad: b.manad, text: 'Markförvärv ' + (fast.fastighetsbeteckning || '') + ' – betalas av ' + ekonomiMarkAktorNamn(f.key), mark: true });
     });
     if(row.ib || Object.keys(row.per).length) lan.push(row);
   });
@@ -4670,6 +4833,16 @@ function ekonomiPrognosData(pid){
     const e = entry(postId);
     e.ib += tagna[postId].mark;
     tagna[postId].items.filter(it => it.typ === 'mark').forEach(it => e.ibItems.push({ text: it.text, belopp: it.belopp }));
+  });
+  // Delbetalningar av förvärvet (Mark → Betalningsplan) som inte är betalda: bort från IB, in på sin månad.
+  const markPost = ekonomiMarkPostFor(pid, 'forvarv', false);
+  if(markPost) ekonomiMarkPlaneradeBetalningar(pid).forEach(({ fast, b }) => {
+    const e = entry(markPost.id);
+    e.ib -= b.belopp || 0;
+    if(monthSet.has(b.manad)){
+      e.obetalt[b.manad] = (e.obetalt[b.manad] || 0) + (b.belopp || 0);
+      (e.obetaltItems[b.manad] = e.obetaltItems[b.manad] || []).push({ lopnr: 'Mark', text: 'Förvärv ' + (fast.fastighetsbeteckning || '') + ' · delbetalning' + (b.aktor ? ' · betalas av ' + ekonomiMarkAktorNamn(b.aktor) : ''), belopp: b.belopp || 0 });
+    }
   });
   // Flyttat från IB till en senare månad (prog.ibFlytt): IB minskar, beloppet läggs på vald månad.
   Object.keys(prog.ibFlytt || {}).forEach(postId => {
@@ -4871,7 +5044,13 @@ function showEkonomiLanManadPopup(pid, l, m){
       (it.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(it.belopp)));
   });
   const prog = ekonomiPrognosRec(pid);
+  const jvPartner = !isFl && ekonomiProjektAgande(pid).partner;
+  const prelBadge = '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Preliminär</span>';
   plan.forEach(pl => {
+    if(pl.mark){
+      p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + prelBadge + escapeHtml(pl.text || '') + '</div><div style="font-size:11px; color:var(--ink-soft);">ändras under Ekonomi → Mark → Betalningsplan</div>', '+' + formatKrFull(pl.belopp || 0)));
+      return;
+    }
     const right = document.createElement('div');
     right.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;';
     const belopp = document.createElement('input');
@@ -4887,6 +5066,15 @@ function showEkonomiLanManadPopup(pid, l, m){
     date.value = m > today.slice(0, 7) ? m + '-01' : today;
     date.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px;';
     right.appendChild(belopp); if(!isFl) right.appendChild(rInp); right.appendChild(date);
+    if(jvPartner && (pl.belopp || 0) < 0){
+      // Återbetalning till JV-kassan i stället för till aktören (syns under Gemensamma projekt i Koncern).
+      const jvL = document.createElement('label'); jvL.style.cssText = 'font-size:11px; display:flex; gap:4px; align-items:center; cursor:pointer; white-space:nowrap;';
+      jvL.title = 'Pengarna läggs i JV-kassan (Solvinkeln + ' + jvPartner + ') i stället för att gå tillbaka till aktören';
+      const jvCb = document.createElement('input'); jvCb.type = 'checkbox'; jvCb.checked = !!pl.jvKassa;
+      jvCb.onchange = async () => { const pp = (prog.planeradeLan || []).find(x => x.id === pl.id); if(pp) pp.jvKassa = jvCb.checked; pl.jvKassa = jvCb.checked; await saveEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern(); };
+      jvL.appendChild(jvCb); jvL.appendChild(document.createTextNode('Till JV-kassan'));
+      right.appendChild(jvL);
+    }
     right.appendChild(ekoSmallBtn('Markera genomförd', async () => {
       const b = parseFloat(String(belopp.value).replace(',', '.'));
       if(!date.value){ showToast('Ange datum.'); return; }
@@ -4900,7 +5088,7 @@ function showEkonomiLanManadPopup(pid, l, m){
           showToast(formatKrFull(Math.abs(b)) + ' ' + st.namn + ' markerat som genomfört ' + date.value);
         } else {
           const d = ekonomiLanDetalj(pid, l.key, true);
-          d.tx.push({ id: uid(), datum: date.value, typ: b < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(b), ranta: rInp.value !== '' ? parseFloat(rInp.value.replace(',', '.')) || 0 : null, text: pl.text || 'Enligt likviditetsprognosen', kalla: 'likviditetsprognosen' });
+          d.tx.push({ id: uid(), datum: date.value, typ: b < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(b), ranta: rInp.value !== '' ? parseFloat(rInp.value.replace(',', '.')) || 0 : null, text: pl.text || 'Enligt likviditetsprognosen', kalla: 'likviditetsprognosen', jvKassa: !!pl.jvKassa });
           prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
           await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
           await saveEkonomiPrognos();
@@ -5313,6 +5501,8 @@ function ekonomiPrognosSlutforande(pid, months, saldoPerManad){
   if(!m || !months.includes(m)) return null;
   const belopp = Math.max(0, saldoPerManad[m] || 0);
   const ag = ekonomiProjektAgande(pid);
+  // Vinsten behålls i JV-kassan (valet görs under Koncern → Gemensamma projekt): ingen utdelning till aktörerna.
+  if(prog.vinstHantering === 'kassa' && ag.partner) return { manad: m, belopp, jv: true, delar: [{ namn: 'JV-kassan (Solvinkeln + ' + ag.partner + ')', andel: 100, belopp, key: null, jv: true }] };
   const delar = [{ namn: 'Solvinkeln', andel: ag.solvinkeln, belopp: Math.round(belopp * ag.solvinkeln / 100), key: 'lanSolvinkeln' }];
   if(ag.partner){
     const key = /derome/i.test(ag.partner) ? 'lanDerome' : /nbe/i.test(ag.partner) ? 'lanNBE' : /boro/i.test(ag.partner) ? 'lanBORO' : null;
