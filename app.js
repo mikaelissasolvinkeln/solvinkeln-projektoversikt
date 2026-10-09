@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261009093745';
+const APP_BUILD = '20261009100116';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1971,7 +1971,6 @@ async function renderEkonomiKoncern(){
         tog.title = 'Klicka för att växla: dela ut vinsten enligt ägarandel (syns som utdelning hos aktörerna) eller låta den ligga kvar i JV-kassan';
         tog.onclick = async () => { gprog.vinstHantering = tillKassa ? 'utdelning' : 'kassa'; await saveEkonomiPrognos(); renderEkonomiKoncern(); };
         vl.appendChild(tog);
-        if(!slut){ const n = document.createElement('span'); n.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; n.textContent = 'ingen slutförandemånad (★) i projektets likviditetsprognos'; vl.appendChild(n); }
         addRow(vl, ['', ''].concat(months.map(m => (!slut || m !== slut.manad) ? '' : redCell(slut.belopp, 'Preliminär vinst = likviditeten vid slutförandet')), [slut ? sumCell(slut.belopp) : '']), { indent: 18 });
       });
       if(kompakt){
