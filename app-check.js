@@ -1,0 +1,13616 @@
+// Byggstämpel - sätts till samma värde i index.html (<meta name="app-build">)
+// och här vid varje publicering (deploy/stamp.sh). Efter en publicering kan
+// webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
+// med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
+// Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
+const APP_BUILD = 'dev';
+(function checkAppBuild(){
+  const meta = document.querySelector('meta[name="app-build"]');
+  const htmlBuild = meta ? meta.getAttribute('content') : null;
+  if(!htmlBuild || htmlBuild === APP_BUILD) return;
+  // Högst två omladdningar inom två minuter - undvik loop om cachen är envis.
+  let state = { count: 0, ts: 0 };
+  try{ state = JSON.parse(sessionStorage.getItem('appBuildReloads') || '{}') || state; }catch(e){}
+  if(!state.ts || Date.now() - state.ts > 2 * 60 * 1000) state = { count: 0, ts: Date.now() };
+  if((state.count || 0) >= 2) return;
+  try{ sessionStorage.setItem('appBuildReloads', JSON.stringify({ count: (state.count || 0) + 1, ts: state.ts })); }catch(e){}
+  const params = new URLSearchParams(location.search);
+  params.set('r', String(Date.now()));
+  location.replace(location.pathname + '?' + params.toString() + location.hash);
+})();
+
+const PROJECTS_KEY = 'projects-list';
+const PAMINNELSER_KEY = 'paminnelser';
+
+// De fem individuella kontona. Namnet visas automatiskt utifrån vem som loggat
+// in (eget konto) - ingen fritextruta längre. id:na är kontonas riktiga
+// Supabase Auth user-id, hämtade när kontona skapades - krävs för att kunna
+// tilldela ett Liggaren-ärende till en specifik kollega (se schema-liggaren.sql).
+const LIGGAREN_PEOPLE = [
+  { name: 'Mikael',  email: 'mikael.issa@jwk.se',            id: '5e35722c-d763-4c54-ab20-ee68acf74bb5' },
+  { name: 'Saman',   email: 'saman.haake@solvinkeln.se',      id: '2e4f60ed-f521-4171-9df5-70889790a20c' },
+  { name: 'Ashur',   email: 'ashur.ibrahim@solvinkeln.se',    id: '21c682f4-e70d-499a-a8f2-703bdac23a02' },
+  { name: 'Sargon',  email: 'sargon.akcan@jwk.se',            id: 'a08976c1-7006-43a2-9c99-83bd68a32d94' },
+  { name: 'Rebecka', email: 'rebecka.bergvall@solvinkeln.se', id: '417f258d-8e43-4555-b7a4-289986b535f7' }
+];
+const PERSONAL_NAMES_BY_EMAIL = LIGGAREN_PEOPLE.reduce((acc, p) => { acc[p.email.toLowerCase()] = p.name; return acc; }, {});
+
+// ---------- Ekonomi (företagsövergripande, bara synlig/nåbar för detta konto) ----------
+// Datan lagras privat via DB.getPersonalData/setPersonalData (personal_data-
+// tabellen, RLS: auth.uid() = user_id) - se schema-personal.sql. Ingen extra
+// databasspärr behövs utöver den, eftersom ingen annan användares konto kan nå
+// dessa rader ändå. E-postkollen nedan är bara en UI-spärr.
+const EKONOMI_ADMIN_EMAIL = 'mikael.issa@jwk.se';
+const EKONOMI_KEYS = {
+  meta: 'ekonomi-projekt-meta',
+  budgetDetalj: 'ekonomi-budget-detalj',
+  reskontra: 'ekonomi-reskontra',
+  likviditet: 'ekonomi-likviditet',
+  lan: 'ekonomi-lan',
+  brItems: 'ekonomi-br-items',
+  mark: 'ekonomi-mark',
+  likviditetsbudget: 'ekonomi-likviditetsbudget',
+  prefs: 'ui-prefs',
+  koncern: 'ekonomi-koncern'
+};
+// Sparade visningsval (t.ex. filter), följer med mellan enheter.
+let uiPrefs = {};
+async function saveUiPrefs(){
+  try{ await DB.setPersonalData(EKONOMI_KEYS.prefs, JSON.stringify(uiPrefs)); }catch(e){ showDebugError('Kunde inte spara inställning', e); }
+}
+// Fast lista kostnadsposter i en projektbudget - Totalkostnad räknas alltid ut,
+// tilldelas aldrig en reskontrarad.
+const EKONOMI_COST_CATEGORIES = [
+  'Markförvärv', 'Entreprenad', 'Markarbete', 'Sanering/rivning', 'Byggström', 'Kommun avgifter',
+  'VA anslutningar', 'El anslutning', 'KA', 'Ekonomiskplan', 'Slutstädning', 'Finansiering', 'Kassa Brf',
+  'Renderingar', 'Arkitekt', 'Försäljningsmaterial', 'Mäklararvode', 'Sociala medier', 'Brf Styrelsearvode',
+  'Bopärm och system', 'Försäljningsdagar', 'Kamera', 'Garantiåtgärder', 'Två årsbesiktningspunkter',
+  'Övriga projekteringskostnader/konsulter', 'Solvinkeln nedlagd tid', 'Buffert'
+];
+const EKONOMI_TAB_CONFIG = {
+  likviditet: {
+    key: 'likviditet',
+    tbodyId: 'ekonomiLikviditetBody',
+    fields: [ { key: 'belopp', label: 'Likviditet (kr)' } ]
+  },
+  lan: {
+    key: 'lan',
+    tbodyId: 'ekonomiLanBody',
+    fields: [
+      { key: 'fastighetsvarde', label: 'Fastighetsvärde (kr) - från Mark', computed: true },
+      { key: 'lanKameo', label: 'Lån Kameo (kr)', dated: true },
+      { key: 'lanSparbanken', label: 'Lån Sparbanken (kr)', dated: true },
+      { key: 'lanTriol', label: 'Lån Triol (kr)', dated: true },
+      { key: 'lanSolvinkeln', label: 'Lån Solvinkeln (kr)', dated: true },
+      { key: 'lanNBE', label: 'Lån NBE (kr)', dated: true },
+      { key: 'lanDerome', label: 'Lån Derome (kr)', dated: true },
+      { key: 'lanBORO', label: 'Lån BORO (kr)', dated: true }
+    ]
+  }
+};
+
+// ---------- Liggaren (ärenderegister, kan tilldelas en kollega) ----------
+const LIGGAREN_STATUS = { OPPET: 'oppet', PAGAENDE: 'pagaende', KLART: 'klart' };
+const LIGGAREN_STATUS_LABEL = { oppet: 'Att göra', pagaende: 'Pågående', klart: 'Klart' };
+const LIGGAREN_STATUS_ORDER = [LIGGAREN_STATUS.OPPET, LIGGAREN_STATUS.PAGAENDE, LIGGAREN_STATUS.KLART];
+const LIGGAREN_PRIORITIES = [1, 2, 3, 4, 5];
+const LIGGAREN_PRIORITY_COLOR = p => (p <= 2 ? 'var(--danger)' : p === 3 ? 'var(--blue)' : 'var(--ink-soft)');
+const LIGGAREN_DEFAULT_EMAILS = ['Mikael.issa@solvinkeln.se', 'Saman.haake@solvinkeln.se', 'Rebecka.bergvall@solvinkeln.se'];
+const LIGGAREN_RECURRING_KEY = 'liggaren-recurring-templates';
+const SWEDISH_MONTHS = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december'];
+const LIGGAREN_PROJECTS = [
+  'Privat', 'Solvinkeln Fastigheter AB', 'Saman', 'Rebecka', 'Ashur', 'Aygun',
+  'Brf Gladö Sjöutsikten', 'Brf Gladö Sjöglimten', 'Brf Gladö Höjden', 'Brf Gladö Utsikten', 'Brf Gladö Viken',
+  'Brf Aktrisen', 'Brf Kulissen', 'Brf Regissören', 'Brf Vistabergshöjden', 'Brf Glömstahöjden',
+  'Projekt Nacka Kummelnäs', 'Brf Enköping'
+];
+const CHECK_FIELDS = ['sald','slutbetald','grovstadat','finstadat','sopkarl','fiber','brevlada'];
+const CHECK_LABELS = {
+  sald: 'Såld', slutbetald: 'Slutbetald',
+  grovstadat: 'Grovstäd', finstadat: 'Finstäd', sopkarl: 'Sopkärl',
+  fiber: 'Fiber', brevlada: 'Brevlåda'
+};
+
+// Extraherat från kostnadskalkylen (avsnitt 6, sid 8-9): Lgh nr, Area m², Årsavgift kr/mån, Totalt kr
+const SEED_APARTMENTS_BY_PROJECT_NAME = {
+  'Brf Gladö Höjden': [
+    [1,59,2989,2495000],[2,125,5383,4695000],[3,125,5383,4695000],[4,125,5383,4795000],
+    [5,125,5383,4495000],[6,59,2989,2495000],[7,59,2989,2650000],[8,125,5383,4695000],
+    [9,125,5383,4650000],[10,59,2989,2650000],[11,125,5383,4450000],[12,125,5383,4395000],
+    [13,125,5383,4795000],[14,125,5383,4650000],[15,59,2989,2495000],[16,59,2989,2595000],
+    [17,125,5383,4695000],[18,125,5383,4695000],[19,59,2989,2550000],[20,125,5383,4750000],
+    [21,125,5383,4750000],[22,59,2989,2495000],[23,125,5383,4695000],[24,125,5383,4695000],
+    [25,59,2989,2550000],[26,125,5383,4595000],[27,125,5383,4695000],[28,59,2989,2395000],
+    [29,125,5383,4695000],[30,125,5383,4695000]
+  ],
+  // Extraherat från ekonomiska planen (avsnitt 6, sid 9): Lgh/adr nr, Area m², Årsavgift kr/mån, Totalt kr
+  // Extraherat från ekonomiska planen (avsnitt 6, sid 9): Lgh nr, Area m², Årsavgift kr/mån, Totalt kr, Adress
+  'Brf Glömstahöjden': [
+    [1,39,2427,1795000,'Ryttarvägen 1 A'],[2,135,5444,6695000,'Ryttarvägen 1 B'],[3,135,5444,6795000,'Ryttarvägen 1 C'],
+    [4,39,2427,1795000,'Ryttarvägen 1 D'],[5,135,5444,6650000,'Ryttarvägen 1 E'],[6,135,5444,6750000,'Ryttarvägen 1 F'],
+    [7,135,5444,6595000,'Ryttarvägen 1 M'],[8,135,5444,6495000,'Ryttarvägen 1 L'],[9,39,2427,1850000,'Ryttarvägen 1 K'],
+    [10,135,5444,6895000,'Ryttarvägen 1 G'],[11,135,5444,6795000,'Ryttarvägen 1 H'],[12,39,2427,1950000,'Ryttarvägen 1 J'],
+    [13,138,5458,6095000,'Ryttarvägen 3 A'],[14,138,5458,5995000,'Ryttarvägen 3 B'],[15,49,2817,2795000,'Ryttarvägen 3 C'],
+    [16,135,5444,6850000,'Ryttarvägen 3 D'],[17,135,5444,6695000,'Ryttarvägen 3 E'],[18,39,2427,1995000,'Ryttarvägen 3 F'],
+    [19,135,5444,6595000,'Ryttarvägen 3 G'],[20,135,5444,6550000,'Ryttarvägen 3 H'],[21,39,2427,1895000,'Ryttarvägen 3 J']
+  ],
+  // Extraherat från kostnadskalkylen (avsnitt 6, sid 8): Lgh nr, Area m², Årsavgift kr/mån, Totalt kr
+  'Brf Aktrisen': [
+    [1,141,5697,4695000],[2,141,5697,4495000],[3,141,5697,4495000],[4,141,5697,4495000],
+    [5,141,5697,4650000],[6,167,6747,4795000],[7,167,6747,4695000],[8,167,6747,4495000],
+    [9,167,6747,4450000],[10,167,6747,4495000],[11,167,6747,4695000],[12,141,5697,4495000],
+    [13,141,5697,4295000],[14,141,5697,4295000],[15,141,5697,4295000],[16,141,5697,4595000]
+  ],
+  // Extraherat från ekonomiska planen (avsnitt 6, sid 9): Lgh nr, Area m², Årsavgift kr/mån, Totalt kr
+  'Brf Kulissen': [
+    [1,136,4990,4195000],[2,136,4990,3895000],[3,136,4990,3895000],[4,136,4990,3795000],
+    [5,136,4990,3695000],[6,136,4990,3795000],[7,136,4990,3895000],[8,136,4990,3895000],
+    [9,136,4990,4095000],[10,179,5971,4650000],[11,179,5971,4495000],[12,179,5971,4295000],
+    [13,179,5971,4295000],[14,179,5971,4450000],[15,179,5971,4595000],[16,136,4990,4295000],
+    [17,136,4990,4095000],[18,136,4990,3995000],[19,136,4990,3995000],[20,136,4990,4095000],
+    [21,136,4990,4350000]
+  ]
+};
+
+// Föreningens beräknade fastighetslån, avsnitt 4.1 i respektive kostnadskalkyl/ekonomisk plan (kr)
+const PROJECT_LOAN_BY_NAME = {
+  'Brf Gladö Höjden': 36925500,
+  'Brf Glömstahöjden': 23969000,
+  'Brf Aktrisen': 28823400,
+  'Brf Kulissen': 34254000
+};
+
+let projects = [];
+let activeProjectId = null;
+let screen = 'home'; // 'personal' | 'home' | 'project' | 'calendar'
+let arenden = [];
+let paminnelser = [];
+let liggarenStatusFilter = 'alla';
+let liggarenProjectFilterVal = 'alla';
+let liggarenSortBy = 'priority';
+let liggarenEditingMailId = null;
+let liggarenConfirmClear = false;
+let liggarenViewMode = 'expanded';
+let liggarenExpandedCompactId = null;
+let liggarenRecurringTemplates = [];
+let myPersonId = null;
+let myEmail = '';
+let isEkonomiAdmin = false;
+let companyEkonomiData = { meta: {}, budgetDetalj: {}, reskontra: {}, likviditet: {}, lan: {}, brItems: {}, mark: {}, likviditetsbudget: {}, koncern: {} };
+let currentEkonomiBudgetProjectId = null;
+let currentEkonomiMarkProjectId = null;
+let ekonomiBudgetAreaRevenue = { kvm: 0, intakter: 0 };
+let currentEkonomiLanProjectId = null;
+let currentEkonomiLikviditetProjectId = null;
+let ekonomiSoldCounts = {};
+let ekonomiSubView = 'oversikt';
+let currentEkonomiProjektId = null;
+let ekonomiNumberModalCtx = null;
+let nyaProjektList = [];
+let currentNyaProjektId = null;
+let projectSubView = 'checklista'; // 'checklista' | 'ekonomi'
+let entreprenadSubView = 'tidsplan'; // 'tidsplan' | 'byggmoten'
+let apartments = [];
+let myName = '';
+let loaded = false;
+let saving = false;
+let calendarYear = new Date().getFullYear();
+let calendarMonth = new Date().getMonth();
+let allEvents = [];
+const MONTH_NAMES = ['Januari','Februari','Mars','April','Maj','Juni','Juli','Augusti','September','Oktober','November','December'];
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function stripHtml(html){
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
+}
+
+function slugId(name){
+  return name.toLowerCase().replace(/[^a-z0-9åäö]+/g,'-').replace(/(^-|-$)/g,'') + '-' + uid().slice(0,4);
+}
+
+function timeAgo(iso){
+  if(!iso) return '';
+  const diff = Math.floor((Date.now() - new Date(iso).getTime())/1000);
+  if(diff < 30) return 'just nu';
+  if(diff < 60) return diff + ' sek sedan';
+  if(diff < 3600) return Math.floor(diff/60) + ' min sedan';
+  if(diff < 86400) return Math.floor(diff/3600) + ' tim sedan';
+  return Math.floor(diff/86400) + ' d sedan';
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+function showDebugError(context, err, retryFn){
+  const box = document.getElementById('debugError');
+  const text = '[' + new Date().toLocaleTimeString('sv-SE') + '] ' + context + ': ' +
+    (err ? (err.message || (err.toString ? err.toString() : JSON.stringify(err))) : '');
+  box.innerHTML = '';
+  const msg = document.createElement('div');
+  msg.textContent = text;
+  box.appendChild(msg);
+  if(retryFn){
+    const btn = document.createElement('button');
+    btn.textContent = '↻ Försök spara igen';
+    btn.style.cssText = 'margin-top:8px;background:var(--danger);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:Inter,sans-serif;';
+    btn.onclick = retryFn;
+    box.appendChild(btn);
+  }
+  box.style.display = 'block';
+  console.error(context, err);
+}
+
+function clearDebugError(){
+  const box = document.getElementById('debugError');
+  box.style.display = 'none';
+  box.innerHTML = '';
+}
+
+async function withRetry(fn, attempts, delayMs){
+  attempts = attempts || 5;
+  delayMs = delayMs || 800;
+  let lastErr;
+  for(let i = 0; i < attempts; i++){
+    try{
+      return await fn();
+    }catch(e){
+      lastErr = e;
+      if(i < attempts - 1) await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+let hasUnsavedApartmentChanges = false;
+let hasUnsavedProjectChanges = false;
+
+function apartmentsKey(projectId){ return 'apartments:' + projectId; }
+
+function emptyCheck(){ return { done:false, by:'', at:'' }; }
+function emptyBuyer(){ return { name:'', phone:'', email:'' }; }
+function emptySaleCheck(){ return { done:false, by:'', at:'', price:'', buyer1: emptyBuyer(), buyer2: emptyBuyer() }; }
+function emptyPaymentCheck(){ return { done:false, by:'', at:'', amount:'', date:'' }; }
+function emptyDate(){ return { date:'', by:'', at:'' }; }
+function emptyNote(){ return { done:false, by:'', at:'', note:'', invoicedCustomer:false, invoicedLoan:false, amount:'' }; }
+
+function newApartment(fields){
+  return {
+    id: uid(),
+    lgh: fields.lgh || '',
+    address: fields.address || '',
+    anlaggningsid: fields.anlaggningsid || '',
+    totalyta: fields.totalyta || '',
+    avgift: fields.avgift || '',
+    totalpris: fields.totalpris || '',
+    sald: emptySaleCheck(),
+    slutbetald: emptyPaymentCheck(),
+    besiktning: emptyDate(),
+    inflyttning: emptyDate(),
+    grovstadat: emptyCheck(),
+    finstadat: emptyCheck(),
+    sopkarl: emptyCheck(),
+    fiber: emptyCheck(),
+    brevlada: emptyCheck(),
+    tillval: emptyNote(),
+    upplatenKoncern: emptyCheck(),
+    kommentar: fields.kommentar || '',
+    kommentarInflyttning: fields.kommentarInflyttning || '',
+    projektnummer: fields.projektnummer || '',
+    inflyttningPlan: { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' },
+    upplatelse: { date: '', by: '', at: '', typ: '' },
+    besiktningsprotokoll: []
+  };
+}
+
+// Fyller i saknade fält på äldre sparad data så nya kolumner aldrig kraschar synken
+function normalizeApartment(apt){
+  apt.lgh = apt.lgh || '';
+  apt.address = apt.address || '';
+  apt.anlaggningsid = apt.anlaggningsid || '';
+  apt.totalyta = apt.totalyta || '';
+  apt.avgift = apt.avgift || '';
+  apt.totalpris = apt.totalpris || '';
+
+  // Migrering: äldre data kan ha sparat "lghnr/byggnad bokstav" (t.ex. "1/1 A") i lgh-fältet.
+  // Bryt ut riktigt lägenhetsnummer och flytta byggnad+bokstav till adressen om adressen är tom.
+  const legacyMatch = typeof apt.lgh === 'string' && apt.lgh.match(/^(\d+)\s*\/\s*(\d+)\s+([A-ZÅÄÖ])$/i);
+  if(legacyMatch){
+    const [, lghNum, building, letter] = legacyMatch;
+    apt.lgh = lghNum;
+    if(!apt.address){
+      apt.address = 'Ryttarvägen ' + building + ' ' + letter.toUpperCase();
+    }
+  }
+
+  CHECK_FIELDS.forEach(f => {
+    if(!apt[f] || typeof apt[f] !== 'object'){
+      apt[f] = (f === 'sald' ? emptySaleCheck() : f === 'slutbetald' ? emptyPaymentCheck() : emptyCheck());
+    }
+  });
+  if(typeof apt.sald.price !== 'string') apt.sald.price = '';
+  if(!apt.sald.buyer1 || typeof apt.sald.buyer1 !== 'object') apt.sald.buyer1 = emptyBuyer();
+  if(!apt.sald.buyer2 || typeof apt.sald.buyer2 !== 'object') apt.sald.buyer2 = emptyBuyer();
+  ['name','phone','email'].forEach(f => {
+    if(typeof apt.sald.buyer1[f] !== 'string') apt.sald.buyer1[f] = '';
+    if(typeof apt.sald.buyer2[f] !== 'string') apt.sald.buyer2[f] = '';
+  });
+  if(typeof apt.slutbetald.amount !== 'string') apt.slutbetald.amount = '';
+  if(typeof apt.slutbetald.date !== 'string') apt.slutbetald.date = '';
+  ['besiktning','inflyttning'].forEach(f => {
+    if(!apt[f] || typeof apt[f] !== 'object') apt[f] = emptyDate();
+  });
+  if(typeof apt.besiktning.kontaktatKund !== 'boolean') apt.besiktning.kontaktatKund = false;
+  if(typeof apt.besiktning.bokatBesiktningsman !== 'boolean') apt.besiktning.bokatBesiktningsman = false;
+  if(typeof apt.besiktning.meddelatEntreprenor !== 'boolean') apt.besiktning.meddelatEntreprenor = false;
+  if(typeof apt.besiktning.bokatStad !== 'boolean') apt.besiktning.bokatStad = false;
+  if(typeof apt.kommentar !== 'string') apt.kommentar = '';
+  if(typeof apt.kommentarInflyttning !== 'string') apt.kommentarInflyttning = '';
+  if(!Array.isArray(apt.besiktningsprotokoll)) apt.besiktningsprotokoll = [];
+  if(typeof apt.projektnummer !== 'string') apt.projektnummer = '';
+  if(!apt.inflyttningPlan || typeof apt.inflyttningPlan !== 'object'){
+    apt.inflyttningPlan = { onskatDatumKund: '', byggdatum: '', bekraftatDatumKund: '' };
+  }
+  ['onskatDatumKund', 'byggdatum', 'bekraftatDatumKund'].forEach(f => {
+    if(typeof apt.inflyttningPlan[f] !== 'string') apt.inflyttningPlan[f] = '';
+  });
+  if(!apt.inflyttningBekraftat || typeof apt.inflyttningBekraftat !== 'object') apt.inflyttningBekraftat = { date: '', by: '', at: '' };
+  if(typeof apt.inflyttningBekraftat.date !== 'string') apt.inflyttningBekraftat.date = '';
+  if(!apt.upplatelse || typeof apt.upplatelse !== 'object') apt.upplatelse = { date: '', by: '', at: '', typ: '' };
+  if(typeof apt.upplatelse.date !== 'string') apt.upplatelse.date = '';
+  if(typeof apt.upplatelse.typ !== 'string') apt.upplatelse.typ = '';
+  if(!apt.tillval || typeof apt.tillval !== 'object') apt.tillval = emptyNote();
+  if(typeof apt.tillval.note !== 'string') apt.tillval.note = '';
+  if(typeof apt.tillval.invoicedCustomer !== 'boolean') apt.tillval.invoicedCustomer = false;
+  if(typeof apt.tillval.invoicedLoan !== 'boolean') apt.tillval.invoicedLoan = false;
+  if(typeof apt.tillval.amount !== 'string') apt.tillval.amount = '';
+  if(!apt.upplatenKoncern || typeof apt.upplatenKoncern !== 'object') apt.upplatenKoncern = emptyCheck();
+  return apt;
+}
+
+// Vilket datum som ska gälla som "riktigt" inflyttningsdatum (apt.inflyttning.date,
+// samma fält som Checklistan/Kalendern redan läser): en inläst upplåtelse/
+// överlåtelse går alltid före allt annat, annars bekräftat datum till kund,
+// annars byggdatum, annars önskat datum från kund.
+function effectiveInflyttningDate(apt){
+  if(apt.inflyttningBekraftat && apt.inflyttningBekraftat.date) return apt.inflyttningBekraftat.date;
+  return preliminarInflyttningDate(apt);
+}
+// Preliminärt inflyttningsdatum (allt utom det bekräftade): upplåtelse, bekräftat
+// byggdatum till kund, byggdatum, önskat datum.
+function preliminarInflyttningDate(apt){
+  if(apt.upplatelse && apt.upplatelse.date) return apt.upplatelse.date;
+  const plan = apt.inflyttningPlan;
+  if(plan){
+    if(plan.bekraftatDatumKund) return plan.bekraftatDatumKund;
+    if(plan.byggdatum) return plan.byggdatum;
+    if(plan.onskatDatumKund) return plan.onskatDatumKund;
+  }
+  return (apt.inflyttning && apt.inflyttning.date) || '';
+}
+
+// ---------- Name ----------
+// Namnet kommer numera alltid från vem som är inloggad (eget konto), inte en
+// fritextruta - se PERSONAL_NAMES_BY_EMAIL och init().
+function renderNameUI(){
+  const current = document.getElementById('currentUser');
+  current.style.display = myName ? 'flex' : 'none';
+  document.getElementById('currentUserName').textContent = myName;
+}
+
+// ---------- Projects ----------
+const DEFAULT_PROJECT_NAMES = ['Brf Glömstahöjden', 'Brf Gladö Höjden', 'Brf Aktrisen', 'Brf Kulissen'];
+
+async function loadProjects(){
+  if(hasUnsavedProjectChanges) return;
+  try{
+    let res;
+    try{
+      res = await window.storage.get(PROJECTS_KEY, true);
+    }catch(getErr){
+      // key not found yet is expected on first-ever run; anything else, surface it
+      res = null;
+    }
+    if(res && res.value){
+      projects = JSON.parse(res.value);
+    }
+
+    // Se till att alla standardprojekt finns med, även för de som redan har egna sparade projekt
+    let addedAny = false;
+    DEFAULT_PROJECT_NAMES.forEach(name => {
+      if(!projects.some(p => p.name === name)){
+        projects.push({ id: slugId(name), name });
+        addedAny = true;
+      }
+    });
+    if(addedAny) await persistProjects();
+
+    if(screen === 'home') renderHomeGrid();
+    if(screen === 'project'){
+      const p = projects.find(pr => pr.id === activeProjectId);
+      document.getElementById('projectHeaderName').textContent = p ? p.name : '';
+    }
+  }catch(e){
+    showDebugError('Kunde inte läsa projektlistan (loadProjects)', e);
+  }
+}
+async function persistProjects(){
+  try{
+    await withRetry(() => window.storage.set(PROJECTS_KEY, JSON.stringify(projects), true));
+    hasUnsavedProjectChanges = false;
+    clearDebugError();
+  }catch(e){
+    hasUnsavedProjectChanges = true;
+    showDebugError('Kunde inte spara projektlistan (persistProjects)', e, () => persistProjects());
+    showToast('Kunde inte spara projekt – klicka "Försök spara igen" nedan');
+  }
+}
+
+async function addProject(name){
+  if(!name){
+    showToast('Skriv ett projektnamn först');
+    return false;
+  }
+  if(projects.some(p => p.name.toLowerCase() === name.toLowerCase())){
+    showToast('Det finns redan ett projekt med det namnet');
+    return false;
+  }
+  projects.push({ id: slugId(name), name, status: 'Pågående' });
+  await persistProjects();
+  return true;
+}
+
+document.getElementById('addProjectBtn').onclick = async () => {
+  const input = document.getElementById('newProjectInput');
+  const name = input.value.trim();
+  if(await addProject(name)){
+    input.value = '';
+    renderHomeGrid();
+  }
+};
+document.getElementById('newProjectInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addProjectBtn').click();
+});
+
+// ---------- Navigation: hem / projekt / kalender ----------
+function formatMSEK(value){
+  if(!value && value !== 0) return '—';
+  return (value / 1000000).toLocaleString('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' MSEK';
+}
+
+// Fullt utskrivet belopp med mellanslag som tusentalsavgränsare, t.ex. 45000000 -> "45 000 000 kr".
+function formatKrFull(value){
+  if(!value && value !== 0) return '—';
+  return Math.round(value).toLocaleString('sv-SE') + ' kr';
+}
+
+async function loadProjectSummary(p){
+  const budgetForeningslan = companyEkonomiData.budgetDetalj[p.id] && companyEkonomiData.budgetDetalj[p.id].foreningslan;
+  const summary = { lghText: 'Inga lägenheter ännu', omsattning: null, lan: budgetForeningslan || PROJECT_LOAN_BY_NAME[p.name] || null };
+  try{
+    const raw = await fetchApartmentsRaw(p.id);
+    if(raw.apartments.length > 0){
+      const apts = raw.apartments.map(normalizeApartment);
+      const sold = apts.filter(a => a.sald && a.sald.done).length;
+      summary.lghText = apts.length + ' lägenheter · ' + sold + ' sålda';
+      summary.antal = apts.length;
+      summary.salda = sold;
+      summary.omsattning = apts.reduce((sum, a) => {
+        const n = parseInt(String(a.totalpris || '').replace(/[^0-9]/g, ''), 10);
+        return sum + (isNaN(n) ? 0 : n);
+      }, 0);
+    }
+  }catch(e){ /* inga lägenheter ännu */ }
+  return summary;
+}
+
+// Ordning och rubriker för statusgrupperna i den delade Projektöversikten.
+const HOME_STATUS_GROUPS = [
+  { status: 'Pågående', heading: 'Pågående projekt' },
+  { status: 'Bygglov/projektering', heading: 'Bygg/projektering' },
+  { status: 'Kommande', heading: 'Kommande' },
+  { status: 'Slutförd', heading: 'Slutförd' },
+  { status: 'Avslutat', heading: 'Avslutat' }
+];
+
+async function renderHomeGrid(){
+  const topGrid = document.getElementById('homeTopGrid');
+  topGrid.innerHTML = '';
+
+  const calCard = document.createElement('div');
+  calCard.className = 'home-card calendar-card';
+  calCard.innerHTML = '<div class="home-card-icon">📅</div><div class="home-card-title">Kalender</div><div class="home-card-sub">Besiktningar &amp; inflyttningar, alla projekt</div>';
+  calCard.onclick = () => openCalendarScreen();
+  topGrid.appendChild(calCard);
+
+  const intrCard = document.createElement('div');
+  intrCard.className = 'home-card calendar-card';
+  intrCard.innerHTML = '<div class="home-card-icon">📋</div><div class="home-card-title">Intresseanmälningar</div><div class="home-card-sub" id="intrHomeCardSub">Laddar…</div>';
+  intrCard.onclick = () => openIntressenScreen();
+  topGrid.appendChild(intrCard);
+
+  loadInterests().then(() => {
+    const el = document.getElementById('intrHomeCardSub');
+    if(el){
+      const open = interests.filter(e => !e.hanterad).length;
+      el.textContent = interests.length + ' totalt · ' + open + ' ej hanterade';
+    }
+  });
+
+  const sectionsWrap = document.getElementById('homeStatusSections');
+  renderHomeProjectList(sectionsWrap);
+}
+
+// ---------- Projektöversikt som lista (filter och sortering sparas per användare) ----------
+const HOME_LIST_DEFAULT_STATUS = ['Pågående', 'Bygglov/projektering', 'Kommande'];
+const HOME_LIST_COLUMNS = [
+  { k: 'name', label: 'Namn', left: true },
+  { k: 'status', label: 'Status', left: true },
+  { k: 'totalpris', label: 'Totalpris' },
+  { k: 'lan', label: 'Föreningslån' },
+  { k: 'oms', label: 'Total omsättning' },
+  { k: 'antal', label: 'Antal lägenheter' },
+  { k: 'salda', label: 'Antal sålda' }
+];
+let homeListRenderToken = 0;
+async function renderHomeProjectList(wrap){
+  const token = ++homeListRenderToken;
+  const statuses = Array.isArray(uiPrefs.homeStatus) ? uiPrefs.homeStatus : HOME_LIST_DEFAULT_STATUS;
+  const sort = uiPrefs.homeSort && uiPrefs.homeSort.k ? uiPrefs.homeSort : { k: 'status', dir: 1 };
+  wrap.innerHTML = '';
+
+  const bar = document.createElement('div');
+  bar.className = 'home-list-filters';
+  const lbl = document.createElement('span');
+  lbl.textContent = 'Visa:';
+  bar.appendChild(lbl);
+  HOME_STATUS_GROUPS.forEach(({ status, heading }) => {
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = statuses.includes(status);
+    cb.onchange = async () => {
+      uiPrefs.homeStatus = HOME_STATUS_GROUPS.map(g => g.status).filter(s => [...bar.querySelectorAll('input')].find(i => i.dataset.s === s).checked);
+      await saveUiPrefs();
+      renderHomeGrid();
+    };
+    cb.dataset.s = status;
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(' ' + heading + ' (' + projects.filter(p => (p.status || 'Pågående') === status).length + ')'));
+    bar.appendChild(l);
+  });
+  wrap.appendChild(bar);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'table-scroll';
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table home-list-table';
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  HOME_LIST_COLUMNS.forEach(c => {
+    const th = document.createElement('th');
+    th.textContent = c.label + (sort.k === c.k ? (sort.dir > 0 ? ' ▲' : ' ▼') : '');
+    if(c.left) th.style.textAlign = 'left';
+    th.style.cursor = 'pointer';
+    th.title = 'Sortera';
+    th.onclick = async () => {
+      uiPrefs.homeSort = sort.k === c.k ? { k: c.k, dir: -sort.dir } : { k: c.k, dir: 1 };
+      await saveUiPrefs();
+      renderHomeGrid();
+    };
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Laddar…</td></tr>';
+  table.appendChild(tbody);
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
+
+  const visible = projects.filter(p => statuses.includes(p.status || 'Pågående'));
+  const rows = await Promise.all(visible.map(async p => {
+    const s = await loadProjectSummary(p);
+    return { p, name: p.name, status: p.status || 'Pågående', totalpris: s.omsattning || 0, lan: s.lan || 0, oms: (s.omsattning || 0) + (s.lan || 0), antal: s.antal || 0, salda: s.salda || 0 };
+  }));
+  if(token !== homeListRenderToken) return; // en nyare rendering har redan tagit över
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  rows.sort((a, b) => {
+    const va = sort.k === 'status' ? order[a.status] : a[sort.k];
+    const vb = sort.k === 'status' ? order[b.status] : b[sort.k];
+    const cmp = typeof va === 'string' ? va.localeCompare(vb, 'sv') : (va - vb);
+    return (cmp * sort.dir) || a.name.localeCompare(b.name, 'sv');
+  });
+
+  tbody.innerHTML = '';
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>';
+    return;
+  }
+  const tot = { totalpris: 0, lan: 0, oms: 0, antal: 0, salda: 0 };
+  rows.forEach(r => {
+    Object.keys(tot).forEach(k => { tot[k] += r[k]; });
+    const tr = document.createElement('tr');
+    tr.className = 'home-list-row';
+    const pct = r.antal ? Math.round(r.salda / r.antal * 100) : 0;
+    tr.innerHTML =
+      '<td class="home-list-name">' + escapeHtml(r.name) + '</td>' +
+      '<td style="text-align:left;"><span class="home-status-pill ' + (r.status === 'Pågående' ? 'pag' : r.status === 'Bygglov/projektering' ? 'bygg' : r.status === 'Kommande' ? 'komm' : r.status === 'Slutförd' ? 'slut' : '') + '">' + escapeHtml(HOME_STATUS_GROUPS.find(g => g.status === r.status)?.heading || r.status) + '</span></td>' +
+      '<td>' + formatMSEK(r.totalpris) + '</td>' +
+      '<td>' + formatMSEK(r.lan) + '</td>' +
+      '<td style="font-weight:700;">' + formatMSEK(r.oms) + '</td>' +
+      '<td>' + (r.antal || '—') + '</td>' +
+      '<td><span class="home-salda"><span class="home-bar"><i style="width:' + pct + '%"></i></span>' + (r.antal ? r.salda + ' av ' + r.antal : '—') + '</span></td>';
+    tr.onclick = () => openProject(r.p);
+    tbody.appendChild(tr);
+  });
+  const sum = document.createElement('tr');
+  sum.className = 'eko-row-resultat';
+  sum.innerHTML = '<td style="text-align:left;">Summa (' + rows.length + ' projekt)</td><td></td><td>' + formatMSEK(tot.totalpris) + '</td><td>' + formatMSEK(tot.lan) + '</td><td>' + formatMSEK(tot.oms) + '</td><td>' + tot.antal + '</td><td>' + tot.salda + ' av ' + tot.antal + '</td>';
+  tbody.appendChild(sum);
+}
+
+function showScreen(next){
+  screen = next;
+  document.getElementById('personalScreen').style.display = screen === 'personal' ? 'block' : 'none';
+  document.getElementById('homeScreen').style.display = screen === 'home' ? 'block' : 'none';
+  document.getElementById('projectScreen').style.display = screen === 'project' ? 'block' : 'none';
+  document.getElementById('calendarScreen').style.display = screen === 'calendar' ? 'block' : 'none';
+  document.getElementById('intressenScreen').style.display = screen === 'intressen' ? 'block' : 'none';
+  document.getElementById('companyEkonomiScreen').style.display = screen === 'companyEkonomi' ? 'block' : 'none';
+  const deskBtn = document.getElementById('goToPersonalBtn');
+  if(deskBtn) deskBtn.style.display = (screen !== 'personal') ? 'inline-block' : 'none';
+  const ekoBtn = document.getElementById('goToEkonomiBtn');
+  if(ekoBtn) ekoBtn.style.display = (isEkonomiAdmin && screen !== 'companyEkonomi') ? 'inline-block' : 'none';
+}
+
+function openHome(){
+  showScreen('home');
+  renderHomeGrid();
+}
+
+// ---------- Personlig startsida (del 1) ----------
+async function openPersonal(){
+  showScreen('personal');
+  document.getElementById('personalGreeting').textContent = myName ? ('Hej, ' + myName + '!') : 'Hej!';
+  liggarenStatusFilter = 'oppet';
+  liggarenViewMode = 'compact';
+  liggarenExpandedCompactId = null;
+  await Promise.all([loadArenden(), loadPaminnelser(), loadLiggarenRecurring()]);
+  await liggarenCheckRecurring();
+  renderArenden();
+  renderPaminnelser();
+}
+
+function mapLiggarenRow(row){
+  return {
+    id: row.id,
+    caseNumber: row.case_number,
+    title: row.title,
+    description: row.description || '',
+    comment: row.comment || '',
+    project: row.project,
+    deadline: row.deadline,
+    priority: row.priority,
+    ekonomi: row.ekonomi != null ? row.ekonomi : null,
+    status: row.status,
+    createdBy: row.created_by,
+    createdByName: row.created_by_name,
+    assignedTo: row.assigned_to,
+    assignedToName: row.assigned_to_name,
+    notifyEmail: row.notify_email,
+    notifyAddress: row.notify_address || '',
+    mailSent: row.mail_sent,
+    createdAt: row.created_at
+  };
+}
+
+async function loadArenden(){
+  try{
+    const rows = await DB.listLiggarenTasks();
+    arenden = rows.map(mapLiggarenRow);
+  }catch(e){
+    arenden = [];
+    showDebugError('Kunde inte läsa ärenden', e);
+  }
+}
+
+function liggarenNextCaseNumbers(count){
+  const year = new Date().getFullYear();
+  const nums = arenden
+    .map(t => t.caseNumber)
+    .filter(cn => cn && cn.includes('-' + year + '-'))
+    .map(cn => parseInt(cn.split('-')[2], 10))
+    .filter(n => !isNaN(n));
+  let next = (nums.length ? Math.max(...nums) : 0) + 1;
+  const result = [];
+  for(let i = 0; i < count; i++) result.push('SF-' + year + '-' + String(next + i).padStart(3, '0'));
+  return result;
+}
+
+function liggarenBusinessDaysUntil(deadlineStr){
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const deadline = new Date(deadlineStr + 'T00:00:00');
+  if(deadline < today) return -1;
+  let count = 0;
+  const d = new Date(today);
+  while(d < deadline){
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if(day !== 0 && day !== 6) count++;
+  }
+  return count;
+}
+function liggarenIsPastDue(t){
+  const todayStr = new Date().toISOString().slice(0,10);
+  return t.deadline && t.status !== LIGGAREN_STATUS.KLART && t.deadline < todayStr;
+}
+function liggarenIsCritical(t){
+  return t.deadline && t.status !== LIGGAREN_STATUS.KLART && liggarenBusinessDaysUntil(t.deadline) <= 3;
+}
+
+function liggarenPopulateSelects(){
+  const projectInput = document.getElementById('liggarenProjectInput');
+  projectInput.innerHTML = LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+
+  const projectFilter = document.getElementById('liggarenProjectFilter');
+  projectFilter.innerHTML = '<option value="alla">Alla projekt</option>' +
+    LIGGAREN_PROJECTS.map(p => '<option value="' + p + '">' + p + '</option>').join('');
+
+  const notifySelect = document.getElementById('liggarenNotifyAddressSelect');
+  notifySelect.innerHTML = '<option value="">Välj mottagare…</option>' +
+    LIGGAREN_DEFAULT_EMAILS.map(a => '<option value="' + a + '">' + a + '</option>').join('') +
+    '<option value="other">Annan e-postadress…</option>';
+}
+
+// Körs efter inloggning (myPersonId känt) - "Mig själv" alltid överst.
+function liggarenPopulateAssigneeSelect(){
+  const select = document.getElementById('liggarenAssigneeInput');
+  if(!select || !myPersonId) return;
+  const others = LIGGAREN_PEOPLE.filter(p => p.id !== myPersonId);
+  select.innerHTML = '<option value="' + myPersonId + '">Mig själv</option>' +
+    others.map(p => '<option value="' + p.id + '">' + p.name + '</option>').join('');
+}
+
+function liggarenResetForm(){
+  document.getElementById('liggarenTitleInput').value = '';
+  document.getElementById('liggarenDescriptionInput').value = '';
+  [...document.getElementById('liggarenProjectInput').options].forEach(o => o.selected = false);
+  document.getElementById('liggarenDeadlineInput').value = '';
+  document.getElementById('liggarenDeadlineInput').disabled = false;
+  document.getElementById('liggarenPriorityInput').value = '3';
+  document.getElementById('liggarenRecurringCheck').checked = false;
+  document.getElementById('liggarenRecurringFields').style.display = 'none';
+  document.getElementById('liggarenRecurringDayInput').value = '1';
+  liggarenPopulateAssigneeSelect();
+  document.getElementById('liggarenNotifyCheck').checked = false;
+  document.getElementById('liggarenNotifyFields').style.display = 'none';
+  document.getElementById('liggarenNotifyAddressSelect').value = '';
+  document.getElementById('liggarenNotifyCustomInput').value = '';
+  document.getElementById('liggarenNotifyCustomInput').style.display = 'none';
+}
+
+async function liggarenSaveTask(){
+  const title = document.getElementById('liggarenTitleInput').value.trim();
+  if(!title) return;
+  const description = document.getElementById('liggarenDescriptionInput').value.trim();
+  const selectedProjects = [...document.getElementById('liggarenProjectInput').selectedOptions].map(o => o.value);
+  const projects = selectedProjects.length ? selectedProjects : [null];
+  const deadline = document.getElementById('liggarenDeadlineInput').value || null;
+  const priority = parseInt(document.getElementById('liggarenPriorityInput').value, 10) || 3;
+  const ekonomi = null;
+  const isRecurring = document.getElementById('liggarenRecurringCheck').checked;
+  const recurringDay = parseInt(document.getElementById('liggarenRecurringDayInput').value, 10) || 1;
+  const notifyEmail = document.getElementById('liggarenNotifyCheck').checked;
+  const addrSelect = document.getElementById('liggarenNotifyAddressSelect').value;
+  const notifyAddress = (addrSelect === 'other' ? document.getElementById('liggarenNotifyCustomInput').value.trim() : addrSelect);
+  const assigneeId = document.getElementById('liggarenAssigneeInput').value || myPersonId;
+  const assignee = LIGGAREN_PEOPLE.find(p => p.id === assigneeId) || { id: myPersonId, name: myName };
+
+  try{
+    const caseNumbers = liggarenNextCaseNumbers(projects.length);
+    const now = new Date();
+    const monthKey = liggarenMonthKey(now);
+    for(let i = 0; i < projects.length; i++){
+      const project = projects[i];
+      const rowTitle = isRecurring ? liggarenRecurringTitle({ baseTitle: title }, now) : title;
+      const row = {
+        case_number: caseNumbers[i],
+        title: rowTitle, description, project,
+        deadline: isRecurring ? null : deadline,
+        priority,
+        ekonomi,
+        status: LIGGAREN_STATUS.OPPET,
+        created_by: myPersonId,
+        created_by_name: myName,
+        assigned_to: assignee.id,
+        assigned_to_name: assignee.name,
+        notify_email: notifyEmail && !!notifyAddress,
+        notify_address: notifyAddress || '',
+        mail_sent: false
+      };
+      await DB.insertLiggarenTask(row);
+      if(isRecurring){
+        liggarenRecurringTemplates.push({
+          id: 'rt' + Date.now() + Math.random().toString(36).slice(2, 7) + i,
+          baseTitle: title,
+          project,
+          priority,
+          dayOfMonth: recurringDay,
+          assignedTo: assignee.id,
+          assignedToName: assignee.name,
+          createdBy: myPersonId,
+          createdByName: myName,
+          lastGeneratedMonth: monthKey
+        });
+      }
+    }
+    if(isRecurring) await persistLiggarenRecurring();
+    await loadArenden();
+    renderArenden();
+    liggarenResetForm();
+    document.getElementById('liggarenForm').style.display = 'none';
+  }catch(e){
+    showDebugError('Kunde inte spara ärendet', e);
+  }
+}
+
+async function liggarenSetStatus(id, status){
+  const task = arenden.find(t => t.id === id);
+  if(!task) return;
+  const shouldNotify = task.notifyEmail && task.notifyAddress && status === LIGGAREN_STATUS.KLART &&
+    task.status !== LIGGAREN_STATUS.KLART && !task.mailSent;
+  try{
+    await DB.updateLiggarenTask(id, { status, mail_sent: shouldNotify ? true : task.mailSent });
+    await loadArenden();
+    renderArenden();
+    if(shouldNotify){
+      const subject = encodeURIComponent('Ärende klart: ' + task.title);
+      const body = encodeURIComponent(
+        'Hej,\n\nÄrendet "' + task.title + '" (' + task.caseNumber + (task.project ? ', ' + task.project : '') + ') är nu slutfört.\n\nMvh'
+      );
+      window.open('mailto:' + task.notifyAddress + '?subject=' + subject + '&body=' + body, '_blank');
+    }
+  }catch(e){
+    showDebugError('Kunde inte uppdatera status', e);
+  }
+}
+
+async function liggarenSetPriority(id, p){
+  try{
+    await DB.updateLiggarenTask(id, { priority: p });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ändra prioritet', e);
+  }
+}
+
+async function liggarenSetProject(id, project){
+  try{
+    await DB.updateLiggarenTask(id, { project });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ändra projekt', e);
+  }
+}
+
+async function liggarenSetEkonomi(id, ekonomi){
+  try{
+    await DB.updateLiggarenTask(id, { ekonomi });
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte spara ekonomi', e);
+  }
+}
+
+async function liggarenRemoveTask(id){
+  try{
+    await DB.deleteLiggarenTask(id);
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte ta bort ärendet', e);
+  }
+}
+
+async function liggarenClearAll(){
+  if(!liggarenConfirmClear){
+    liggarenConfirmClear = true;
+    renderArenden();
+    setTimeout(() => { liggarenConfirmClear = false; renderArenden(); }, 3000);
+    return;
+  }
+  liggarenConfirmClear = false;
+  const mine = arenden.filter(t => t.createdBy === myPersonId);
+  try{
+    for(const t of mine) await DB.deleteLiggarenTask(t.id);
+    await loadArenden();
+    renderArenden();
+  }catch(e){
+    showDebugError('Kunde inte rensa ärenden', e);
+  }
+}
+
+function renderArenden(){
+  const counts = {
+    alla: arenden.length,
+    oppet: arenden.filter(t => t.status === LIGGAREN_STATUS.OPPET).length,
+    pagaende: arenden.filter(t => t.status === LIGGAREN_STATUS.PAGAENDE).length,
+    klart: arenden.filter(t => t.status === LIGGAREN_STATUS.KLART).length
+  };
+  const filterBar = document.getElementById('liggarenStatusFilters');
+  const filterLabels = { alla: 'Alla', oppet: 'Att göra', pagaende: 'Pågående', klart: 'Klart' };
+  filterBar.innerHTML = '';
+  ['alla', 'oppet', 'pagaende', 'klart'].forEach(key => {
+    const btn = document.createElement('button');
+    btn.className = 'liggaren-status-btn' + (liggarenStatusFilter === key ? ' active' : '');
+    btn.textContent = filterLabels[key] + ' (' + counts[key] + ')';
+    btn.onclick = () => { liggarenStatusFilter = key; renderArenden(); };
+    filterBar.appendChild(btn);
+  });
+
+  const projectFilter = document.getElementById('liggarenProjectFilter');
+  if(projectFilter.value !== liggarenProjectFilterVal) projectFilter.value = liggarenProjectFilterVal;
+  const sortSelect = document.getElementById('liggarenSortSelect');
+  if(sortSelect.value !== liggarenSortBy) sortSelect.value = liggarenSortBy;
+  const clearBtn = document.getElementById('liggarenClearAllBtn');
+  clearBtn.textContent = liggarenConfirmClear ? 'Säker? Klicka igen' : 'Rensa alla';
+  clearBtn.style.display = arenden.some(t => t.createdBy === myPersonId) ? 'inline-block' : 'none';
+
+  const visible = arenden
+    .filter(t => liggarenStatusFilter === 'alla' ? true : t.status === liggarenStatusFilter)
+    .filter(t => liggarenProjectFilterVal === 'alla' ? true : t.project === liggarenProjectFilterVal)
+    .slice()
+    .sort((a, b) => {
+      if((a.status === LIGGAREN_STATUS.KLART) !== (b.status === LIGGAREN_STATUS.KLART)){
+        return a.status === LIGGAREN_STATUS.KLART ? 1 : -1;
+      }
+      const ap = a.priority || 3, bp = b.priority || 3;
+      if(liggarenSortBy === 'priority'){
+        if(ap !== bp) return ap - bp;
+        if(a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+        if(a.deadline) return -1;
+        if(b.deadline) return 1;
+        return b.createdAt.localeCompare(a.createdAt);
+      }
+      if(a.deadline && b.deadline){
+        if(a.deadline !== b.deadline) return a.deadline.localeCompare(b.deadline);
+        return ap - bp;
+      }
+      if(a.deadline) return -1;
+      if(b.deadline) return 1;
+      if(ap !== bp) return ap - bp;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+
+  const viewModeBar = document.getElementById('liggarenViewModeToggle');
+  viewModeBar.innerHTML = '';
+  [['expanded', 'Utökad'], ['compact', 'Kompakt']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'liggaren-status-btn' + (liggarenViewMode === key ? ' active' : '');
+    btn.textContent = label;
+    btn.onclick = () => { liggarenViewMode = key; liggarenExpandedCompactId = null; renderArenden(); };
+    viewModeBar.appendChild(btn);
+  });
+
+  const list = document.getElementById('liggarenList');
+  const empty = document.getElementById('liggarenEmptyState');
+  list.innerHTML = '';
+  empty.style.display = visible.length ? 'none' : 'block';
+
+  const LIGGAREN_GROUPS = [
+    { label: 'Mina ärenden', filter: t => t.createdBy === myPersonId && t.assignedTo === myPersonId },
+    { label: 'Tilldelat till mig', filter: t => t.assignedTo === myPersonId && t.createdBy !== myPersonId },
+    { label: 'Skickat till andra', filter: t => t.createdBy === myPersonId && t.assignedTo !== myPersonId }
+  ];
+  LIGGAREN_GROUPS.forEach(({ label, filter }) => {
+    const group = visible.filter(filter);
+    if(!group.length) return;
+    const heading = document.createElement('h3');
+    heading.className = 'home-section-title';
+    heading.textContent = label + ' (' + group.length + ')';
+    list.appendChild(heading);
+    group.forEach(t => {
+      if(liggarenViewMode === 'compact' && liggarenExpandedCompactId !== t.id){
+        list.appendChild(buildLiggarenCompactRow(t));
+        return;
+      }
+      list.appendChild(buildLiggarenCard(t));
+    });
+  });
+
+  renderLiggarenRecurringList();
+}
+
+function buildLiggarenCompactRow(t){
+  const overdue = liggarenIsPastDue(t);
+  const critical = liggarenIsCritical(t);
+  const delegatedOut = t.createdBy === myPersonId && t.assignedTo !== myPersonId;
+  const delegatedIn = t.assignedTo === myPersonId && t.createdBy !== myPersonId;
+  const row = document.createElement('div');
+  row.className = 'liggaren-compact-row' + (t.status === LIGGAREN_STATUS.KLART ? ' done' : '') +
+    (delegatedOut ? ' delegated-out' : '') + (delegatedIn ? ' delegated-in' : '');
+  row.onclick = () => { liggarenExpandedCompactId = t.id; renderArenden(); };
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'liggaren-compact-title';
+  titleEl.textContent = t.title;
+  row.appendChild(titleEl);
+
+  const projectEl = document.createElement('span');
+  projectEl.className = 'liggaren-compact-project';
+  projectEl.textContent = t.project || '—';
+  row.appendChild(projectEl);
+
+  const deadlineEl = document.createElement('span');
+  deadlineEl.className = 'liggaren-compact-deadline' + (overdue ? ' overdue' : critical ? ' critical' : '');
+  deadlineEl.textContent = t.deadline || '—';
+  row.appendChild(deadlineEl);
+
+  return row;
+}
+
+function buildLiggarenCard(t){
+    const critical = liggarenIsCritical(t);
+    const overdue = liggarenIsPastDue(t);
+    const delegatedOut = t.createdBy === myPersonId && t.assignedTo !== myPersonId;
+    const delegatedIn = t.assignedTo === myPersonId && t.createdBy !== myPersonId;
+    const card = document.createElement('div');
+    card.className = 'liggaren-card' + (critical ? ' critical' : '') + (t.status === LIGGAREN_STATUS.KLART ? ' done' : '') +
+      (delegatedOut ? ' delegated-out' : '') + (delegatedIn ? ' delegated-in' : '');
+
+    if(t.status === LIGGAREN_STATUS.KLART){
+      const stamp = document.createElement('div');
+      stamp.className = 'liggaren-stamp';
+      stamp.textContent = 'Klart';
+      card.appendChild(stamp);
+    }
+
+    const caseRow = document.createElement('div');
+    caseRow.className = 'liggaren-case-no';
+    const dots = document.createElement('span');
+    dots.className = 'liggaren-prio-dots';
+    dots.style.setProperty('--dot-color', LIGGAREN_PRIORITY_COLOR(t.priority || 3));
+    LIGGAREN_PRIORITIES.forEach(p => {
+      const dot = document.createElement('span');
+      if(p <= 6 - (t.priority || 3)) dot.className = 'filled';
+      dots.appendChild(dot);
+    });
+    caseRow.innerHTML = '<span>Nr ' + t.caseNumber + '</span>';
+    caseRow.appendChild(dots);
+    const prioSelect = document.createElement('select');
+    prioSelect.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:1px 4px;';
+    LIGGAREN_PRIORITIES.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p; opt.textContent = 'P' + p;
+      if((t.priority || 3) === p) opt.selected = true;
+      prioSelect.appendChild(opt);
+    });
+    prioSelect.onchange = () => liggarenSetPriority(t.id, parseInt(prioSelect.value, 10));
+    caseRow.appendChild(prioSelect);
+    card.appendChild(caseRow);
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'liggaren-title';
+    titleEl.textContent = t.title;
+    card.appendChild(titleEl);
+
+    if(t.description){
+      const descEl = document.createElement('div');
+      descEl.className = 'liggaren-description';
+      descEl.textContent = t.description;
+      card.appendChild(descEl);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'liggaren-meta';
+    if(delegatedIn){
+      const origin = document.createElement('span');
+      origin.className = 'liggaren-origin-pill from';
+      origin.textContent = 'Från: ' + t.createdByName;
+      meta.appendChild(origin);
+    }
+    if(delegatedOut){
+      const origin = document.createElement('span');
+      origin.className = 'liggaren-origin-pill to';
+      origin.textContent = '→ Tilldelat: ' + t.assignedToName;
+      meta.appendChild(origin);
+    }
+    const projectSelect = document.createElement('select');
+    projectSelect.className = 'liggaren-pill-select';
+    projectSelect.innerHTML = '<option value="">Inget projekt</option>' +
+      LIGGAREN_PROJECTS.map(p => '<option value="' + escapeHtml(p) + '"' + (t.project === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>').join('');
+    projectSelect.onchange = () => liggarenSetProject(t.id, projectSelect.value || null);
+    meta.appendChild(projectSelect);
+
+    const ekonomiInput = document.createElement('input');
+    ekonomiInput.type = 'number';
+    ekonomiInput.className = 'liggaren-ekonomi-input';
+    ekonomiInput.placeholder = 'Ekonomi (kr)';
+    ekonomiInput.value = t.ekonomi != null ? t.ekonomi : '';
+    ekonomiInput.onchange = () => liggarenSetEkonomi(t.id, ekonomiInput.value === '' ? null : (parseFloat(ekonomiInput.value) || 0));
+    meta.appendChild(ekonomiInput);
+
+    if(t.deadline){
+      const dl = document.createElement('span');
+      dl.className = 'liggaren-deadline' + (overdue ? ' overdue' : critical ? ' critical' : '');
+      dl.textContent = (overdue ? 'Försenat: ' : 'Deadline: ') + t.deadline;
+      meta.appendChild(dl);
+    }
+    card.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'liggaren-actions';
+    LIGGAREN_STATUS_ORDER.forEach(s => {
+      const btn = document.createElement('button');
+      btn.textContent = LIGGAREN_STATUS_LABEL[s];
+      if(t.status === s) btn.className = 'active';
+      btn.onclick = () => liggarenSetStatus(t.id, s);
+      actions.appendChild(btn);
+    });
+
+    if(liggarenEditingMailId === t.id){
+      const select = document.createElement('select');
+      select.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:3px 6px;';
+      select.innerHTML = '<option value="">Välj mottagare…</option>' +
+        LIGGAREN_DEFAULT_EMAILS.map(a => '<option value="' + a + '">' + a + '</option>').join('') +
+        '<option value="other">Annan…</option>';
+      const isDefault = LIGGAREN_DEFAULT_EMAILS.includes(t.notifyAddress);
+      select.value = isDefault ? t.notifyAddress : (t.notifyAddress ? 'other' : '');
+      const customInput = document.createElement('input');
+      customInput.type = 'email';
+      customInput.placeholder = 'E-postadress';
+      customInput.style.cssText = 'border:1px solid var(--line-soft);border-radius:5px;font-size:11px;padding:3px 6px;';
+      customInput.style.display = (!isDefault && t.notifyAddress) ? 'inline-block' : 'none';
+      if(!isDefault) customInput.value = t.notifyAddress || '';
+      select.onchange = () => { customInput.style.display = select.value === 'other' ? 'inline-block' : 'none'; };
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Spara';
+      saveBtn.onclick = async () => {
+        const addr = select.value === 'other' ? customInput.value.trim() : select.value;
+        liggarenEditingMailId = null;
+        try{
+          await DB.updateLiggarenTask(t.id, { notify_email: !!addr, notify_address: addr, mail_sent: false });
+          await loadArenden();
+          renderArenden();
+        }catch(e){
+          showDebugError('Kunde inte spara mottagare', e);
+        }
+      };
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Avbryt';
+      cancelBtn.onclick = () => { liggarenEditingMailId = null; renderArenden(); };
+      actions.appendChild(select);
+      actions.appendChild(customInput);
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+    } else {
+      const mailBtn = document.createElement('button');
+      mailBtn.textContent = t.notifyAddress ? ('Mejl: ' + t.notifyAddress) : '+ Mejl vid klart';
+      mailBtn.onclick = () => { liggarenEditingMailId = t.id; renderArenden(); };
+      actions.appendChild(mailBtn);
+    }
+
+    if(t.createdBy === myPersonId){
+      const delBtn = document.createElement('button');
+      delBtn.className = 'danger';
+      delBtn.textContent = 'Ta bort';
+      delBtn.onclick = () => liggarenRemoveTask(t.id);
+      actions.appendChild(delBtn);
+    }
+
+    card.appendChild(actions);
+
+    const commentLabel = document.createElement('div');
+    commentLabel.className = 'liggaren-comment-label';
+    commentLabel.textContent = 'Kommentar';
+    card.appendChild(commentLabel);
+
+    const commentInput = document.createElement('textarea');
+    commentInput.className = 'liggaren-comment-input';
+    commentInput.rows = 2;
+    commentInput.placeholder = 'Skriv en kommentar…';
+    commentInput.value = t.comment || '';
+    commentInput.onchange = async () => {
+      try{
+        await DB.updateLiggarenTask(t.id, { comment: commentInput.value });
+        await loadArenden();
+        renderArenden();
+      }catch(e){
+        showDebugError('Kunde inte spara kommentaren', e);
+      }
+    };
+    card.appendChild(commentInput);
+    return card;
+}
+
+// ---------- Liggaren: återkommande ärenden (skapas automatiskt varje månad) ----------
+function liggarenMonthKey(date){
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+}
+
+function liggarenRecurringTitle(tpl, date){
+  return tpl.baseTitle + ' ' + SWEDISH_MONTHS[date.getMonth()];
+}
+
+async function loadLiggarenRecurring(){
+  try{
+    const res = await DB.getPersonalData(LIGGAREN_RECURRING_KEY);
+    liggarenRecurringTemplates = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    liggarenRecurringTemplates = [];
+    showDebugError('Kunde inte läsa återkommande ärenden', e);
+  }
+}
+
+async function persistLiggarenRecurring(){
+  try{ await DB.setPersonalData(LIGGAREN_RECURRING_KEY, JSON.stringify(liggarenRecurringTemplates)); }
+  catch(e){ showDebugError('Kunde inte spara återkommande ärenden', e); }
+}
+
+async function liggarenCheckRecurring(){
+  const now = new Date();
+  const monthKey = liggarenMonthKey(now);
+  const due = liggarenRecurringTemplates.filter(tpl =>
+    tpl.createdBy === myPersonId && tpl.lastGeneratedMonth !== monthKey && now.getDate() >= (tpl.dayOfMonth || 1)
+  );
+  if(!due.length) return;
+  try{
+    const caseNumbers = liggarenNextCaseNumbers(due.length);
+    for(let i = 0; i < due.length; i++){
+      const tpl = due[i];
+      const row = {
+        case_number: caseNumbers[i],
+        title: liggarenRecurringTitle(tpl, now),
+        description: '', project: tpl.project,
+        deadline: null,
+        priority: tpl.priority || 3,
+        ekonomi: null,
+        status: LIGGAREN_STATUS.OPPET,
+        created_by: tpl.createdBy,
+        created_by_name: tpl.createdByName,
+        assigned_to: tpl.assignedTo,
+        assigned_to_name: tpl.assignedToName,
+        notify_email: false,
+        notify_address: '',
+        mail_sent: false
+      };
+      await DB.insertLiggarenTask(row);
+      tpl.lastGeneratedMonth = monthKey;
+    }
+    await persistLiggarenRecurring();
+    await loadArenden();
+  }catch(e){
+    showDebugError('Kunde inte skapa återkommande ärenden', e);
+  }
+}
+
+function renderLiggarenRecurringList(){
+  const section = document.getElementById('liggarenRecurringSection');
+  const list = document.getElementById('liggarenRecurringList');
+  const mine = liggarenRecurringTemplates.filter(t => t.createdBy === myPersonId);
+  section.style.display = mine.length ? 'block' : 'none';
+  list.innerHTML = '';
+  mine.forEach(tpl => {
+    const row = document.createElement('div');
+    row.className = 'liggaren-recurring-row';
+    const label = document.createElement('span');
+    label.textContent = tpl.baseTitle + (tpl.project ? ' (' + tpl.project + ')' : '') + ' - skapas dag ' + (tpl.dayOfMonth || 1) + ' varje månad';
+    row.appendChild(label);
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'remove-btn';
+    stopBtn.title = 'Sluta upprepa';
+    stopBtn.textContent = '✕';
+    stopBtn.onclick = () => liggarenStopRecurring(tpl.id);
+    row.appendChild(stopBtn);
+    list.appendChild(row);
+  });
+}
+
+async function liggarenStopRecurring(id){
+  liggarenRecurringTemplates = liggarenRecurringTemplates.filter(t => t.id !== id);
+  await persistLiggarenRecurring();
+  renderLiggarenRecurringList();
+}
+
+async function loadPaminnelser(){
+  try{
+    const res = await DB.getPersonalData(PAMINNELSER_KEY);
+    paminnelser = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    paminnelser = [];
+    showDebugError('Kunde inte läsa påminnelser', e);
+  }
+}
+async function persistPaminnelser(){
+  try{ await DB.setPersonalData(PAMINNELSER_KEY, JSON.stringify(paminnelser)); }
+  catch(e){ showDebugError('Kunde inte spara påminnelser', e); }
+}
+function renderPaminnelser(){
+  const list = document.getElementById('paminnelserList');
+  const empty = document.getElementById('paminnelserEmptyState');
+  list.innerHTML = '';
+  empty.style.display = paminnelser.length ? 'none' : 'block';
+  const today = new Date().toISOString().slice(0,10);
+  const sorted = [...paminnelser].sort((a,b) => (a.date || '').localeCompare(b.date || ''));
+  sorted.forEach(item => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);';
+    const overdue = item.date && item.date < today;
+
+    const dateEl = document.createElement('span');
+    dateEl.textContent = item.date || '';
+    dateEl.style.cssText = 'min-width:100px;font-weight:600;' + (overdue ? 'color:var(--danger);' : '');
+
+    const note = document.createElement('input');
+    note.type = 'text';
+    note.value = item.note;
+    note.style.cssText = 'flex:1;border:none;background:transparent;font-size:14px;';
+    note.onchange = () => { item.note = note.value; persistPaminnelser(); };
+
+    const del = document.createElement('button');
+    del.textContent = 'Ta bort';
+    del.onclick = () => {
+      paminnelser = paminnelser.filter(p => p.id !== item.id);
+      persistPaminnelser();
+      renderPaminnelser();
+    };
+
+    row.appendChild(dateEl);
+    row.appendChild(note);
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+// ---------- Ekonomi (företagsövergripande) ----------
+async function loadEkonomiData(){
+  try{
+    const [meta, budgetDetalj, reskontra, likviditet, lan, brItems, mark, likviditetsbudget, prefs, koncern] = await Promise.all([
+      DB.getPersonalData(EKONOMI_KEYS.meta),
+      DB.getPersonalData(EKONOMI_KEYS.budgetDetalj),
+      DB.getPersonalData(EKONOMI_KEYS.reskontra),
+      DB.getPersonalData(EKONOMI_KEYS.likviditet),
+      DB.getPersonalData(EKONOMI_KEYS.lan),
+      DB.getPersonalData(EKONOMI_KEYS.brItems),
+      DB.getPersonalData(EKONOMI_KEYS.mark),
+      DB.getPersonalData(EKONOMI_KEYS.likviditetsbudget),
+      DB.getPersonalData(EKONOMI_KEYS.prefs),
+      DB.getPersonalData(EKONOMI_KEYS.koncern),
+      loadNyaProjektMall() // budgetstrukturen utgår från kalkylmallen
+    ]);
+    try{ uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; }
+    companyEkonomiData = {
+      meta: (meta && JSON.parse(meta.value)) || {},
+      budgetDetalj: (budgetDetalj && JSON.parse(budgetDetalj.value)) || {},
+      reskontra: (reskontra && JSON.parse(reskontra.value)) || {},
+      likviditet: (likviditet && JSON.parse(likviditet.value)) || {},
+      lan: (lan && JSON.parse(lan.value)) || {},
+      brItems: (brItems && JSON.parse(brItems.value)) || {},
+      mark: (mark && JSON.parse(mark.value)) || {},
+      likviditetsbudget: (likviditetsbudget && JSON.parse(likviditetsbudget.value)) || {},
+      koncern: (koncern && JSON.parse(koncern.value)) || {}
+    };
+    // Kalkylerna behövs för att koppla budgetar till omvandlade projekt.
+    if(!nyaProjektList.length){
+      try{
+        nyaProjektList = await DB.listNyaProjekt();
+        nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); });
+      }catch(e){}
+    }
+  }catch(e){
+    showDebugError('Kunde inte läsa ekonomidata', e);
+  }
+}
+
+async function loadEkonomiSoldCounts(){
+  const next = {};
+  await Promise.all(projects.map(async p => {
+    try{
+      const raw = await fetchApartmentsRaw(p.id);
+      const apts = raw.apartments.map(normalizeApartment);
+      next[p.id] = { sold: apts.filter(a => a.sald && a.sald.done).length, total: apts.length };
+    }catch(e){
+      next[p.id] = { sold: 0, total: 0 };
+    }
+  }));
+  ekonomiSoldCounts = next;
+}
+
+async function openCompanyEkonomi(){
+  showScreen('companyEkonomi');
+  await Promise.all([loadEkonomiData(), loadEkonomiSoldCounts()]);
+  setEkonomiSubView(ekonomiSubView || 'oversikt');
+}
+
+// ---------- Ekonomi: huvudflikar med underflikar ----------
+// Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
+const EKONOMI_TAB_GROUPS = {
+  projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
+  koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån']]
+};
+function ekonomiTabGroupOf(view){
+  return Object.keys(EKONOMI_TAB_GROUPS).find(g => EKONOMI_TAB_GROUPS[g].some(x => x[0] === view)) || null;
+}
+function ekonomiRenderSubTabs2(view, group){
+  const bar = document.getElementById('ekonomiSubTabsBar2');
+  if(!bar) return;
+  bar.innerHTML = '';
+  if(!group){ bar.style.display = 'none'; return; }
+  EKONOMI_TAB_GROUPS[group].forEach(([v, label]) => {
+    const b = document.createElement('button');
+    b.className = 'ekonomi-sub-tab' + (v === view ? ' active' : '');
+    b.dataset.ekonomiView = v;
+    b.textContent = label;
+    b.onclick = () => setEkonomiSubView(v);
+    bar.appendChild(b);
+  });
+  bar.style.display = document.getElementById('ekonomiSubTabsBar').style.display === 'none' ? 'none' : 'flex';
+}
+
+// ---------- Koncern: fordringar och lån på koncernnivå ----------
+// companyEkonomiData.koncern._fordringar = [{ id, motpart, belopp, forfallodatum, anteckning }]
+// companyEkonomiData.koncern._lan = [{ id, langivare, belopp, rantebelopp, forfallodatum, anteckning }]
+function ekonomiKoncernList(key){
+  if(!companyEkonomiData.koncern) companyEkonomiData.koncern = {};
+  if(!Array.isArray(companyEkonomiData.koncern[key])) companyEkonomiData.koncern[key] = [];
+  return companyEkonomiData.koncern[key];
+}
+function ekonomiKoncernTextCell(td, value, onSave, placeholder){
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'eko-inline-input'; inp.style.textAlign = 'left';
+  inp.value = value || ''; inp.placeholder = placeholder || '';
+  inp.onchange = () => onSave(inp.value.trim());
+  td.appendChild(inp);
+}
+function ekonomiKoncernDateCell(td, value, onSave){
+  const inp = document.createElement('input');
+  inp.type = 'date'; inp.className = 'eko-inline-input'; inp.style.cssText = 'text-align:left; width:150px;';
+  inp.value = value || '';
+  inp.onchange = () => onSave(inp.value);
+  td.appendChild(inp);
+}
+function renderEkonomiKoncernFordran(){
+  // Solvinkelns fordringar mot projekten = saldot på Lån Solvinkeln i varje projekt (Lån-fliken).
+  const pw = document.getElementById('ekoKoncernFordranProjekt');
+  if(pw){
+    pw.innerHTML = '';
+    const t = document.createElement('table');
+    t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
+    t.innerHTML = '<thead><tr><th style="text-align:left;">Projekt</th><th style="text-align:left;">Status</th><th>Fordran (saldo idag)</th><th>Upplupen ränta</th><th>Ränta</th><th style="text-align:left;">Förfallodatum</th></tr></thead>';
+    const tb = document.createElement('tbody');
+    let sum = 0, sumR = 0, n = 0;
+    ekonomiSortedProjects().forEach(p => {
+      const saldo = ekonomiLanSaldo(p.id, 'lanSolvinkeln');
+      const d = ekonomiLanDetalj(p.id, 'lanSolvinkeln', false);
+      if(!saldo && !(d && d.tx.length)) return;
+      const upp = d ? ekonomiLanUpplupen(d) : { belopp: 0, ranta: 0 };
+      const forfall = (companyEkonomiData.lan[p.id] || {}).lanSolvinkelnForfallodatum || '';
+      sum += saldo; sumR += upp.belopp; n++;
+      const tr = document.createElement('tr');
+      tr.className = 'home-list-row';
+      tr.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td><td style="font-weight:600;">' + formatKrFull(saldo) + '</td><td>' + formatKrFull(Math.round(upp.belopp)) + '</td><td>' + (upp.ranta ? upp.ranta + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>';
+      tr.onclick = () => { currentEkonomiLanKey = 'lanSolvinkeln'; openEkonomiProjektLan(p); };
+      tb.appendChild(tr);
+    });
+    const tot = document.createElement('tr');
+    tot.className = 'eko-row-resultat';
+    tot.innerHTML = '<td style="text-align:left;">Summa (' + n + ' projekt)</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(Math.round(sumR)) + '</td><td></td><td></td>';
+    tb.appendChild(tot);
+    t.appendChild(tb);
+    pw.appendChild(t);
+  }
+  const list = ekonomiKoncernList('_fordringar');
+  const tbody = document.getElementById('ekoKoncernFordranBody');
+  tbody.innerHTML = '';
+  let sum = 0;
+  const projOpts = ekonomiSortedProjects().map(p => '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</option>').join('');
+  list.forEach(f => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernTextCell(tr.children[0], f.motpart, async v => { f.motpart = v; await ekonomiKoncernFordranSpara(f, f.projektPid); }, 'Motpart');
+    // Projekt: en fordran mot ett bolag som i sin tur har fordran mot ett projekt bokas som
+    // utökning av Lån Solvinkeln i projektet (och räknas därmed i IB, saldo, prognos och koncern).
+    const sel = document.createElement('select');
+    sel.className = 'eko-inline-select'; sel.style.width = '100%';
+    sel.innerHTML = '<option value="">– Inget projekt –</option>' + projOpts;
+    sel.value = f.projektPid || '';
+    sel.onchange = async () => { const old = f.projektPid || null; f.projektPid = sel.value || null; await ekonomiKoncernFordranSpara(f, old); renderEkonomiKoncernFordran(); };
+    tr.children[1].appendChild(sel);
+    likviditetsbudgetEditableCell(tr.children[2], f.belopp || null, async v => { f.belopp = v || 0; await ekonomiKoncernFordranSpara(f, f.projektPid); renderEkonomiKoncernFordran(); });
+    ekonomiKoncernDateCell(tr.children[3], f.datum, async v => { f.datum = v; await ekonomiKoncernFordranSpara(f, f.projektPid); });
+    ekonomiKoncernDateCell(tr.children[4], f.forfallodatum, async v => { f.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[5], f.anteckning, async v => { f.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
+    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?' + (f.projektPid ? ' Bokningen på Lån Solvinkeln i projektet tas också bort.' : ''))) return; companyEkonomiData.koncern._fordringar = list.filter(x => x.id !== f.id); await ekonomiKoncernFordranSpara({ id: f.id, projektPid: null }, f.projektPid); renderEkonomiKoncernFordran(); };
+    tr.children[6].appendChild(del);
+    sum += f.belopp || 0;
+    tbody.appendChild(tr);
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td></td><td></td><td></td>';
+  tbody.appendChild(tot);
+}
+// Sparar en övrig fordran och håller bokningen på Lån Solvinkeln i valt projekt i synk
+// (tx med kalla 'koncernfordran' och fordranId). Byts projekt tas bokningen bort i det gamla.
+async function ekonomiKoncernFordranSpara(f, oldPid){
+  const removeFrom = pid => { const d = pid ? ekonomiLanDetalj(pid, 'lanSolvinkeln', false) : null; if(d) d.tx = d.tx.filter(t => t.fordranId !== f.id); };
+  if(oldPid && oldPid !== f.projektPid) removeFrom(oldPid);
+  if(f.projektPid){
+    const d = ekonomiLanDetalj(f.projektPid, 'lanSolvinkeln', true);
+    let tx = d.tx.find(t => t.fordranId === f.id);
+    if(!tx){ tx = { id: uid(), fordranId: f.id, typ: 'utokning', ranta: null, kalla: 'koncernfordran' }; d.tx.push(tx); }
+    tx.datum = f.datum || tx.datum || new Date().toISOString().slice(0, 10);
+    tx.belopp = f.belopp || 0;
+    tx.text = 'Fordran via ' + (f.motpart || 'motpart');
+  } else if(oldPid) removeFrom(oldPid);
+  try{ await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }catch(e){ showDebugError('Kunde inte spara lånet', e); }
+  await saveEkonomiKoncern();
+}
+function renderEkonomiKoncernLan(){
+  const list = ekonomiKoncernList('_lan');
+  const tbody = document.getElementById('ekoKoncernLanBody');
+  tbody.innerHTML = '';
+  let sum = 0, sumRanta = 0;
+  list.forEach(l => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
+    likviditetsbudgetEditableCell(tr.children[1], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    likviditetsbudgetEditableCell(tr.children[2], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    ekonomiKoncernDateCell(tr.children[3], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[4], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
+    del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+    tr.children[5].appendChild(del);
+    sum += l.belopp || 0; sumRanta += l.rantebelopp || 0;
+    tbody.appendChild(tr);
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
+  tbody.appendChild(tot);
+}
+document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
+  ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
+  await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
+};
+document.getElementById('ekoKoncernLanAdd').onclick = async () => {
+  ekonomiKoncernList('_lan').push({ id: uid(), langivare: '', belopp: 0, rantebelopp: 0, forfallodatum: '', anteckning: '' });
+  await saveEkonomiKoncern(); renderEkonomiKoncernLan();
+};
+
+function setEkonomiSubView(view){
+  ekonomiSubView = view;
+  const tabGroup = ekonomiTabGroupOf(view);
+  document.querySelectorAll('#ekonomiSubTabsBar .ekonomi-sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.ekonomiView === view || (!!tabGroup && btn.dataset.ekonomiView === tabGroup)));
+  ekonomiRenderSubTabs2(view, tabGroup);
+  document.getElementById('ekonomiKoncernFordranView').style.display = view === 'koncernfordran' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernLanView').style.display = view === 'koncernlan' ? 'block' : 'none';
+  document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
+  document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
+  document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
+  document.getElementById('ekonomiMarkView').style.display = view === 'mark' ? 'block' : 'none';
+  document.getElementById('ekonomiLikviditetView').style.display = view === 'likviditet' ? 'block' : 'none';
+  document.getElementById('ekonomiLanView').style.display = view === 'lan' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernView').style.display = view === 'koncern' ? 'block' : 'none';
+  document.getElementById('ekonomiVinstSolvinkelnView').style.display = view === 'vinstsolvinkeln' ? 'block' : 'none';
+  document.getElementById('ekonomiNyaProjektListView').style.display = view === 'nyaprojekt' ? 'block' : 'none';
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('nyaProjektBostaderView').style.display = 'none';
+  currentNyaProjektBostaderId = null;
+  if(view === 'oversikt') renderEkonomiOversikt();
+  else if(view === 'projekt') renderEkonomiProjekt();
+  else if(view === 'budget') renderEkonomiBudgetList();
+  else if(view === 'mark') renderEkonomiMarkList();
+  else if(view === 'vinstsolvinkeln') renderEkonomiVinstSolvinkeln();
+  else if(view === 'nyaprojekt') loadNyaProjektList();
+  else if(view === 'likviditet') renderEkonomiLikviditetList();
+  else if(view === 'koncern') renderEkonomiKoncern();
+  else if(view === 'koncernfordran') renderEkonomiKoncernFordran();
+  else if(view === 'koncernlan') renderEkonomiKoncernLan();
+  else renderEkonomiNumberTab(view);
+}
+
+// Statusfilter (samma som i Projektöversikten); valet sparas per användare under prefKey.
+function buildStatusFilterBar(wrap, prefKey, onChange){
+  const statuses = Array.isArray(uiPrefs[prefKey]) ? uiPrefs[prefKey] : HOME_LIST_DEFAULT_STATUS;
+  wrap.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.textContent = 'Visa:'; wrap.appendChild(lbl);
+  HOME_STATUS_GROUPS.forEach(({ status, heading }) => {
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = statuses.includes(status); cb.dataset.s = status;
+    cb.onchange = async () => {
+      uiPrefs[prefKey] = HOME_STATUS_GROUPS.map(g => g.status).filter(s => [...wrap.querySelectorAll('input')].find(i => i.dataset.s === s).checked);
+      await saveUiPrefs();
+      onChange();
+    };
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(' ' + heading + ' (' + projects.filter(p => (p.status || 'Pågående') === status).length + ')'));
+    wrap.appendChild(l);
+  });
+  return statuses;
+}
+function homeStatusPillHtml(status){
+  const g = HOME_STATUS_GROUPS.find(x => x.status === status);
+  const cls = status === 'Pågående' ? 'pag' : status === 'Bygglov/projektering' ? 'bygg' : status === 'Kommande' ? 'komm' : status === 'Slutförd' ? 'slut' : '';
+  return '<span class="home-status-pill ' + cls + '">' + escapeHtml(g ? g.heading : status) + '</span>';
+}
+// ---------- Koncernlikviditet: koncernens aktörer (Solvinkeln, Derome, NBE, BORO) ----------
+// Visar lånerörelserna i alla projekt ur aktörens perspektiv: en utökning av t.ex. Lån
+// Solvinkeln i ett projekt är pengar ut (minus) för Solvinkeln, en återbetalning är
+// pengar in (plus). Underlaget är samma som lånraderna i projektens likviditetsprognoser
+// (bokningar i Lån-fliken, preliminära bokningar och förfallodatum).
+const EKONOMI_KONCERN_AKTORER = [
+  { key: 'lanSolvinkeln', namn: 'Solvinkeln' },
+  { key: 'lanDerome', namn: 'Derome' },
+  { key: 'lanNBE', namn: 'NBE' },
+  { key: 'lanBORO', namn: 'BORO' }
+];
+// Koncerndata (delad): companyEkonomiData.koncern[aktorKey] = { ingaende: kr, poster: [{ id, namn, per: { 'YYYY-MM': kr } }] }
+function ekonomiKoncernRec(key){
+  if(!companyEkonomiData.koncern) companyEkonomiData.koncern = {};
+  const r = companyEkonomiData.koncern[key] || (companyEkonomiData.koncern[key] = { ingaende: 0, poster: [] });
+  if(!Array.isArray(r.poster)) r.poster = [];
+  return r;
+}
+// JV-bolagets egna uppgifter (ingående kassa) per kombination av aktörer.
+function ekonomiKoncernJvRec(keys){
+  if(!companyEkonomiData.koncern) companyEkonomiData.koncern = {};
+  const k = companyEkonomiData.koncern;
+  if(!k._jv) k._jv = {};
+  const id = keys.slice().sort().join('+');
+  return k._jv[id] || (k._jv[id] = { ingaende: 0 });
+}
+async function saveEkonomiKoncern(){
+  try{ await DB.setPersonalData(EKONOMI_KEYS.koncern, JSON.stringify(companyEkonomiData.koncern || {})); }catch(e){ showDebugError('Kunde inte spara koncernlikviditeten', e); }
+}
+// Ett projekts likviditet per månad enligt dess likviditetsprognos (samma underlag som
+// Likviditet-raden i prognosvyn): ingående likviditet + inbetalningar − utbetalningar.
+// Används i Koncern för de gemensamma (JV-)projekten. Räknar från projektets startmånad
+// så att saldot är rätt även om koncernvyn börjar en annan månad.
+async function ekonomiPrognosLikviditetPerManad(pid, wantedMonths){
+  if(!ekonomiPrognosAptsCache[pid]){
+    try{ const raw = await fetchApartmentsRaw(pid); ekonomiPrognosAptsCache[pid] = raw.apartments.map(normalizeApartment); }catch(e){ ekonomiPrognosAptsCache[pid] = []; }
+  }
+  const prog = ekonomiPrognosRec(pid);
+  const start = prog.start < wantedMonths[0] ? prog.start : wantedMonths[0];
+  const end = wantedMonths[wantedMonths.length - 1];
+  const months = ekonomiPrognosMonths(start, 1);
+  while(months[months.length - 1] < end) months.push(ekonomiPrognosMonths(months[months.length - 1], 2)[1]);
+  const { per } = ekonomiPrognosData(pid);
+  const inb = ekonomiPrognosInbetalningar(pid, start, months);
+  const struktur = ekonomiBudgetStruktur(pid);
+  const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
+  const ranta = lanFields.map(f => ekonomiPrognosRanta(pid, f.key, months));
+  const out = {};
+  let saldo = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
+  months.forEach(m => {
+    let inn = inb.insatser.per[m] || 0;
+    inb.lan.forEach(l => { inn += l.per[m] || 0; });
+    inn += inb.foreningslan.per[m] || 0;
+    (inb.ovriga || []).forEach(o => { inn += o.per[m] || 0; });
+    let ut = 0;
+    struktur.kostnadsgrupper.forEach(g => g.poster.forEach(post => {
+      const cells = prog.celler[post.id] || {};
+      const e = per[post.id];
+      ut += (cells[m] || 0) + (e && e.obetalt[m] ? e.obetalt[m] : 0);
+    }));
+    ranta.forEach(r => { ut += r.per[m] || 0; });
+    saldo += inn - ut;
+    out[m] = saldo;
+  });
+  return out;
+}
+async function renderEkonomiKoncern(){
+  const wrap = document.getElementById('ekoKoncernWrap');
+  const ctl = document.getElementById('ekoKoncernControls');
+  if(!wrap || !ctl) return;
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const antal = uiPrefs.koncernManader === 24 ? 24 : 12;
+  const start = new Date().toISOString().slice(0, 7);
+  const months = ekonomiPrognosMonths(start, antal);
+  const tkr = v => { const r = Math.round((v || 0) / 1000); if(isNaN(r)) return ''; return r === 0 ? '' : r.toLocaleString('sv-SE'); };
+  const cellOpts = { fmt: v => { const r = Math.round(v / 1000); return r === 0 ? '0' : r.toLocaleString('sv-SE'); }, scale: 1000 };
+
+  ctl.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.textContent = 'Aktörer:'; ctl.appendChild(lbl);
+  EKONOMI_KONCERN_AKTORER.forEach(a => {
+    const l = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = valda.includes(a.key);
+    cb.onchange = async () => {
+      uiPrefs.koncernAktorer = EKONOMI_KONCERN_AKTORER.map(x => x.key).filter(k => [...ctl.querySelectorAll('input[type=checkbox]')].find(i => i.dataset.k === k).checked);
+      await saveUiPrefs(); renderEkonomiKoncern();
+    };
+    cb.dataset.k = a.key;
+    l.appendChild(cb); l.appendChild(document.createTextNode(' ' + a.namn));
+    ctl.appendChild(l);
+  });
+  const per = document.createElement('label');
+  per.style.marginLeft = '10px';
+  per.innerHTML = 'Period <select class="eko-inline-select" style="margin-left:4px;"><option value="12">12 månader</option><option value="24">24 månader</option></select>';
+  const sel = per.querySelector('select'); sel.value = String(antal);
+  sel.onchange = async () => { uiPrefs.koncernManader = parseInt(sel.value, 10); await saveUiPrefs(); renderEkonomiKoncern(); };
+  ctl.appendChild(per);
+  const unit = document.createElement('span'); unit.className = 'eko-sub'; unit.style.margin = '0'; unit.textContent = 'tkr';
+  ctl.appendChild(unit);
+  const pdfBtn = document.createElement('button');
+  pdfBtn.type = 'button'; pdfBtn.className = 'upload-btn'; pdfBtn.textContent = '📄 Ladda ner PDF'; pdfBtn.style.marginLeft = '10px';
+  pdfBtn.onclick = showEkonomiKoncernPdfPopup;
+  ctl.appendChild(pdfBtn);
+
+  // Underlag: lånerader per projekt för valda aktörer (ur aktörens perspektiv:
+  // utökning = pengar ut = fordran ökar, återbetalning = pengar in = fordran minskar).
+  const perAktor = {};
+  valda.forEach(k => { perAktor[k] = []; });
+  const perProjekt = {}; // pid -> { p, aktorer: { key: row } }
+  ekonomiSortedProjects().forEach(p => {
+    const inb = ekonomiPrognosInbetalningar(p.id, start, months);
+    inb.lan.forEach(l => {
+      if(!perAktor[l.key]) return;
+      // Återbetalningar markerade "till JV-kassan" går inte till aktören utan till JV-bolagets kassa.
+      const flow = {}, jv = {}; let any = !!l.ib;
+      months.forEach(m => {
+        const jvV = (l.planerade[m] || []).filter(x => x.jvKassa).reduce((s, x) => s + (x.belopp || 0), 0) + (l.items[m] || []).filter(x => x.jvKassa).reduce((s, x) => s - (x.belopp || 0), 0);
+        jv[m] = -jvV;
+        const v = -((l.per[m] || 0) - jvV); flow[m] = v; if(v || jv[m]) any = true;
+      });
+      if(!any) return;
+      const row = { p, l, flow, jv, ib: l.ib || 0 };
+
+      perAktor[l.key].push(row);
+      (perProjekt[p.id] = perProjekt[p.id] || { p, aktorer: {} }).aktorer[l.key] = row;
+    });
+  });
+
+  // Utdelning vid preliminärt slutförande: projektets kvarvarande kapital fördelas enligt ägandet
+  // och landar som inbetalning hos respektive aktör den månaden.
+  const slutPerProjekt = {}; // pid -> { manad, belopp, delar } för Vinst-raden under Gemensamma projekt
+  for(const p of ekonomiSortedProjects()){
+    const sm = ekonomiPrognosRec(p.id).slutforandeManad;
+    if(!sm || !months.includes(sm)) continue;
+    const likv = await ekonomiPrognosLikviditetPerManad(p.id, months);
+    const slut = ekonomiPrognosSlutforande(p.id, months, likv);
+    if(slut) slutPerProjekt[p.id] = slut;
+    if(!slut || !slut.belopp) continue;
+
+    slut.delar.forEach(d => {
+      if(!d.key || !perAktor[d.key] || !d.belopp) return;
+      const flow = {}; months.forEach(m => { flow[m] = m === sm ? d.belopp : 0; });
+      perAktor[d.key].push({ p, l: { key: d.key, namn: 'Utdelning', per: {}, items: {}, planerade: {} }, flow, ib: 0, utdelning: true });
+    });
+  }
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post</th><th style="text-align:center;">Ingående fordran</th><th style="text-align:center;">Ingående kassa</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;" title="Projektrader: fordran vid periodens slut. Summarader: summa av rörelserna.">Summa / UB fordran</th></tr></thead>';
+  table.id = 'ekoKoncernTable';
+  let tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
+  const addRow = (label, values, opts) => {
+    const tr = document.createElement('tr');
+    if(opts && opts.cls) tr.className = opts.cls;
+    const first = document.createElement('td');
+    first.style.cssText = 'font-size:12.5px; text-align:left; padding-left:' + ((opts && opts.indent) || 6) + 'px; position:sticky; left:0; background:' + ((opts && opts.bg) || 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    if(typeof label === 'string') first.textContent = label; else first.appendChild(label);
+    tr.appendChild(first);
+    values.forEach(v => {
+      const td = document.createElement('td');
+      td.style.cssText = mono + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11px; color:var(--ink-soft);' : '');
+      if(v && v.nodeType) td.appendChild(v); else td.textContent = v == null ? '' : v;
+      tr.appendChild(td);
+    });
+    if(opts && opts.bg) tr.style.background = opts.bg;
+    tbody.appendChild(tr);
+    return tr;
+  };
+  const sumCell = v => { const s = document.createElement('span'); const r = Math.round((v || 0) / 1000); s.textContent = r === 0 ? '0' : r.toLocaleString('sv-SE'); if(r < 0) s.style.color = 'var(--danger)'; return s; };
+  const sectionRow = text => { const tr = addRow(text, ['', ''].concat(months.map(() => ''), ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' }); tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;'; return tr; };
+  const blanks = months.map(() => '');
+  const total = {}; months.forEach(m => { total[m] = 0; });
+  let totalIngaende = 0, totalFordranIb = 0;
+  const aktorerValda = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key));
+  aktorerValda.forEach(a => {
+    const rec = ekonomiKoncernRec(a.key);
+    const rows = perAktor[a.key];
+    const fordranIb = rows.reduce((s, r) => s + r.ib, 0);
+    const ibEl = document.createElement('div'); ibEl.style.minWidth = '80px';
+    likviditetsbudgetEditableCell(ibEl, rec.ingaende || 0, async (val) => { rec.ingaende = val || 0; await saveEkonomiKoncern(); renderEkonomiKoncern(); }, cellOpts);
+    ibEl.title = 'Ingående kassa för ' + a.namn + ' (klicka för att ändra)';
+    const tr = addRow(a.namn, [sumCell(fordranIb), ibEl].concat(blanks, ['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' });
+    tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;';
+    const sum = {}; months.forEach(m => { sum[m] = 0; });
+    rows.forEach(r => {
+      const cells = months.map(m => {
+        const v = r.flow[m];
+        const sp = document.createElement('span');
+        sp.textContent = tkr(v);
+        const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
+        if(plan) sp.style.color = 'var(--danger)';
+        if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = r.p.name + ' · ' + r.l.namn + ' · klicka för detaljer'; sp.onclick = () => showEkonomiLanManadPopup(r.p.id, r.l, m); }
+        sum[m] += v;
+        return sp;
+      });
+      // Summa = fordran vid periodens slut: IB − rörelserna (utökning ökar fordran, återbetalning minskar).
+      if(r.utdelning){ cells.forEach(sp => { if(sp.textContent) sp.style.color = 'var(--danger)'; sp.title = 'Preliminär utdelning vid slutförande'; }); addRow(r.p.name + ' · utdelning vid slutförande', ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 }); }
+      else addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(r.ib - months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
+    });
+    if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
+    rec.poster.forEach(post => {
+      // Egna poster gäller bara sin aktör; visas flera aktörer tas posten bara med om den är markerad "flera aktörer".
+      if(valda.length > 1 && !post.flera) return;
+      const name = document.createElement('span');
+      name.textContent = post.namn || 'Egen post';
+      name.className = 'editable'; name.style.cursor = 'pointer'; name.title = 'Klicka för att byta namn';
+      name.onclick = async () => { const nytt = prompt('Namn på posten:', post.namn || ''); if(nytt === null) return; post.namn = nytt.trim() || 'Egen post'; await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+      const del = document.createElement('button');
+      del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort posten';
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; margin-left:6px; font-size:11px;';
+      del.onclick = async () => { if(!confirm('Ta bort posten "' + (post.namn || 'Egen post') + '"?')) return; rec.poster = rec.poster.filter(x => x.id !== post.id); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+      const fl = document.createElement('span');
+      fl.textContent = post.flera ? 'flera aktörer' : 'bara ' + a.namn;
+      fl.title = 'Klicka för att växla: gäller posten bara ' + a.namn + ' eller även när flera aktörer visas?';
+      fl.style.cssText = 'font-size:10px; color:' + (post.flera ? 'var(--blue)' : 'var(--ink-soft)') + '; margin-left:8px; cursor:pointer; border:1px solid var(--line-soft); border-radius:999px; padding:0 6px;';
+      fl.onclick = async () => { post.flera = !post.flera; await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+      const lblEl = document.createElement('span'); lblEl.appendChild(name); lblEl.appendChild(fl); lblEl.appendChild(del);
+      const cells = months.map(m => {
+        const el = document.createElement('div'); el.style.minWidth = '70px';
+        const v = (post.per || {})[m];
+        likviditetsbudgetEditableCell(el, v ? v : null, async (val) => { post.per = post.per || {}; if(val == null || val === 0) delete post.per[m]; else post.per[m] = val; await saveEkonomiKoncern(); renderEkonomiKoncern(); }, cellOpts);
+        if(v && v < 0){ const sp = el.querySelector('span'); if(sp) sp.style.color = 'var(--danger)'; }
+        sum[m] += v || 0;
+        return el;
+      });
+      addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+    });
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
+    addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
+    addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; const flera = confirm('Ska posten även räknas med när flera aktörer visas tillsammans? OK = ja, gäller flera aktörer. Avbryt = nej, bara ' + a.namn + '.'); rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {}, flera }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+    addRow(addBtn, ['', ''].concat(blanks, ['']), { indent: 18 });
+    months.forEach(m => { total[m] += sum[m]; });
+    totalIngaende += rec.ingaende || 0; totalFordranIb += fordranIb;
+    addRow('Summa ' + a.namn, ['', ''].concat(months.map(m => sumCell(sum[m])), [sumCell(months.reduce((s, m) => s + sum[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    // Utestående fordran: IB-fordran − lånerörelser (minus = utökning ökar fordran, plus = återbetalning minskar den).
+    let fordran = fordranIb;
+    const lanSum = {}; months.forEach(m => { lanSum[m] = rows.filter(r => !r.utdelning).reduce((s, r) => s + r.flow[m], 0); });
+    const fordranCells = months.map(m => { fordran -= lanSum[m]; return sumCell(fordran); });
+    addRow('Utestående fordran ' + a.namn, [sumCell(fordranIb), ''].concat(fordranCells, [sumCell(fordran)]), { bold: true });
+    let acc = rec.ingaende || 0;
+    addRow('Likviditet ' + a.namn, ['', sumCell(rec.ingaende || 0)].concat(months.map(m => { acc += sum[m]; return sumCell(acc); }), ['']), { bold: true });
+  });
+  if(valda.length > 1){
+    addRow('Totalt valda aktörer', ['', ''].concat(months.map(m => sumCell(total[m])), [sumCell(months.reduce((s, m) => s + total[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+    let acc = totalIngaende;
+    addRow('Likviditet totalt', ['', sumCell(totalIngaende)].concat(months.map(m => { acc += total[m]; return sumCell(acc); }), ['']), { bold: true });
+  }
+  let gemTable = null;
+  // Gemensamma projekt (visas när flera aktörer är valda): alla projekt där någon av de valda
+  // aktörerna har pengar ute. Per projekt: status, IB-fordran, och en rad per aktör med
+  // rörelserna från projektets likviditetsprognos (utökning/återbetalning av lånet).
+  if(valda.length > 1){
+    // Bara projekt som ägs gemensamt: JV-partnern (under Projekt) ska vara en av de valda aktörerna.
+    const partnerKey = name => /derome/i.test(name || '') ? 'lanDerome' : /nbe/i.test(name || '') ? 'lanNBE' : /boro/i.test(name || '') ? 'lanBORO' : null;
+    const gem = ekonomiSortedProjects().filter(p => { const k = partnerKey((companyEkonomiData.meta[p.id] || {}).jvPartner); return k && valda.includes(k); }).map(p => perProjekt[p.id] || { p, aktorer: {} });
+    const kompakt = uiPrefs.koncernGemLage === 'kompakt';
+    // Egen tabell, fristående från koncernlikviditeten (skrivs ut separat). Ses som ett
+    // JV-bolag: aktörernas fordringar per projekt, återbetalningar till JV-kassan, vinst
+    // vid slutförande (delas ut eller behålls) och längst ner JV-bolagets ackumulerade kassa.
+    gemTable = document.createElement('table');
+    gemTable.className = table.className; gemTable.style.cssText = table.style.cssText; gemTable.id = 'ekoKoncernGemTable';
+    gemTable.innerHTML = table.querySelector('thead').outerHTML;
+    tbody = document.createElement('tbody'); gemTable.appendChild(tbody);
+    const gemPoster = [];
+    aktorerValda.forEach(a => ekonomiKoncernRec(a.key).poster.forEach(post => { if(post.flera) gemPoster.push({ a, post }); }));
+    if(gem.length || gemPoster.length){
+      const jvNamn = aktorerValda.map(a => a.namn).join(' + ');
+      const jvRec = ekonomiKoncernJvRec(aktorerValda.map(a => a.key));
+      const gemTot = {}; const jvIn = {}, vinstKassa = {}, vinstAlla = {}, posterPer = {};
+      months.forEach(m => { jvIn[m] = 0; vinstKassa[m] = 0; vinstAlla[m] = 0; posterPer[m] = 0; });
+      aktorerValda.forEach(a => { gemTot[a.key] = { ib: 0, flow: {} }; months.forEach(m => { gemTot[a.key].flow[m] = 0; }); });
+      const redCell = (v, title) => { const sp = sumCell(v); sp.style.color = 'var(--danger)'; if(title) sp.title = title; return sp; };
+      gem.forEach(g => {
+        const rowsJv = {}; months.forEach(m => { rowsJv[m] = 0; });
+        aktorerValda.forEach(a => { const r = g.aktorer[a.key]; if(!r) return; gemTot[a.key].ib += r.ib || 0; months.forEach(m => { gemTot[a.key].flow[m] += r.flow[m] || 0; rowsJv[m] += (r.jv || {})[m] || 0; }); });
+        months.forEach(m => { jvIn[m] += rowsJv[m]; });
+        const slut = slutPerProjekt[g.p.id] || null;
+        const gprog = ekonomiPrognosRec(g.p.id);
+        const tillKassa = gprog.vinstHantering === 'kassa';
+        if(slut && slut.belopp){ vinstAlla[slut.manad] += slut.belopp; if(tillKassa) vinstKassa[slut.manad] += slut.belopp; }
+        if(kompakt) return;
+        const ibTot = Object.values(g.aktorer).reduce((s, r) => s + (r.ib || 0), 0);
+        const lblEl = document.createElement('span');
+        lblEl.innerHTML = escapeHtml(g.p.name) + ' ' + homeStatusPillHtml(g.p.status || 'Pågående');
+        addRow(lblEl, [sumCell(ibTot), ''].concat(blanks, ['']), { bold: true });
+        aktorerValda.forEach(a => {
+          const r = g.aktorer[a.key] || { ib: 0, flow: {}, jv: {}, l: { planerade: {}, items: {} } };
+          let f = r.ib || 0;
+          const cells = months.map(m => {
+            const v = r.flow[m] || 0;
+            const sp = document.createElement('span');
+            sp.textContent = tkr(v);
+            const plan = (r.l.planerade[m] || []).length, real = (r.l.items[m] || []).length;
+            if(plan) sp.style.color = 'var(--danger)';
+            if(plan || real){ sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.title = g.p.name + ' · ' + r.l.namn + ' · klicka för detaljer (preliminär/genomförd/ta bort, till JV-kassan)'; sp.onclick = () => showEkonomiLanManadPopup(g.p.id, r.l, m); }
+            f -= v;
+            return sp;
+          });
+          addRow(a.namn, [sumCell(r.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
+        });
+        if(months.some(m => rowsJv[m])){
+          addRow('Till JV-kassan (återbetalningar)', ['', ''].concat(months.map(m => { const sp = sumCell(rowsJv[m]); if(rowsJv[m]) sp.style.color = 'var(--blue)'; return sp; }), [sumCell(months.reduce((s, m) => s + rowsJv[m], 0))]), { indent: 18 });
+        }
+        // Vinst: likviditeten kvar den månad projektet slutförs (★ i projektets prognos).
+        const vl = document.createElement('span');
+        vl.textContent = 'Vinst' + (slut ? ' ' + ekonomiPrognosShortLabel(slut.manad) : '') + ' ';
+        const tog = document.createElement('span');
+        tog.style.cssText = 'font-size:10px; cursor:pointer; border:1px solid var(--line-soft); border-radius:999px; padding:0 6px; margin-left:4px; color:' + (tillKassa ? 'var(--blue)' : 'var(--ink-soft)') + ';';
+        tog.textContent = tillKassa ? 'behålls i JV-kassan' : 'delas ut till aktörerna';
+        tog.title = 'Klicka för att växla: dela ut vinsten enligt ägarandel (syns som utdelning hos aktörerna) eller låta den ligga kvar i JV-kassan';
+        tog.onclick = async () => { gprog.vinstHantering = tillKassa ? 'utdelning' : 'kassa'; await saveEkonomiPrognos(); renderEkonomiKoncern(); };
+        vl.appendChild(tog);
+        if(!slut){ const n = document.createElement('span'); n.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; n.textContent = 'ingen slutförandemånad (★) i projektets likviditetsprognos'; vl.appendChild(n); }
+        addRow(vl, ['', ''].concat(months.map(m => (!slut || m !== slut.manad) ? '' : redCell(slut.belopp, 'Preliminär vinst = likviditeten vid slutförandet')), [slut ? sumCell(slut.belopp) : '']), { indent: 18 });
+      });
+      if(kompakt){
+        // Kompakt: en rad per aktör med alla fordringar ihopslagna och rörelserna framåt.
+        aktorerValda.forEach(a => {
+          const t = gemTot[a.key]; let f = t.ib;
+          const cells = months.map(m => { const sp = document.createElement('span'); sp.textContent = tkr(t.flow[m]); f -= t.flow[m]; return sp; });
+          addRow(a.namn + ' · rörelser alla gemensamma projekt', [sumCell(t.ib), ''].concat(cells, [sumCell(f)]), { indent: 18 });
+        });
+        if(months.some(m => jvIn[m])) addRow('Till JV-kassan (återbetalningar, alla projekt)', ['', ''].concat(months.map(m => { const sp = sumCell(jvIn[m]); if(jvIn[m]) sp.style.color = 'var(--blue)'; return sp; }), [sumCell(months.reduce((s, m) => s + jvIn[m], 0))]), { indent: 18 });
+        if(months.some(m => vinstAlla[m])) addRow('Vinst alla gemensamma projekt', ['', ''].concat(months.map(m => vinstAlla[m] ? redCell(vinstAlla[m]) : ''), [sumCell(months.reduce((s, m) => s + vinstAlla[m], 0))]), { indent: 18 });
+      }
+      // Gemensamma poster: egna poster markerade "flera aktörer" – räknas in i JV-kassan.
+      if(gemPoster.length){
+        sectionRow('Gemensamma poster');
+        gemPoster.forEach(({ a, post }) => {
+          months.forEach(m => { posterPer[m] += (post.per || {})[m] || 0; });
+          addRow((post.namn || 'Egen post') + ' (' + a.namn + ')', ['', ''].concat(months.map(m => sumCell((post.per || {})[m] || 0)), [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+        });
+      }
+      // Längst ner: utestående fordran per aktör (IB − rörelser) och JV-bolagets ackumulerade kassa.
+      aktorerValda.forEach(a => {
+        const t = gemTot[a.key]; let f = t.ib;
+        addRow('Utestående fordran ' + a.namn + ' (gemensamma projekt)', [sumCell(t.ib), ''].concat(months.map(m => { f -= t.flow[m]; return sumCell(f); }), [sumCell(f)]), { bold: true });
+      });
+      const jvIbEl = document.createElement('div'); jvIbEl.style.minWidth = '80px';
+      likviditetsbudgetEditableCell(jvIbEl, jvRec.ingaende || 0, async (val) => { jvRec.ingaende = val || 0; await saveEkonomiKoncern(); renderEkonomiKoncern(); }, cellOpts);
+      jvIbEl.title = 'Ingående kassa i JV-bolaget ' + jvNamn + ' (klicka för att ändra). Aktörernas egna ingående kassor räknas inte hit.';
+      let kassa = jvRec.ingaende || 0;
+      const kassaCells = months.map(m => { kassa += jvIn[m] + vinstKassa[m] + posterPer[m]; return sumCell(kassa); });
+      const kassaTr = addRow('Ackumulerad kassa JV (' + jvNamn + ')', ['', jvIbEl].concat(kassaCells, [sumCell(kassa)]), { bold: true, cls: 'eko-row-resultat' });
+      kassaTr.title = 'Ingående kassa + återbetalningar till JV-kassan + vinst som behålls + gemensamma poster';
+    }
+  }
+  wrap.innerHTML = '';
+  if(!valda.length){ wrap.innerHTML = '<p class="eko-sub">Välj minst en aktör.</p>'; return; }
+  wrap.appendChild(table);
+  if(gemTable && gemTable.querySelector('tbody').children.length){
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:26px 0 8px;';
+    const h = document.createElement('h3'); h.style.cssText = 'margin:0; font-family:\'Fraunces\',serif; font-size:17px;';
+    h.textContent = 'Gemensamma projekt (' + aktorerValda.map(a => a.namn).join(' + ') + ')';
+    head.appendChild(h);
+    const lage = document.createElement('label');
+    lage.style.cssText = 'font-size:12.5px; color:var(--ink-soft);';
+    lage.innerHTML = 'Visa <select class="eko-inline-select" style="margin-left:4px;"><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
+    const lsel = lage.querySelector('select'); lsel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
+    lsel.onchange = async () => { uiPrefs.koncernGemLage = lsel.value; await saveUiPrefs(); renderEkonomiKoncern(); };
+    head.appendChild(lage);
+    wrap.appendChild(head);
+    wrap.appendChild(gemTable);
+  }
+}
+
+// ---------- Koncern: PDF-utskrift (koncernlikviditet, gemensamma projekt, valfritt Fordran och Lån) ----------
+// Tabellerna hämtas från det som visas på skärmen (samma siffror, tkr i likviditeten).
+function ekonomiPdfRowsFromTable(table){
+  const cellText = td => {
+    const inp = td.querySelector('input, select');
+    if(inp){ if(inp.tagName === 'SELECT') return inp.selectedOptions[0] ? inp.selectedOptions[0].textContent.replace(/^– .* –$/, '') : ''; return inp.value || ''; }
+    const t = (td.textContent || '').replace(/\s+/g, ' ').trim();
+    return t === '—' ? '' : t.replace(/[  ]/g, ' ').replace(/−/g, '-').replace(/\s*(✕|✎)\s*$/, '');
+  };
+  const head = [...table.querySelectorAll('thead th')].map(th => th.textContent.replace(/\s+/g, ' ').trim());
+  const rows = [...table.querySelectorAll('tbody tr')].map(tr => {
+    const tds = [...tr.children];
+    const first = tds[0];
+    if(first.querySelector('button') && tds.slice(1).every(td => !cellText(td))) return null; // "+ Egen post"-rader m.m.
+    const bold = tr.classList.contains('eko-row-resultat') || /700/.test(first.style.fontWeight || '') || (first.querySelector('b') != null);
+    const section = /uppercase/.test(first.style.cssText || '');
+    return { cells: tds.map(cellText), bold, section };
+  }).filter(Boolean);
+  return { head, rows };
+}
+function ekonomiPdfTable(doc, startY, head, rows, opts){
+  doc.autoTable({
+    startY, head: [head], body: rows.map(r => r.cells),
+    styles: { fontSize: (opts && opts.fontSize) || 7, cellPadding: 1.2, halign: 'center', textColor: 30 },
+    headStyles: { fillColor: [58, 44, 32], textColor: 255, halign: 'center', fontSize: (opts && opts.fontSize) || 7 },
+    columnStyles: Object.assign({ 0: { halign: 'left', cellWidth: (opts && opts.firstWidth) || 48 } }, (opts && opts.columnStyles) || {}),
+    margin: { left: 12, right: 12 },
+    didParseCell: h => {
+      const r = rows[h.row.index];
+      if(h.section !== 'body' || !r) return;
+      if(r.bold) h.cell.styles.fontStyle = 'bold';
+      if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; h.cell.styles.fontStyle = 'bold'; }
+      if(/^-/.test(String(h.cell.raw || ''))) h.cell.styles.textColor = [178, 58, 58];
+    }
+  });
+  return doc.lastAutoTable.finalY;
+}
+function ekonomiPdfHeader(doc, title, sub, logo, logoW, logoH){
+  if(logo){ try{ doc.addImage(logo, 'PNG', 12, 9, logoW, logoH); }catch(e){ /* utan logga */ } }
+  doc.setFontSize(15); doc.setTextColor(31, 26, 20);
+  doc.text(title, 285, 14, { align: 'right' });
+  doc.setFontSize(8); doc.setTextColor(120);
+  doc.text(sub, 285, 20, { align: 'right' });
+  doc.setDrawColor(217, 211, 199); doc.setLineWidth(0.4);
+  doc.line(12, 24, 285, 24);
+  return 29;
+}
+function showEkonomiKoncernPdfPopup(){
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const harSolvinkeln = valda.includes('lanSolvinkeln');
+  const flera = valda.length > 1;
+  const namn = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn);
+  const p = ekoPopup({ title: 'Skriv ut koncern', sub: 'PDF i liggande A4 med det som visas på skärmen (' + namn.join(', ') + ', ' + (uiPrefs.koncernManader === 24 ? 24 : 12) + ' månader, tkr). Välj vilka delar som ska med.', maxWidth: 540 });
+  const mk = (label, checked, disabled) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:8px; align-items:center; margin:6px 0; cursor:pointer;' + (disabled ? ' opacity:0.5;' : ''); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = checked; cb.disabled = disabled; l.appendChild(cb); l.appendChild(document.createTextNode(label)); p.body.appendChild(l); return cb; };
+  const cbK = mk('Koncernlikviditet (' + namn.join(', ') + ')', true, false);
+  const cbG = mk('Gemensamma projekt (' + namn.join(' + ') + ')', flera, !flera);
+  const lage = document.createElement('label');
+  lage.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0 10px 26px; font-size:12.5px;' + (flera ? '' : ' opacity:0.5;');
+  lage.innerHTML = 'Gemensamma projekt som <select class="eko-inline-select"' + (flera ? '' : ' disabled') + '><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
+  const lageSel = lage.querySelector('select'); lageSel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
+  p.body.appendChild(lage);
+  const cbF = mk('Fordran (Solvinkelns fordringar mot projekten + övriga fordringar)', false, !harSolvinkeln);
+  const cbL = mk('Lån (koncernens lån)', false, !harSolvinkeln);
+  if(!harSolvinkeln){ const n = document.createElement('p'); n.className = 'eko-sub'; n.textContent = 'Fordran och Lån kan tas med när Solvinkeln är vald.'; p.body.appendChild(n); }
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Ladda ner PDF'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = async () => {
+    const opts = { koncern: cbK.checked, gem: flera && cbG.checked, lage: lageSel.value, fordran: cbF.checked, lan: cbL.checked };
+    if(!opts.koncern && !opts.gem && !opts.fordran && !opts.lan){ showToast('Välj minst en del att skriva ut.'); return; }
+    btn.disabled = true;
+    try{ await ekonomiKoncernPdf(opts); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; }
+  };
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
+// opts: { koncern, gem, lage: 'utokad'|'kompakt', fordran, lan }
+async function ekonomiKoncernPdf(opts){
+  opts = opts || { koncern: true };
+  const valda = Array.isArray(uiPrefs.koncernAktorer) ? uiPrefs.koncernAktorer : ['lanSolvinkeln'];
+  const aktorer = EKONOMI_KONCERN_AKTORER.filter(a => valda.includes(a.key)).map(a => a.namn).join(', ');
+  // Utökad/kompakt i utskriften kan skilja sig från skärmen: rendera om tillfälligt och återställ efteråt.
+  const lageFore = uiPrefs.koncernGemLage;
+  const lageAnnat = opts.gem && opts.lage && (opts.lage === 'kompakt') !== (lageFore === 'kompakt');
+  if(lageAnnat){ uiPrefs.koncernGemLage = opts.lage; await renderEkonomiKoncern(); }
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const logoEl = document.querySelector('.brand-logo');
+    const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
+    const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
+    const datum = new Date().toLocaleDateString('sv-SE');
+    let first = true;
+    const nySida = () => { if(!first) doc.addPage(); first = false; };
+    // Månadstabell (koncernlikviditet eller gemensamma projekt): 24 mån delas i två tabeller.
+    const manadsTabell = (table, title, sub) => {
+      const K = ekonomiPdfRowsFromTable(table);
+      const monthCount = K.head.length - 4; // Post, Ingående fordran, Ingående kassa, …månader…, Summa
+      const chunks = [];
+      for(let i = 0; i < monthCount; i += 12) chunks.push([i, Math.min(i + 12, monthCount)]);
+      chunks.forEach(([a, b], ci) => {
+        nySida();
+        const y = ekonomiPdfHeader(doc, title, sub + ' · belopp i tkr · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + datum, logo, logoW, logoH);
+        const idx = [0, 1, 2].concat(Array.from({ length: b - a }, (_, i) => 3 + a + i), ci === chunks.length - 1 ? [K.head.length - 1] : []);
+        ekonomiPdfTable(doc, y, idx.map(i => K.head[i]), K.rows.map(r => ({ cells: idx.map(i => r.cells[i] || ''), bold: r.bold, section: r.section })), { fontSize: 6.5, firstWidth: 52 });
+      });
+    };
+    if(opts.koncern){
+      const kt = document.getElementById('ekoKoncernTable');
+      if(!kt) throw new Error('Koncernlikviditeten är inte renderad.');
+      manadsTabell(kt, 'Koncernlikviditet', aktorer);
+    }
+    if(opts.gem){
+      const gt = document.getElementById('ekoKoncernGemTable');
+      if(!gt) throw new Error('Inga gemensamma projekt att skriva ut – välj minst två aktörer.');
+      manadsTabell(gt, 'Gemensamma projekt', aktorer.replace(/, /g, ' + ') + ' · ' + (uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utökad'));
+    }
+    if(opts.fordran){
+      if(ekonomiSubView !== 'koncernfordran'){ renderEkonomiKoncernFordran(); }
+      nySida();
+      let y = ekonomiPdfHeader(doc, 'Fordran', 'Solvinkelns fordringar mot projekten · skapad ' + datum, logo, logoW, logoH);
+      const pt = document.querySelector('#ekoKoncernFordranProjekt table');
+      if(pt){ const P = ekonomiPdfRowsFromTable(pt); y = ekonomiPdfTable(doc, y, P.head, P.rows, { fontSize: 8, firstWidth: 70 }) + 8; }
+      const ot = document.querySelector('#ekoKoncernFordranBody') ? document.getElementById('ekoKoncernFordranBody').closest('table') : null;
+      if(ot){ doc.setFontSize(11); doc.setTextColor(31, 26, 20); doc.text('Övriga fordringar', 12, y); const O = ekonomiPdfRowsFromTable(ot); ekonomiPdfTable(doc, y + 3, O.head.slice(0, -1), O.rows.map(r => ({ cells: r.cells.slice(0, -1), bold: r.bold, section: r.section })), { fontSize: 8, firstWidth: 60 }); }
+    }
+    if(opts.lan){
+      renderEkonomiKoncernLan();
+      nySida();
+      const y = ekonomiPdfHeader(doc, 'Lån', 'Koncernens lån · skapad ' + datum, logo, logoW, logoH);
+      const lt = document.getElementById('ekoKoncernLanBody').closest('table');
+      const L = ekonomiPdfRowsFromTable(lt);
+      ekonomiPdfTable(doc, y, L.head.slice(0, -1), L.rows.map(r => ({ cells: r.cells.slice(0, -1), bold: r.bold, section: r.section })), { fontSize: 8, firstWidth: 60 });
+    }
+    const namn = opts.koncern && opts.gem ? 'Koncern' : opts.gem ? 'Gemensamma-projekt' : opts.koncern ? 'Koncernlikviditet' : opts.fordran ? 'Fordran' : 'Lan';
+    doc.save(namn + '-' + datum + '.pdf');
+  }finally{
+    if(lageAnnat){ uiPrefs.koncernGemLage = lageFore; await renderEkonomiKoncern(); }
+  }
+}
+
+
+function ekonomiSortedProjects(){
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  return projects.slice().sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+}
+function ekonomiFilteredProjects(statuses){
+  return ekonomiSortedProjects().filter(p => statuses.includes(p.status || 'Pågående'));
+}
+// Likviditet: projektlista med statusfilter (Namn, Status) - klick öppnar likviditetsprognosen.
+function renderEkonomiLikviditetList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoLikvFilters'), 'likvStatus', renderEkonomiLikviditetList);
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  const tbody = document.getElementById('ekonomiLikviditetBody');
+  tbody.innerHTML = '';
+  const rows = projects.filter(p => statuses.includes(p.status || 'Pågående')).sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="2" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>'; return; }
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.className = 'home-list-row';
+    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td>';
+    tr.onclick = () => openEkonomiProjektLikviditet(p);
+    tbody.appendChild(tr);
+  });
+}
+
+function ekonomiLedgerAmount(line){
+  return (line.justeratBelopp != null ? line.justeratBelopp : line.belopp) || 0;
+}
+
+// ---------- Budgetstruktur per projekt ----------
+// Budgeten har samma uppbyggnad som kalkylerna under Nya projekt: kostnadsgrupper
+// med underkategorier och poster. Strukturen skapas första gången projektets
+// budget öppnas - från kalkylen om projektet skapats via "Gör till projekt",
+// annars från kalkylmallen. Äldre budgetvärden (fasta kategorier) flyttas in
+// på poster med matchande namn. Reskontrarader kategoriseras på postens namn.
+function ekonomiBudgetDetail(pid){
+  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { foreningslan: 0, kategorier: {} };
+  return companyEkonomiData.budgetDetalj[pid];
+}
+function ekonomiBudgetBuildStruktur(pid){
+  const cand = nyaProjektList.find(c => c.promoted_project_id === pid);
+  let groups;
+  if(cand){
+    const d = migrateNyaProjektData(cand.data);
+    groups = d.kostnadsgrupper.filter(g => !g.oplacerade).map(g => {
+      const uks = (g.underkategorier || []).map(u => ({ id: uid(), namn: u.namn, _old: u.id }));
+      return {
+        id: uid(), grupp: g.grupp, underkategorier: uks.map(u => ({ id: u.id, namn: u.namn })),
+        poster: g.poster.filter(p => (p.namn || '').trim()).map(p => {
+          const uk = uks.find(u => u._old === p.underkategori);
+          const bp = { id: uid(), namn: p.namn.trim(), budget: p.belopp != null ? p.belopp : null, underkategori: uk ? uk.id : null }; if(p.perBostad != null){ bp.perBostad = p.perBostad; bp.perBostadAntal = p.perBostadAntal; } return bp;
+        })
+      };
+    });
+  } else {
+    const mall = nyaProjektGetMall();
+    groups = mall.kostnadsgrupper.map(mg => {
+      const uks = (mg.underkategorier || []).map(n => ({ id: uid(), namn: n }));
+      return {
+        id: uid(), grupp: mg.grupp, underkategorier: uks,
+        poster: (mg.poster || []).map(mp => {
+          const uk = uks.find(u => u.namn === mp.underkategori);
+          return { id: uid(), namn: mp.namn, budget: null, underkategori: uk ? uk.id : null };
+        })
+      };
+    });
+  }
+  // Äldre budgetvärden (fast kategorilista) flyttas in på matchande post.
+  const legacy = (companyEkonomiData.budgetDetalj[pid] || {}).kategorier || {};
+  const all = []; groups.forEach(g => g.poster.forEach(p => all.push(p)));
+  const rest = [];
+  Object.keys(legacy).forEach(cat => {
+    const v = legacy[cat] || 0;
+    if(!v) return;
+    const n = nyaProjektNormName(cat);
+    const hit = all.find(p => nyaProjektNormName(p.namn) === n) ||
+      all.find(p => { const t = nyaProjektNormName(p.namn); return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t)); });
+    if(hit && hit.budget == null) hit.budget = v;
+    else rest.push({ id: uid(), namn: cat, budget: v, underkategori: null });
+  });
+  if(rest.length) groups.push({ id: uid(), grupp: 'Övrigt (tidigare budget)', underkategorier: [], poster: rest });
+  return { kostnadsgrupper: groups, skapadFran: cand ? 'kalkyl:' + cand.name : 'mall', skapadAt: new Date().toISOString() };
+}
+// Budgetmallen = Brf Gladö Höjdens budget: nya projekt får alla dess grupper, underkategorier
+// och poster (utöver kalkylens), så att alla projekt har samma kategorier. Projektspecifika
+// "Mark - …"-poster tas aldrig med.
+const EKONOMI_BUDGET_MALL_PID = 'brf-gladö-höjden-mt06';
+function ekonomiBudgetMergeFromMall(pid, st){
+  if(pid === EKONOMI_BUDGET_MALL_PID) return;
+  const md = companyEkonomiData.budgetDetalj[EKONOMI_BUDGET_MALL_PID];
+  if(!md || !md.struktur || !Array.isArray(md.struktur.kostnadsgrupper)) return;
+  const norm = s => nyaProjektNormName(String(s || ''));
+  st.kostnadsgrupper.forEach(g => { g.poster = (g.poster || []).filter(p => !/^mark - /i.test(p.namn || '')); });
+  md.struktur.kostnadsgrupper.forEach(tg => {
+    let g = st.kostnadsgrupper.find(x => norm(x.grupp) === norm(tg.grupp));
+    if(!g){ g = { id: uid(), grupp: tg.grupp, underkategorier: [], poster: [] }; st.kostnadsgrupper.push(g); }
+    if(!Array.isArray(g.underkategorier)) g.underkategorier = [];
+    (tg.underkategorier || []).forEach(tu => { if(!g.underkategorier.find(u => norm(u.namn) === norm(tu.namn))) g.underkategorier.push({ id: uid(), namn: tu.namn }); });
+    (tg.poster || []).forEach(tp => {
+      if(/^mark - /i.test(tp.namn || '')) return;
+      const exists = g.poster.find(x => norm(x.namn) === norm(tp.namn)) || st.kostnadsgrupper.some(og => og !== g && (og.poster || []).find(x => norm(x.namn) === norm(tp.namn)));
+      if(exists) return;
+      const tuk = tp.underkategori ? (tg.underkategorier || []).find(u => u.id === tp.underkategori) : null;
+      const uk = tuk ? g.underkategorier.find(u => norm(u.namn) === norm(tuk.namn)) : null;
+      const np = { id: uid(), namn: tp.namn, budget: null, underkategori: uk ? uk.id : null };
+      if(tp.perBostad != null) np.perBostad = tp.perBostad;
+      g.poster.push(np);
+    });
+  });
+}
+function ekonomiBudgetStruktur(pid){
+  const d = ekonomiBudgetDetail(pid);
+  if(!d.struktur || !Array.isArray(d.struktur.kostnadsgrupper)){
+    d.struktur = ekonomiBudgetBuildStruktur(pid);
+    ekonomiBudgetMergeFromMall(pid, d.struktur);
+    d._strukturNy = true;
+  }
+  d.struktur.kostnadsgrupper.forEach(g => {
+    if(!g.id) g.id = uid();
+    if(!Array.isArray(g.underkategorier)) g.underkategorier = [];
+    if(!Array.isArray(g.poster)) g.poster = [];
+    g.poster.forEach(p => { if(!p.id) p.id = uid(); });
+  });
+  return d.struktur;
+}
+function ekonomiBudgetPosts(pid){
+  const out = [];
+  ekonomiBudgetStruktur(pid).kostnadsgrupper.forEach(g => g.poster.forEach(p => out.push({ post: p, group: g })));
+  return out;
+}
+function ekonomiBudgetPostNames(pid){
+  return ekonomiBudgetPosts(pid).map(x => x.post.namn);
+}
+// Hittar den post en reskontrarads kategori (postnamn, eller äldre kategorinamn) hör till.
+function ekonomiBudgetFindPost(pid, kategori){
+  if(!kategori) return null;
+  const posts = ekonomiBudgetPosts(pid).map(x => x.post);
+  const n = nyaProjektNormName(kategori);
+  return posts.find(p => nyaProjektNormName(p.namn) === n) ||
+    posts.find(p => { const t = nyaProjektNormName(p.namn); return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t)); }) || null;
+}
+// Mark-fliken: förvärv (fastighet + aktier), gatukostnad och vattenanslutning
+// följer med som tagna kostnader på budgetens motsvarande poster.
+const EKONOMI_MARK_POST_REGEX = {
+  forvarv: /^mark(\b|$|\s*-)|markf[öo]rv[äa]rv|anskaffning/i,
+  gatukostnad: /gatukostnad|gatuavgift/i,
+  vattenanslutning: /va-?\s?anslutning|vattenanslutning|^va$/i
+};
+// ---------- Mark: fastighet såld vidare till ett annat projekt ----------
+// fast.salj = { tillPid, status: 'ej'|'sald', belopp, datum }. I det köpande projektet syns
+// fastigheten som inkommande: "ej insåld" tills säljaren markerar såld, då räknas beloppet
+// som förvärvspris där (Mark-listan, budgetens tagna kostnader, fastighetsvärde).
+function ekonomiMarkInkommande(pid){
+  const out = [];
+  Object.keys(companyEkonomiData.mark || {}).forEach(fromPid => {
+    if(fromPid === pid) return;
+    (companyEkonomiData.mark[fromPid] || []).forEach(f => {
+      if(!f.salj || f.salj.tillPid !== pid) return;
+      const fromP = projects.find(p => p.id === fromPid);
+      const sald = f.salj.status === 'sald';
+      out.push({ id: 'in:' + f.id, fastighetsbeteckning: f.fastighetsbeteckning || '', forvarvspris: sald ? (f.salj.belopp || 0) : 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0, fakturor: [],
+        inkommande: { fromPid, fromNamn: fromP ? fromP.name : fromPid, sald, belopp: f.salj.belopp || 0, datum: f.salj.datum || '' } });
+    });
+  });
+  return out;
+}
+function ekonomiMarkFastigheterMedInkommande(pid){
+  return (companyEkonomiData.mark[pid] || []).concat(ekonomiMarkInkommande(pid));
+}
+function ekonomiMarkSaljText(fast){
+  if(!fast.salj || !fast.salj.tillPid) return '';
+  const p = projects.find(x => x.id === fast.salj.tillPid);
+  const namn = p ? p.name : fast.salj.tillPid;
+  return fast.salj.status === 'sald' ? 'Såld till ' + namn + ' · ' + formatKrFull(fast.salj.belopp || 0) + (fast.salj.datum ? ' · ' + fast.salj.datum : '') : 'Till ' + namn + ' · ej insåld';
+}
+// ---------- Mark: betalningsplan för förvärvet ----------
+// fast.betalningar = [{ id, manad:'YYYY-MM', belopp, aktor:'lanDerome'|'', klart:bool, datum }]
+// Obetalda delbetalningar flyttas från IB till sin månad i likviditetsprognosen. Betalas delen
+// av en aktör (Solvinkeln/Derome/NBE/BORO) läggs den som preliminär utökning av det lånet samma
+// månad, så att den syns som utlägg (fordran) i koncernlikviditeten.
+const EKONOMI_MARK_AKTORER = [['lanSolvinkeln', 'Solvinkeln'], ['lanDerome', 'Derome'], ['lanNBE', 'NBE'], ['lanBORO', 'BORO']];
+function ekonomiMarkAktorNamn(key){ const a = EKONOMI_MARK_AKTORER.find(x => x[0] === key); return a ? a[1] : (key || ''); }
+function ekonomiMarkBetalningar(fast){ return Array.isArray(fast.betalningar) ? fast.betalningar : []; }
+function ekonomiMarkBetalningText(fast){
+  const b = ekonomiMarkBetalningar(fast);
+  if(!b.length) return '';
+  const kvar = b.filter(x => !x.klart);
+  if(!kvar.length) return 'Betald (' + b.length + ' del' + (b.length > 1 ? 'ar' : '') + ')';
+  return kvar.map(x => (x.manad ? ekonomiPrognosShortLabel(x.manad) : '?') + ' ' + formatKrFull(x.belopp || 0) + (x.aktor ? ' · ' + ekonomiMarkAktorNamn(x.aktor) : '')).join(', ');
+}
+// Obetalda delbetalningar i ett projekt (egna fastigheter, inte inkommande).
+function ekonomiMarkPlaneradeBetalningar(pid){
+  const out = [];
+  (companyEkonomiData.mark[pid] || []).forEach(f => ekonomiMarkBetalningar(f).forEach(b => { if(!b.klart && b.manad && b.belopp) out.push({ fast: f, b }); }));
+  return out;
+}
+function showEkonomiMarkBetalningPopup(pid, fast){
+  const p = ekoPopup({ title: 'Betalningsplan: ' + (fast.fastighetsbeteckning || 'fastighet'), sub: 'Dela upp förvärvet i delbetalningar med månad. Obetalda delar ligger i likviditetsprognosen den månaden i stället för som betalt (IB). Anger du vem som betalar läggs beloppet som preliminär utökning av det lånet och syns i koncernlikviditeten. Markera betald när pengarna gått – då bokas det i Lån-fliken.', maxWidth: 760 });
+  if(!Array.isArray(fast.betalningar)) fast.betalningar = [];
+  const total = (fast.forvarvspris || 0) + (fast.aktiekop || 0);
+  const list = document.createElement('div');
+  p.body.appendChild(list);
+  const sumEl = document.createElement('div'); sumEl.style.cssText = 'margin-top:10px; font-size:12.5px;';
+  const save = async () => { await saveEkonomiMarkFastighet(fast.id, { betalningar: fast.betalningar }); renderEkonomiProjektMark(); };
+  const inpCss = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+  const render = () => {
+    list.innerHTML = '';
+    if(!fast.betalningar.length) list.innerHTML = '<p class="eko-sub">Inga delbetalningar – hela förvärvet räknas som betalt (IB) i prognosen.</p>';
+    fast.betalningar.forEach(b => {
+      const left = document.createElement('div'); left.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+      const mon = document.createElement('input'); mon.type = 'month'; mon.value = b.manad || ''; mon.style.cssText = inpCss;
+      mon.onchange = async () => { b.manad = mon.value; await save(); render(); };
+      const sel = document.createElement('select'); sel.className = 'eko-inline-select';
+      sel.innerHTML = '<option value="">Projektets kassa</option>' + EKONOMI_MARK_AKTORER.map(a => '<option value="' + a[0] + '">Betalas av ' + a[1] + '</option>').join('');
+      sel.value = b.aktor || '';
+      sel.onchange = async () => { b.aktor = sel.value; await save(); render(); };
+      left.appendChild(mon); left.appendChild(sel);
+      if(b.klart){ const t = document.createElement('span'); t.style.cssText = 'font-size:11px; color:var(--good, #2e7d32);'; t.textContent = 'Betald ' + (b.datum || ''); left.appendChild(t); mon.disabled = true; sel.disabled = true; }
+      const right = document.createElement('div'); right.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.value = b.belopp || ''; inp.placeholder = 'Belopp (kr)';
+      inp.style.cssText = 'width:130px; text-align:right; ' + inpCss;
+      inp.onchange = async () => { b.belopp = parseFloat(String(inp.value).replace(',', '.')) || 0; await save(); render(); };
+      inp.disabled = !!b.klart;
+      right.appendChild(inp);
+      if(!b.klart){
+        const date = document.createElement('input'); date.type = 'date'; date.value = new Date().toISOString().slice(0, 10); date.style.cssText = inpCss;
+        right.appendChild(date);
+        right.appendChild(ekoSmallBtn('Markera betald', async () => {
+          if(!date.value){ showToast('Ange datum.'); return; }
+          b.klart = true; b.datum = date.value;
+          if(b.aktor){
+            const d = ekonomiLanDetalj(pid, b.aktor, true);
+            d.tx.push({ id: uid(), datum: date.value, typ: 'utokning', belopp: b.belopp || 0, ranta: null, text: 'Markförvärv ' + (fast.fastighetsbeteckning || ''), kalla: 'Mark' });
+            try{ await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }catch(e){ showDebugError('Kunde inte spara lånet', e); }
+          }
+          await save(); render();
+          showToast(formatKrFull(b.belopp || 0) + ' markerad som betald' + (b.aktor ? ' och bokad som utökning av Lån ' + ekonomiMarkAktorNamn(b.aktor) : ''));
+        }));
+      } else {
+        right.appendChild(ekoSmallBtn('Ångra betald', async () => { if(!confirm('Ångra markeringen betald? En bokning i Lån-fliken tas inte bort automatiskt.')) return; b.klart = false; b.datum = ''; await save(); render(); }));
+      }
+      right.appendChild(ekoSmallBtn('Ta bort', async () => { if(!confirm('Ta bort delbetalningen?')) return; fast.betalningar = fast.betalningar.filter(x => x !== b); await save(); render(); }, true));
+      list.appendChild(ekoPopupLine(left, right));
+    });
+    const sum = fast.betalningar.reduce((s, b) => s + (b.belopp || 0), 0);
+    sumEl.innerHTML = 'Delbetalningar ' + formatKrFull(sum) + ' av totalt förvärv ' + formatKrFull(total) + (Math.abs(total - sum) > 0.5 ? ' · <span style="color:var(--danger);">' + (total > sum ? 'kvar ' + formatKrFull(total - sum) : 'överstiger med ' + formatKrFull(sum - total)) + '</span>' : ' · <span style="color:var(--good, #2e7d32);">stämmer ✓</span>');
+    list.appendChild(sumEl);
+  };
+  render();
+  const addRowEl = document.createElement('div'); addRowEl.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap;';
+  addRowEl.appendChild(ekoSmallBtn('+ Lägg till delbetalning', async () => {
+    const sum = fast.betalningar.reduce((s, b) => s + (b.belopp || 0), 0);
+    fast.betalningar.push({ id: uid(), manad: new Date().toISOString().slice(0, 7), belopp: Math.max(0, total - sum), aktor: '', klart: false });
+    await save(); render();
+  }));
+  addRowEl.appendChild(ekoSmallBtn('Dela 10 % nu / 90 % om två månader', async () => {
+    if(!total){ showToast('Fyll i förvärvspris först.'); return; }
+    if(fast.betalningar.length && !confirm('Ersätta befintliga delbetalningar?')) return;
+    const m0 = new Date().toISOString().slice(0, 7);
+    const m1 = ekonomiPrognosMonths(m0, 3)[2];
+    const a = Math.round(total * 0.1);
+    fast.betalningar = [{ id: uid(), manad: m0, belopp: a, aktor: '', klart: false }, { id: uid(), manad: m1, belopp: total - a, aktor: '', klart: false }];
+    await save(); render();
+  }));
+  p.body.appendChild(addRowEl);
+}
+function showEkonomiMarkSaljPopup(pid, fast){
+  const s = fast.salj || { tillPid: '', status: 'ej', belopp: null, datum: '' };
+  const p = ekoPopup({ title: 'Sälj vidare: ' + (fast.fastighetsbeteckning || 'fastighet'), sub: 'Välj vilket projekt fastigheten ska säljas till. Den syns där som "ej insåld" tills du markerar Såld och anger beloppet – då räknas beloppet som förvärvspris i det projektet.', maxWidth: 560 });
+  const field = (label, el) => { const w = document.createElement('div'); w.style.margin = '0 0 10px'; const l = document.createElement('label'); l.style.cssText = 'display:block; font-size:12px; color:var(--ink-soft); margin-bottom:4px;'; l.textContent = label; w.appendChild(l); w.appendChild(el); return w; };
+  const sel = document.createElement('select');
+  sel.className = 'eko-inline-select'; sel.style.width = '100%';
+  sel.innerHTML = '<option value="">– Inte såld vidare –</option>' + ekonomiSortedProjects().filter(x => x.id !== pid).map(x => '<option value="' + escapeHtml(x.id) + '">' + escapeHtml(x.name) + '</option>').join('');
+  sel.value = s.tillPid || '';
+  const status = document.createElement('select');
+  status.className = 'eko-inline-select'; status.style.width = '100%';
+  status.innerHTML = '<option value="ej">Ej insåld (avtal/planerad)</option><option value="sald">Såld</option>';
+  status.value = s.status === 'sald' ? 'sald' : 'ej';
+  const belopp = document.createElement('input');
+  belopp.type = 'number'; belopp.value = s.belopp != null ? s.belopp : ''; belopp.placeholder = 'Försäljningspris (kr)';
+  belopp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:14px;';
+  const datum = document.createElement('input');
+  datum.type = 'date'; datum.value = s.datum || '';
+  datum.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:6px 9px; font-size:13px;';
+  p.body.appendChild(field('Säljs till projekt', sel));
+  p.body.appendChild(field('Status', status));
+  p.body.appendChild(field('Belopp (krävs när den är såld)', belopp));
+  p.body.appendChild(field('Datum (valfritt)', datum));
+  const save = async () => {
+    if(!sel.value){ delete fast.salj; }
+    else {
+      const b = parseFloat(String(belopp.value).replace(',', '.'));
+      if(status.value === 'sald' && !(b > 0)){ showToast('Ange beloppet för försäljningen.'); return; }
+      fast.salj = { tillPid: sel.value, status: status.value, belopp: isNaN(b) ? null : b, datum: datum.value || '' };
+    }
+    try{ await persistEkonomiMark(); }catch(e){ showDebugError('Kunde inte spara', e); }
+    p.close();
+    renderEkonomiProjektMark();
+  };
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Spara'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = save;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
+function ekonomiMarkSums(pid){
+  return ekonomiMarkFastigheterMedInkommande(pid).reduce((acc, f) => {
+    acc.forvarv += (f.forvarvspris || 0) + (f.aktiekop || 0);
+    acc.gatukostnad += f.gatukostnad || 0;
+    acc.vattenanslutning += f.vattenanslutning || 0;
+    return acc;
+  }, { forvarv: 0, gatukostnad: 0, vattenanslutning: 0 });
+}
+// Posten som Mark-flikens belopp ska landa på. Generiska namn ("Mark",
+// "Markförvärv", "Gatukostnad", "VA-anslutning") föredras; projektspecifika
+// namn från mallen (t.ex. "Mark - Stensättningen 5") används inte för andra
+// projekt - då skapas en egen post i rätt grupp i stället.
+function ekonomiMarkPostFor(pid, key, create){
+  const struktur = ekonomiBudgetStruktur(pid);
+  const posts = ekonomiBudgetPosts(pid).map(x => x.post);
+  const n = s => nyaProjektNormName(s);
+  const exactNames = key === 'forvarv' ? ['mark', 'markförvärv', 'markforvarv', 'anskaffningskostnad mark', 'fastighet', 'fastighetsförvärv']
+    : key === 'gatukostnad' ? ['gatukostnad', 'gatukostnadsersättning', 'gatukostnader', 'kommun avgifter']
+    : ['va-anslutning', 'vaanslutning', 'va anslutningar', 'vattenanslutning', 'va'];
+  let hit = posts.find(p => exactNames.map(n).includes(n(p.namn)));
+  if(!hit && key !== 'forvarv'){
+    const re = EKONOMI_MARK_POST_REGEX[key];
+    hit = posts.find(p => re.test(p.namn) && !/ - /.test(p.namn)) || null;
+  }
+  if(hit || !create) return hit || null;
+  // Skapa posten: förvärv i markgruppen, övriga under Byggherrekostnader › Anslutningar om den finns.
+  const namn = key === 'forvarv' ? 'Markförvärv' : key === 'gatukostnad' ? 'Gatukostnad' : 'VA-anslutning';
+  let group = struktur.kostnadsgrupper.find(g => (key === 'forvarv' ? /anskaffning|^mark/i : /byggherre/i).test(g.grupp)) || struktur.kostnadsgrupper[0];
+  if(!group){
+    group = { id: uid(), grupp: key === 'forvarv' ? 'Anskaffningskostnad mark' : 'Byggherrekostnader', underkategorier: [], poster: [] };
+    struktur.kostnadsgrupper.push(group);
+  }
+  const uk = key === 'forvarv' ? null : (group.underkategorier || []).find(u => /anslutning/i.test(u.namn)) || null;
+  const post = { id: uid(), namn, budget: null, underkategori: uk ? uk.id : null, franMark: true };
+  group.poster.push(post);
+  return post;
+}
+// Tagna kostnader per post-id: reskontra (kategoriserade rader) + Mark.
+// Fakturor som lästs in under Mark (gatukostnad/vattenanslutning). En
+// reskontrarad med exakt samma belopp (±1 kr) räknas som samma faktura och
+// tas inte med en gång till i tagna kostnader.
+function ekonomiMarkFakturor(pid){
+  const out = [];
+  (companyEkonomiData.mark[pid] || []).forEach(f => (f.fakturor || []).forEach(fk => {
+    out.push({ belopp: fk.belopp || 0, fakturanummer: fk.fakturanummer || '', leverantor: fk.leverantor || '', typ: fk.typ, fastighet: f.fastighetsbeteckning || '' });
+  }));
+  return out;
+}
+function ekonomiReskontraMarkDubblett(pid, line){
+  const v = ekonomiLedgerAmount(line);
+  if(!v) return null;
+  return ekonomiMarkFakturor(pid).find(fk => Math.abs((fk.belopp || 0) - v) <= 1) || null;
+}
+// Tagna kostnader per post-id: {reskontra, mark, items[]} där items är
+// specifikationen (varje reskontrarad och varje Mark-belopp) som ligger bakom.
+function ekonomiBudgetTagna(pid){
+  const map = {};
+  const entry = post => {
+    if(!map[post.id]) map[post.id] = { reskontra: 0, mark: 0, items: [] };
+    return map[post.id];
+  };
+  (companyEkonomiData.reskontra[pid] || []).forEach(line => {
+    const parts = ekonomiLineParts(line);
+    if(!parts.length) return;
+    const split = ekonomiLineIsSplit(line);
+    // Mark-dubblettkontrollen gäller bara hela, ofördelade fakturor.
+    const dub = split ? null : ekonomiReskontraMarkDubblett(pid, line);
+    parts.forEach(part => {
+      const post = ekonomiBudgetFindPost(pid, part.kategori);
+      if(!post) return;
+      const e = entry(post);
+      const base = (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—');
+      if(dub){
+        e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: base, belopp: part.belopp, dubblett: 'Finns även i Mark (faktura ' + (dub.fakturanummer || '?') + ', ' + (dub.fastighet || '') + ') - räknas en gång' });
+        return;
+      }
+      e.reskontra += part.belopp;
+      e.items.push({ typ: 'reskontra', lopnr: line.lopnr, text: base + (split ? ' · del av faktura på ' + formatKrFull(ekonomiLedgerAmount(line)) : '') + (!split && line.justeratBelopp != null ? ' · justerat från ' + formatKrFull(line.belopp || 0) : ''), belopp: part.belopp });
+    });
+  });
+  const fastigheter = ekonomiMarkFastigheterMedInkommande(pid);
+  const ms = ekonomiMarkSums(pid);
+  const addMark = (key, total, describe) => {
+    if(!total) return;
+    const post = ekonomiMarkPostFor(pid, key, true);
+    if(!post) return;
+    const e = entry(post);
+    e.mark += total;
+    fastigheter.forEach(f => describe(f).forEach(it => e.items.push(it)));
+  };
+  addMark('forvarv', ms.forvarv, f => {
+    const v = (f.forvarvspris || 0) + (f.aktiekop || 0);
+    return v ? [{ typ: 'mark', text: 'Förvärv ' + (f.fastighetsbeteckning || 'fastighet') + (f.inkommande ? ' (köpt från ' + f.inkommande.fromNamn + ')' : ((f.aktiekop || 0) ? ' (fastighet ' + formatKrFull(f.forvarvspris || 0) + ' + aktier ' + formatKrFull(f.aktiekop || 0) + ')' : '')), belopp: v }] : [];
+  });
+  addMark('gatukostnad', ms.gatukostnad, f => {
+    const fakt = (f.fakturor || []).filter(fk => fk.typ === 'gatukostnad');
+    if(fakt.length) return fakt.map(fk => ({ typ: 'mark', text: 'Gatukostnad ' + (f.fastighetsbeteckning || '') + ' · faktura ' + (fk.fakturanummer || '?') + (fk.leverantor ? ' · ' + fk.leverantor : ''), belopp: fk.belopp || 0 }));
+    return (f.gatukostnad || 0) ? [{ typ: 'mark', text: 'Gatukostnad ' + (f.fastighetsbeteckning || '') + ' (inlagt belopp)', belopp: f.gatukostnad }] : [];
+  });
+  addMark('vattenanslutning', ms.vattenanslutning, f => {
+    const fakt = (f.fakturor || []).filter(fk => fk.typ === 'vattenanslutning');
+    if(fakt.length) return fakt.map(fk => ({ typ: 'mark', text: 'Vattenanslutning ' + (f.fastighetsbeteckning || '') + ' · faktura ' + (fk.fakturanummer || '?') + (fk.leverantor ? ' · ' + fk.leverantor : ''), belopp: fk.belopp || 0 }));
+    return (f.vattenanslutning || 0) ? [{ typ: 'mark', text: 'Vattenanslutning ' + (f.fastighetsbeteckning || '') + ' (inlagt belopp)', belopp: f.vattenanslutning }] : [];
+  });
+  return map;
+}
+// Popup med specifikationen bakom en posts tagna kostnader.
+function showEkonomiTagnaSpec(postNamn, t){
+  const old = document.getElementById('ekoTagnaSpecPopup');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ekoTagnaSpecPopup';
+  overlay.className = 'modal-overlay open';
+  const items = (t && t.items) || [];
+  const rowsHtml = items.length ? items.map(it =>
+    '<div style="display:flex; justify-content:space-between; gap:14px; padding:7px 0; border-bottom:1px solid var(--line-soft);' + (it.dubblett ? ' opacity:0.55;' : '') + '">' +
+      '<div style="min-width:0;"><div style="font-size:13px;">' + (it.typ === 'mark' ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Mark</span>' : '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--ink); color:#fff; margin-right:6px;">Reskontra' + (it.lopnr ? ' ' + escapeHtml(String(it.lopnr)) : '') + '</span>') + escapeHtml(it.text) + '</div>' +
+      (it.dubblett ? '<div style="font-size:11px; color:var(--danger);">' + escapeHtml(it.dubblett) + '</div>' : '') + '</div>' +
+      '<div style="font-family:\'JetBrains Mono\',monospace; white-space:nowrap; font-size:13px;' + (it.dubblett ? ' text-decoration:line-through;' : '') + '">' + formatKrFull(it.belopp || 0) + '</div>' +
+    '</div>'
+  ).join('') : '<p class="eko-sub">Inga fakturor eller Mark-belopp bakom den här posten.</p>';
+  const total = (t ? t.reskontra + t.mark : 0);
+  overlay.innerHTML = '<div class="modal-box" style="max-width:600px;">' +
+    '<h3>' + escapeHtml(postNamn) + '</h3>' +
+    '<p class="modal-sub">Specifikation av tagna kostnader: reskontrarader kategoriserade på posten samt belopp från Mark-fliken.</p>' +
+    '<div style="max-height:50vh; overflow:auto;">' + rowsHtml + '</div>' +
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:10px 0 0; font-weight:700;"><span>Tagna kostnader' + (t && t.reskontra && t.mark ? ' <span style="font-weight:400; font-size:11px; color:var(--ink-soft);">(reskontra ' + formatKrFull(t.reskontra) + ' + Mark ' + formatKrFull(t.mark) + ')</span>' : '') + '</span><span style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(total) + '</span></div>' +
+    '<div class="modal-actions" style="margin-top:14px;"><button type="button" id="ekoTagnaSpecClose" style="background:var(--ink); color:#fff;">Stäng</button></div>' +
+  '</div>';
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  document.getElementById('ekoTagnaSpecClose').onclick = close;
+}
+function ekonomiProjectBudgetTotals(projectId){
+  const posts = ekonomiBudgetPosts(projectId).map(x => x.post);
+  const budget = posts.reduce((s, p) => s + (p.budget || 0), 0);
+  const tagna = ekonomiBudgetTagna(projectId);
+  const utfall = Object.values(tagna).reduce((s, t) => s + t.reskontra + t.mark, 0);
+  return { budget, utfall };
+}
+// Rullista med budgetens poster, grupperade per kostnadsgrupp. Ett äldre
+// kategorinamn som inte längre finns som post visas som eget val så det inte tappas.
+function ekonomiBudgetKategoriOptions(pid, current, emptyLabel){
+  const struktur = ekonomiBudgetStruktur(pid);
+  let html = '<option value="">' + escapeHtml(emptyLabel || 'Ej kategoriserad') + '</option>';
+  let found = false;
+  struktur.kostnadsgrupper.forEach(g => {
+    html += '<optgroup label="' + escapeHtml(g.grupp).replace(/"/g, '&quot;') + '">';
+    g.poster.forEach(p => {
+      const sel = current === p.namn;
+      if(sel) found = true;
+      html += '<option value="' + escapeHtml(p.namn).replace(/"/g, '&quot;') + '"' + (sel ? ' selected' : '') + '>' + escapeHtml(p.namn) + '</option>';
+    });
+    html += '</optgroup>';
+  });
+  if(current && !found){
+    const hit = ekonomiBudgetFindPost(pid, current);
+    html += '<option value="' + escapeHtml(current).replace(/"/g, '&quot;') + '" selected>' + escapeHtml(current) + (hit ? ' → ' + escapeHtml(hit.namn) : ' (finns inte i budgeten)') + '</option>';
+  }
+  return html;
+}
+// Budgeterad intäkt för projektet: sparat värde, annars kalkylens intäkter
+// (Insatser + Föreningslån m.m.) om projektet omvandlats från en kalkyl.
+function ekonomiBudgetIntakt(pid){
+  const detail = ekonomiBudgetDetail(pid);
+  if(detail.budgetIntakt != null) return detail.budgetIntakt;
+  const cand = nyaProjektList.find(c => c.promoted_project_id === pid);
+  if(cand){
+    const d = migrateNyaProjektData(cand.data);
+    const t = nyaProjektTotals(d).totalIntakter;
+    return t || null;
+  }
+  return null;
+}
+async function saveEkonomiBudgetDetalj(){
+  await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
+}
+
+function renderEkonomiBudgetList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoBudgetFilters'), 'budgetStatus', renderEkonomiBudgetList);
+  const tbody = document.getElementById('ekonomiBudgetBody');
+  tbody.innerHTML = '';
+  let totalBudget = 0, totalUtfall = 0, totalVinst = 0;
+  ekonomiFilteredProjects(statuses).forEach(p => {
+    const { budget, utfall } = ekonomiProjectBudgetTotals(p.id);
+    totalBudget += budget;
+    totalUtfall += utfall;
+    const diff = budget - utfall;
+    // Budgeterad vinst = budgeterad intäkt − budgeterad kostnad (som i projektets budgetvy).
+    const bIntakt = ekonomiBudgetIntakt(p.id);
+    const bVinst = bIntakt != null ? bIntakt - budget : null;
+    if(bVinst != null) totalVinst += bVinst;
+    const row = document.createElement('tr');
+    row.onclick = () => openEkonomiProjektBudget(p);
+    row.className = 'home-list-row';
+    row.innerHTML =
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td>' +
+      '<td>' + formatMSEK(budget) + '</td>' +
+      '<td>' + formatMSEK(utfall) + '</td>' +
+      '<td class="' + (bVinst != null && bVinst < 0 ? 'eko-diff-negative' : '') + '">' + (bVinst != null ? formatMSEK(bVinst) : '—') + '</td>' +
+      '<td class="' + (diff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(diff) + '</td>';
+    tbody.appendChild(row);
+  });
+  const totalDiff = totalBudget - totalUtfall;
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'eko-row-resultat';
+  totalRow.innerHTML =
+    '<td>Totalt</td><td></td><td>' + formatMSEK(totalBudget) + '</td><td>' + formatMSEK(totalUtfall) + '</td>' +
+    '<td>' + formatMSEK(totalVinst) + '</td>' +
+    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(totalDiff) + '</td>';
+  tbody.appendChild(totalRow);
+}
+
+async function computeProjectAreaRevenue(projectId){
+  try{
+    const raw = await fetchApartmentsRaw(projectId);
+    const apts = raw.apartments.map(normalizeApartment);
+    const kvm = apts.reduce((s, a) => {
+      const n = parseFloat(String(a.totalyta || '').replace(',', '.').replace(/[^0-9.]/g, ''));
+      return s + (isNaN(n) ? 0 : n);
+    }, 0);
+    const intakter = apts.reduce((s, a) => {
+      const n = parseInt(String(a.totalpris || '').replace(/[^0-9]/g, ''), 10);
+      return s + (isNaN(n) ? 0 : n);
+    }, 0);
+    return { kvm, intakter, antal: apts.length };
+  }catch(e){
+    return { kvm: 0, intakter: 0, antal: 0 };
+  }
+}
+
+function formatKrPerKvm(total, kvm){
+  if(!kvm) return '—';
+  return Math.round(total / kvm).toLocaleString('sv-SE') + ' kr/kvm';
+}
+
+async function openEkonomiProjektBudget(project){
+  currentEkonomiBudgetProjectId = project.id;
+  document.getElementById('ekonomiProjektBudgetTitle').textContent = project.name;
+  document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektLanView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('ekonomiProjektBudgetView').style.display = 'block';
+  // Kalkylerna behövs för att koppla budgeten till ett omvandlat projekt.
+  if(!nyaProjektList.length){
+    try{ nyaProjektList = await DB.listNyaProjekt(); nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); }); }catch(e){}
+  }
+  ekonomiReskontraSelection.clear();
+  ekonomiBudgetAreaRevenue = await computeProjectAreaRevenue(project.id);
+  const detail = ekonomiBudgetDetail(project.id);
+  ekonomiBudgetStruktur(project.id);
+  if(detail._strukturNy){
+    delete detail._strukturNy;
+    try{ await saveEkonomiBudgetDetalj(); }catch(e){}
+  }
+  // Reskontrarader som matchar en faktura i Mark kategoriseras automatiskt
+  // på samma post (gatukostnad/vattenanslutning) - de räknas ändå bara en gång.
+  let autoKat = 0;
+  (companyEkonomiData.reskontra[project.id] || []).forEach(line => {
+    if(ekonomiLineHandled(line)) return;
+    const dub = ekonomiReskontraMarkDubblett(project.id, line);
+    if(!dub) return;
+    const post = ekonomiMarkPostFor(project.id, dub.typ === 'vattenanslutning' ? 'vattenanslutning' : 'gatukostnad', true);
+    if(post){ line.kategori = post.namn; autoKat++; }
+  });
+  if(autoKat){
+    try{ await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); await saveEkonomiBudgetDetalj(); }catch(e){}
+  }
+  renderEkonomiProjektBudget();
+}
+
+function closeEkonomiProjektBudget(){
+  document.getElementById('ekonomiProjektBudgetView').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar').style.display = 'flex';
+  setEkonomiSubView('budget');
+}
+
+// ---------- Mark-detalj: köpebrevsuppgifter per projekt (en förening kan äga flera fastigheter) ----------
+// Kostnadsposter i budgeten som hör till marken - används för "Ackumulerade
+// kostnader hittills" under Mark.
+const EKONOMI_MARK_KATEGORIER = ['Markförvärv', 'Markarbete', 'VA anslutningar', 'Kommun avgifter'];
+function ekonomiTagnaKostnaderPerKategori(projectId){
+  const out = {};
+  (companyEkonomiData.reskontra[projectId] || []).forEach(l => {
+    if(!l.kategori) return;
+    out[l.kategori] = (out[l.kategori] || 0) + ekonomiLedgerAmount(l);
+  });
+  return out;
+}
+// Kolumnerna i "Ackumulerade kostnader hittills" under Mark: tagna kostnader
+// (reskontra + Mark-fliken) på budgetposter som matchar respektive mönster.
+const EKONOMI_MARK_KOLUMNER = [
+  { key: 'forvarv', test: p => EKONOMI_MARK_POST_REGEX.forvarv.test(p.namn) && !/arbete|entreprenad|finansiering/i.test(p.namn) },
+  { key: 'markarbete', test: p => /markarbete|markentreprenad|rivning|sanering/i.test(p.namn) },
+  { key: 'va', test: p => EKONOMI_MARK_POST_REGEX.vattenanslutning.test(p.namn) },
+  { key: 'gata', test: p => EKONOMI_MARK_POST_REGEX.gatukostnad.test(p.namn) || /kommun/i.test(p.namn) }
+];
+function renderEkonomiMarkTagna(){
+  const tbody = document.getElementById('ekonomiMarkTagnaBody');
+  const foot = document.getElementById('ekonomiMarkTagnaFoot');
+  tbody.innerHTML = '';
+  const tot = { mark: 0, alla: 0 };
+  const totKol = {};
+  EKONOMI_MARK_KOLUMNER.forEach(k => { totKol[k.key] = 0; });
+  projects.forEach(p => {
+    // Bara projekt som redan har en budgetstruktur eller tagna kostnader - skapa inget i onödan.
+    const hasData = (companyEkonomiData.reskontra[p.id] || []).some(l => l.kategori) || (companyEkonomiData.mark[p.id] || []).length;
+    if(!hasData) return;
+    const tagna = ekonomiBudgetTagna(p.id);
+    const posts = ekonomiBudgetPosts(p.id).map(x => x.post);
+    const perKol = {};
+    EKONOMI_MARK_KOLUMNER.forEach(k => {
+      perKol[k.key] = posts.filter(k.test).reduce((s, post) => { const t = tagna[post.id]; return s + (t ? t.reskontra + t.mark : 0); }, 0);
+    });
+    const alla = Object.values(tagna).reduce((s, t) => s + t.reskontra + t.mark, 0);
+    const mark = EKONOMI_MARK_KOLUMNER.reduce((s, k) => s + perKol[k.key], 0);
+    if(!alla) return;
+    EKONOMI_MARK_KOLUMNER.forEach(k => { totKol[k.key] += perKol[k.key]; });
+    tot.mark += mark;
+    tot.alla += alla;
+    const row = document.createElement('tr');
+    row.innerHTML = '<td style="text-align:left;">' + escapeHtml(p.name) + '</td>' +
+      EKONOMI_MARK_KOLUMNER.map(k => '<td>' + (perKol[k.key] ? formatKrFull(perKol[k.key]) : '—') + '</td>').join('') +
+      '<td style="font-weight:600;">' + (mark ? formatKrFull(mark) : '—') + '</td>' +
+      '<td>' + formatKrFull(alla) + '</td>';
+    tbody.appendChild(row);
+  });
+  if(!tbody.children.length){
+    tbody.innerHTML = '<tr><td colspan="7" class="eko-sub" style="text-align:left;">Inga tagna kostnader än - lägg in fastigheter under Mark eller kategorisera reskontran under Budget.</td></tr>';
+    foot.innerHTML = '';
+  } else {
+    foot.innerHTML = '<tr class="eko-row-resultat"><td style="text-align:left;">Summa</td>' +
+      EKONOMI_MARK_KOLUMNER.map(k => '<td>' + formatKrFull(totKol[k.key]) + '</td>').join('') +
+      '<td>' + formatKrFull(tot.mark) + '</td><td>' + formatKrFull(tot.alla) + '</td></tr>';
+  }
+  document.getElementById('ekoMarkKpiTagnaMark').textContent = formatKrFull(tot.mark);
+  document.getElementById('ekoMarkKpiTagnaAlla').textContent = formatKrFull(tot.alla);
+}
+// Tagna markkostnader enligt Budget: markförvärv, alla anslutningar, fastighets-
+// avgift/-skatt, förrättningar (lantmäteri) och gatukostnad. Används som
+// fastighetsvärde i Lån-fliken och på Mark-fliken.
+const EKONOMI_MARKKOSTNAD_REGEX = /markf[öo]rv[äa]rv|^mark\b|anskaffning|anslutning|fastighetsavgift|fastighetsskatt|f[öo]rr[äa]ttning|lantm[äa]teri|gatukostnad|lagfart|pantbrev/i;
+function ekonomiMarkKostnader(pid){
+  const tagna = ekonomiBudgetTagna(pid);
+  const poster = ekonomiBudgetPosts(pid).map(x => x.post).filter(p => EKONOMI_MARKKOSTNAD_REGEX.test(p.namn) && !/arbete|entreprenad|finansiering/i.test(p.namn));
+  let summa = 0;
+  const items = [];
+  poster.forEach(p => {
+    const t = tagna[p.id];
+    if(!t) return;
+    const v = t.reskontra + t.mark;
+    if(!v) return;
+    summa += v;
+    items.push({ typ: 'mark', text: p.namn, belopp: v });
+  });
+  return { summa, items };
+}
+function renderEkonomiMarkList(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoMarkFilters'), 'markStatus', renderEkonomiMarkList);
+  const tbody = document.getElementById('ekonomiMarkBody');
+  tbody.innerHTML = '';
+  let totalForvarvspris = 0, totalGatukostnad = 0, totalVattenanslutning = 0, totalMarkkostnader = 0;
+  let forvarvPagaende = 0, forvarvAvslutade = 0;
+  ekonomiSortedProjects().forEach(p => {
+    const fastigheter = ekonomiMarkFastigheterMedInkommande(p.id);
+    // Förvärv = fastighetsköp + ev. aktieköp (marken köps ibland uppdelat i båda)
+    const sum = fastigheter.reduce((acc, f) => {
+      acc.forvarvspris += (f.forvarvspris || 0) + (f.aktiekop || 0);
+      acc.vattenanslutning += f.vattenanslutning || 0;
+      acc.gatukostnad += f.gatukostnad || 0;
+      return acc;
+    }, { forvarvspris: 0, vattenanslutning: 0, gatukostnad: 0 });
+    totalForvarvspris += sum.forvarvspris;
+    totalGatukostnad += sum.gatukostnad;
+    totalVattenanslutning += sum.vattenanslutning;
+    const status = p.status || 'Pågående';
+    if(status === 'Avslutat') forvarvAvslutade += sum.forvarvspris; else forvarvPagaende += sum.forvarvspris;
+    const mk = (companyEkonomiData.reskontra[p.id] || []).length || fastigheter.length ? ekonomiMarkKostnader(p.id).summa : 0;
+    totalMarkkostnader += mk;
+    if(!statuses.includes(status)) return; // nyckeltalen ovan räknar alla projekt, listan filtreras
+    const row = document.createElement('tr');
+    row.className = 'home-list-row';
+    row.onclick = () => openEkonomiProjektMark(p);
+    row.innerHTML =
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(status) + '</td>' +
+      '<td>' + fastigheter.length + '</td>' +
+      '<td>' + (sum.forvarvspris ? formatKrFull(sum.forvarvspris) : '—') + '</td>' +
+      '<td>' + (sum.vattenanslutning ? formatKrFull(sum.vattenanslutning) : '—') + '</td>' +
+      '<td>' + (sum.gatukostnad ? formatKrFull(sum.gatukostnad) : '—') + '</td>';
+    row.innerHTML += '<td style="font-weight:600;">' + (mk ? formatKrFull(mk) : '—') + '</td>';
+    tbody.appendChild(row);
+  });
+  document.getElementById('ekoMarkKpiMarkkostnader').textContent = formatKrFull(totalMarkkostnader);
+  document.getElementById('ekoMarkKpiForvarvspris').textContent = formatKrFull(totalForvarvspris);
+  document.getElementById('ekoMarkKpiForvarvPagaende').textContent = formatKrFull(forvarvPagaende);
+  document.getElementById('ekoMarkKpiForvarvAvslutade').textContent = formatKrFull(forvarvAvslutade);
+  document.getElementById('ekoMarkKpiGatukostnad').textContent = formatKrFull(totalGatukostnad);
+  document.getElementById('ekoMarkKpiVattenanslutning').textContent = formatKrFull(totalVattenanslutning);
+}
+
+function openEkonomiProjektMark(project){
+  currentEkonomiMarkProjectId = project.id;
+  document.getElementById('ekonomiProjektMarkTitle').textContent = project.name;
+  document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView',
+    'ekonomiProjektLikviditetView'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('ekonomiProjektMarkView').style.display = 'block';
+  setKopebrevUploadStatus('', '');
+  setMarkExcelStatus('', '');
+  setMarkFakturaStatus('', '');
+  markPendingQueue = [];
+  markPendingFaktura = null;
+  document.getElementById('markFakturaPendingBox').style.display = 'none';
+  renderEkonomiProjektMark();
+}
+
+function closeEkonomiProjektMark(){
+  document.getElementById('ekonomiProjektMarkView').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar').style.display = 'flex';
+  setEkonomiSubView('mark');
+}
+
+function renderEkonomiProjektMark(){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const tbody = document.getElementById('ekonomiMarkFastigheterBody');
+  const empty = document.getElementById('ekonomiMarkFastigheterEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = fastigheter.length ? 'none' : 'block';
+  fastigheter.forEach(fast => {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+
+    const textFields = [
+      { key: 'fastighetsbeteckning', cell: 0 }
+    ];
+    textFields.forEach(tf => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'eko-inline-input';
+      input.style.textAlign = 'left';
+      input.value = fast[tf.key] || '';
+      input.onchange = () => saveEkonomiMarkFastighet(fast.id, { [tf.key]: input.value.trim() });
+      row.children[tf.cell].appendChild(input);
+    });
+
+    const numberFields = [
+      { key: 'forvarvspris', cell: 1 },
+      { key: 'aktiekop', cell: 2 },
+      { key: 'vattenanslutning', cell: 4 },
+      { key: 'gatukostnad', cell: 5 }
+    ];
+    numberFields.forEach(nf => {
+      likviditetsbudgetEditableCell(row.children[nf.cell], fast[nf.key] || null, async (val) => {
+        await saveEkonomiMarkFastighet(fast.id, { [nf.key]: val || 0 });
+        renderEkonomiProjektMark();
+      });
+    });
+    row.children[3].textContent = formatKrFull((fast.forvarvspris || 0) + (fast.aktiekop || 0));
+    row.children[3].style.fontWeight = '600';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort fastighet';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => removeEkonomiMarkFastighet(fast.id);
+    row.children[8].appendChild(removeBtn);
+    row.children[8].className = 'row-actions';
+    // Betalningsplan: delbetalningar med månad och vem som betalar.
+    const betTd = row.children[6];
+    betTd.style.cssText = 'text-align:left; font-size:12px;';
+    const betBtn = document.createElement('button');
+    betBtn.type = 'button';
+    const betAlla = ekonomiMarkBetalningar(fast).length;
+    const betKvar = ekonomiMarkBetalningar(fast).filter(b => !b.klart).length;
+    const betColor = betAlla ? (betKvar ? 'var(--danger)' : 'var(--good, #2e7d32)') : 'var(--line-soft)';
+    betBtn.textContent = betAlla ? (betKvar ? betKvar + ' obetald' + (betKvar > 1 ? 'a' : '') : 'Betald') : 'Betalningsplan…';
+    betBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid ' + betColor + '; background:#fff; border-radius:5px; cursor:pointer; color:' + (betAlla ? betColor : 'var(--ink-soft)') + ';';
+    betBtn.onclick = () => showEkonomiMarkBetalningPopup(pid, fast);
+    betTd.appendChild(betBtn);
+    const bt = ekonomiMarkBetalningText(fast);
+    if(bt){ const d = document.createElement('div'); d.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;'; d.textContent = bt; betTd.appendChild(d); }
+    // Såld vidare till annat projekt: knapp + status.
+    const saljTd = row.children[7];
+
+    saljTd.style.cssText = 'text-align:left; font-size:12px;';
+    const saljBtn = document.createElement('button');
+    saljBtn.type = 'button';
+    saljBtn.textContent = fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'Såld' : 'Ej insåld') : 'Sälj vidare…';
+    saljBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid ' + (fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'var(--good, #2e7d32)' : 'var(--danger)') : 'var(--line-soft)') + '; background:#fff; border-radius:5px; cursor:pointer; color:' + (fast.salj && fast.salj.tillPid ? (fast.salj.status === 'sald' ? 'var(--good, #2e7d32)' : 'var(--danger)') : 'var(--ink-soft)') + ';';
+    saljBtn.onclick = () => showEkonomiMarkSaljPopup(pid, fast);
+    saljTd.appendChild(saljBtn);
+    const st = ekonomiMarkSaljText(fast);
+    if(st){ const d = document.createElement('div'); d.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;'; d.textContent = st; saljTd.appendChild(d); }
+
+    tbody.appendChild(row);
+  });
+  // Inkommande fastigheter (sålda hit från andra projekt): visas men redigeras hos säljaren.
+  const inkommande = ekonomiMarkInkommande(pid);
+  inkommande.forEach(f => {
+    const row = document.createElement('tr');
+    row.style.background = 'var(--paper-soft, #f6f4ef)';
+    const i = f.inkommande;
+    row.innerHTML = '<td style="text-align:left;">' + escapeHtml(f.fastighetsbeteckning || '—') + '<div style="font-size:10.5px; color:var(--ink-soft);">från ' + escapeHtml(i.fromNamn) + '</div></td>' +
+      '<td style="' + (i.sald ? '' : 'color:var(--danger);') + '">' + (i.sald ? formatKrFull(i.belopp) : (i.belopp ? formatKrFull(i.belopp) + ' (prel.)' : '—')) + '</td><td>—</td>' +
+      '<td style="font-weight:600;">' + (i.sald ? formatKrFull(i.belopp) : '—') + '</td><td>—</td><td>—</td><td>—</td>' +
+      '<td style="text-align:left; font-size:12px;"><span style="color:' + (i.sald ? 'var(--good, #2e7d32)' : 'var(--danger)') + ';">' + (i.sald ? 'Köpt från ' + escapeHtml(i.fromNamn) + (i.datum ? ' · ' + escapeHtml(i.datum) : '') : 'Ej insåld – säljs från ' + escapeHtml(i.fromNamn)) + '</span></td><td></td>';
+    tbody.appendChild(row);
+  });
+  if(inkommande.length) empty.style.display = 'none';
+
+  const foot = document.getElementById('ekonomiMarkFastigheterFoot');
+  foot.innerHTML = '';
+  if(fastigheter.length || inkommande.length){
+    const sum = fastigheter.concat(inkommande).reduce((acc, f) => {
+      acc.forvarvspris += f.forvarvspris || 0;
+      acc.aktiekop += f.aktiekop || 0;
+      acc.vattenanslutning += f.vattenanslutning || 0;
+      acc.gatukostnad += f.gatukostnad || 0;
+      return acc;
+    }, { forvarvspris: 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0 });
+    foot.innerHTML = '<tr class="eko-row-resultat"><td>Summa</td>' +
+      '<td>' + formatKrFull(sum.forvarvspris) + '</td>' +
+      '<td>' + formatKrFull(sum.aktiekop) + '</td>' +
+      '<td>' + formatKrFull(sum.forvarvspris + sum.aktiekop) + '</td>' +
+      '<td>' + formatKrFull(sum.vattenanslutning) + '</td>' +
+      '<td>' + formatKrFull(sum.gatukostnad) + '</td><td></td><td></td><td></td></tr>';
+  }
+  renderEkonomiMarkFakturor(fastigheter);
+}
+
+function renderEkonomiMarkFakturor(fastigheter){
+  const wrap = document.getElementById('markFakturorList');
+  wrap.innerHTML = '';
+  const rows = [];
+  fastigheter.forEach(f => (f.fakturor || []).forEach(fk => rows.push({ fast: f, fk })));
+  if(!rows.length){
+    wrap.innerHTML = '<p class="eko-sub">Inga fakturor inlästa än.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.width = '100%';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Fastighet</th><th style="text-align:left;">Typ</th><th style="text-align:left;">Leverantör</th><th style="text-align:left;">Fakturanr</th><th style="text-align:left;">Datum</th><th>Belopp</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  rows.forEach(({ fast, fk }) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + escapeHtml(fast.fastighetsbeteckning || '—') + '</td>' +
+      '<td style="text-align:left;">' + (fk.typ === 'vattenanslutning' ? 'Vattenanslutning' : 'Gatukostnad') + '</td>' +
+      '<td style="text-align:left;">' + escapeHtml(fk.leverantor || '') + '</td>' +
+      '<td style="text-align:left;">' + escapeHtml(fk.fakturanummer || '') + '</td>' +
+      '<td style="text-align:left;">' + escapeHtml(fk.fakturadatum || '') + '</td>' +
+      '<td>' + formatKrFull(fk.belopp || 0) + (fk.momsDebiterad === false ? ' <span class="eko-subtle">(utan moms)</span>' : '') + '</td><td></td>';
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'remove-btn';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort fakturan (beloppet dras av från fastigheten)';
+    delBtn.onclick = async () => {
+      fast.fakturor = fast.fakturor.filter(x => x.id !== fk.id);
+      fast[fk.typ] = Math.max(0, (fast[fk.typ] || 0) - (fk.belopp || 0));
+      await persistEkonomiMark();
+      renderEkonomiProjektMark();
+    };
+    tr.lastElementChild.appendChild(delBtn);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+async function persistEkonomiMark(){
+  await DB.setPersonalData(EKONOMI_KEYS.mark, JSON.stringify(companyEkonomiData.mark));
+}
+
+async function addEkonomiMarkFastighet(){
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
+  companyEkonomiData.mark[pid].push({
+    id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
+    fastighetsbeteckning: '', ort: '', forvarvspris: 0, aktiekop: 0, vattenanslutning: 0, gatukostnad: 0
+  });
+  try{
+    await persistEkonomiMark();
+    renderEkonomiProjektMark();
+  }catch(err){
+    showDebugError('Kunde inte lägga till fastighet', err);
+  }
+}
+
+async function saveEkonomiMarkFastighet(fastId, patch){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const idx = fastigheter.findIndex(f => f.id === fastId);
+  if(idx === -1) return;
+  fastigheter[idx] = { ...fastigheter[idx], ...patch };
+  try{
+    await persistEkonomiMark();
+  }catch(err){
+    showDebugError('Kunde inte spara fastighet', err);
+  }
+}
+
+async function removeEkonomiMarkFastighet(fastId){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  companyEkonomiData.mark[pid] = fastigheter.filter(f => f.id !== fastId);
+  try{
+    await persistEkonomiMark();
+    renderEkonomiProjektMark();
+  }catch(err){
+    showDebugError('Kunde inte ta bort fastighet', err);
+  }
+}
+
+function setKopebrevUploadStatus(msg, kind){
+  const el = document.getElementById('kopebrevUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+function renderEkonomiProjektBudget(){
+  const pid = currentEkonomiBudgetProjectId;
+  const detail = companyEkonomiData.budgetDetalj[pid] || {};
+  const kategorier = detail.kategorier || {};
+  const foreningslan = detail.foreningslan || 0;
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  const intakter = ekonomiBudgetAreaRevenue.intakter;
+
+  document.getElementById('ekoBudgetKvm').textContent = kvm ? kvm.toLocaleString('sv-SE', { maximumFractionDigits: 0 }) + ' kvm' : '—';
+  document.getElementById('ekoBudgetIntakter').textContent = formatKrFull(intakter);
+  document.getElementById('ekoBudgetIntakterPerKvm').textContent = formatKrPerKvm(intakter, kvm);
+  document.getElementById('ekoBudgetForeningslan').textContent = formatKrFull(foreningslan);
+  document.getElementById('ekoBudgetForeningslanPerKvm').textContent = formatKrPerKvm(foreningslan, kvm);
+
+  const struktur = ekonomiBudgetStruktur(pid);
+  const tagna = ekonomiBudgetTagna(pid);
+  const infoEl = document.getElementById('ekonomiBudgetStrukturInfo');
+  if(infoEl){
+    const cand = nyaProjektList.find(c => c.promoted_project_id === pid);
+    infoEl.textContent = (struktur.skapadFran && struktur.skapadFran.startsWith('kalkyl:')
+      ? 'Strukturen kommer från kalkylen "' + struktur.skapadFran.slice(7) + '".'
+      : 'Strukturen kommer från kalkylmallen (Nya projekt).') +
+      ' Tagna kostnader = kategoriserade reskontraposter + belopp från Mark-fliken (förvärv, gatukostnad, vattenanslutning).' +
+      (cand ? ' Knappen "Hämta budget från kalkylen" läser in kalkylens belopp igen.' : '');
+    const fetchBtn = document.getElementById('ekonomiBudgetFromKalkylBtn');
+    if(fetchBtn) fetchBtn.style.display = cand ? 'inline-block' : 'none';
+  }
+
+  const tbody = document.getElementById('ekonomiBudgetKategoriBody');
+  tbody.innerHTML = '';
+  let totalBudget = 0, totalUtfall = 0;
+  const diffCell = (b, u) => '<td class="' + ((b - u) < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(b - u) + '</td>';
+  const postRow = (post, group, indent) => {
+    const budget = post.budget || 0;
+    const t = tagna[post.id] || { reskontra: 0, mark: 0 };
+    const utfall = t.reskontra + t.mark;
+    totalBudget += budget;
+    totalUtfall += utfall;
+    const row = document.createElement('tr');
+    row.innerHTML =
+      '<td style="text-align:left; padding-left:' + indent + 'px; color:var(--ink);"></td>' +
+      '<td style="color:var(--ink);"></td>' +
+      '<td style="color:var(--ink-soft);">' + formatKrPerKvm(budget, kvm) + '</td>' +
+      '<td style="color:var(--ink);"></td>' +
+      '<td style="color:var(--ink-soft);">' + formatKrPerKvm(utfall, kvm) + '</td>' +
+      diffCell(budget, utfall);
+    // Underposter ett steg mindre än grupprubrikerna (cellernas egen CSS slår annars igenom).
+    [...row.children].forEach(td => { td.style.fontSize = '12px'; td.style.fontWeight = '400'; });
+    // Tagna kostnader: klick visar specifikationen (fakturor + Mark-belopp).
+    const tagnaSpan = document.createElement('span');
+    tagnaSpan.textContent = formatKrFull(utfall);
+    if(utfall || (t.items && t.items.length)){
+      tagnaSpan.className = 'editable';
+      tagnaSpan.style.cursor = 'pointer';
+      tagnaSpan.title = 'Klicka för specifikation';
+      tagnaSpan.onclick = () => showEkonomiTagnaSpec(post.namn, t);
+    }
+    row.children[3].appendChild(tagnaSpan);
+    if(t.mark){
+      const m = document.createElement('div');
+      m.style.cssText = 'font-size:10px; color:var(--ink-soft);';
+      m.textContent = 'varav från Mark ' + formatKrFull(t.mark);
+      row.children[3].appendChild(m);
+    }
+    const nameWrap = row.children[0];
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = post.namn;
+    nameSpan.className = 'editable';
+    nameSpan.style.cursor = 'pointer';
+    nameSpan.title = 'Klicka för att byta namn';
+    nameSpan.onclick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = post.namn;
+      inp.className = 'eko-inline-input';
+      inp.style.textAlign = 'left';
+      nameWrap.innerHTML = '';
+      nameWrap.appendChild(inp);
+      inp.focus(); inp.select();
+      let done = false;
+      const commit = async () => {
+        if(done) return; done = true;
+        const nytt = inp.value.trim() || post.namn;
+        if(nytt !== post.namn){
+          // Reskontrarader som pekar på det gamla namnet följer med.
+          (companyEkonomiData.reskontra[pid] || []).forEach(l => { if(l.kategori === post.namn) l.kategori = nytt; });
+          post.namn = nytt;
+          try{ await saveEkonomiBudgetDetalj(); await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); }catch(e){ showDebugError('Kunde inte spara', e); }
+        }
+        renderEkonomiProjektBudget();
+      };
+      inp.addEventListener('blur', commit);
+      inp.addEventListener('keydown', e => { if(e.key === 'Enter') inp.blur(); if(e.key === 'Escape'){ done = true; renderEkonomiProjektBudget(); } });
+    };
+    nameWrap.appendChild(nameSpan);
+    // ✕ i kolumnen längst till höger.
+    const actTd = document.createElement('td');
+    actTd.style.cssText = 'text-align:right; white-space:nowrap; font-size:12px;';
+    row.appendChild(actTd);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '✕';
+    del.title = 'Ta bort posten';
+    del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; opacity:0.7; padding:2px 6px;';
+    del.onclick = async () => {
+      if(utfall || budget){
+        if(!confirm('Ta bort posten "' + post.namn + '"? Budget ' + formatKrFull(budget) + ', tagna kostnader ' + formatKrFull(utfall) + '. Reskontrarader som pekar på posten blir okategoriserade.')) return;
+      }
+      group.poster = group.poster.filter(p => p.id !== post.id);
+      (companyEkonomiData.reskontra[pid] || []).forEach(l => { if(l.kategori === post.namn) l.kategori = null; });
+      try{ await saveEkonomiBudgetDetalj(); await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); }catch(e){ showDebugError('Kunde inte spara', e); }
+      renderEkonomiProjektBudget();
+    };
+    actTd.appendChild(del);
+    // Budgetbeloppet: klick öppnar samma popup som i kalkylerna (belopp direkt,
+    // eller belopp per enhet × antal enheter - antalet hämtas från lägenhetslistan).
+    const amount = document.createElement('span');
+    amount.className = 'editable';
+    amount.style.cursor = 'pointer';
+    amount.title = 'Klicka för att ändra (direkt belopp eller per enhet × antal)';
+    amount.textContent = post.budget != null ? formatKrFull(post.budget) : '—';
+    if(post.perBostad != null && post.budget != null){
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft);";
+      spec.textContent = formatKrFull(post.perBostad) + ' × ' + (post.perBostadAntal != null ? post.perBostadAntal : '?');
+      amount.appendChild(spec);
+    }
+    amount.onclick = () => {
+      const proxy = { namn: post.namn, belopp: post.budget, perBostad: post.perBostad, perBostadAntal: post.perBostadAntal };
+      openNyaProjektBeloppModal(null, proxy, ekonomiBudgetAreaRevenue.antal || null, {
+        onSave: async (res) => {
+          post.budget = res.belopp;
+          if(res.perBostad != null){ post.perBostad = res.perBostad; post.perBostadAntal = res.perBostadAntal; }
+          else { delete post.perBostad; delete post.perBostadAntal; }
+          try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara budget', e); }
+          renderEkonomiProjektBudget();
+        }
+      });
+    };
+    row.children[1].appendChild(amount);
+    tbody.appendChild(row);
+  };
+  // Grupprubriker: fet text och feta belopp i normal storlek. Posterna under
+  // visas ett steg mindre så hierarkin syns direkt.
+  const headRow = (label, level, budgetSum, utfallSum, group, ukId) => {
+    const row = document.createElement('tr');
+    row.style.background = level === 0 ? 'var(--paper-soft, #f6f4ef)' : '';
+    const numStyle = level === 0 ? 'font-weight:700; font-size:13.5px;' : 'font-weight:600; font-size:12.5px;';
+    const subStyle = level === 0 ? 'font-size:12px; font-weight:400; color:var(--ink-soft);' : 'font-size:11.5px; font-weight:400; color:var(--ink-soft);';
+    row.innerHTML =
+      '<td style="text-align:left; font-weight:' + (level === 0 ? '700' : '600') + '; padding-left:' + (level === 0 ? 8 : 18) + 'px;' + (level === 0 ? ' font-family:\'Fraunces\',serif; font-size:14.5px;' : ' font-size:12.5px;') + '"></td>' +
+      '<td style="' + numStyle + '">' + formatKrFull(budgetSum) + '</td>' +
+      '<td style="' + subStyle + '">' + formatKrPerKvm(budgetSum, kvm) + '</td>' +
+      '<td style="' + numStyle + '">' + formatKrFull(utfallSum) + '</td>' +
+      '<td style="' + subStyle + '">' + formatKrPerKvm(utfallSum, kvm) + '</td>' +
+      diffCell(budgetSum, utfallSum);
+    row.children[5].style.cssText += numStyle;
+    row.children[0].textContent = label;
+    // Kolumnen längst till höger: "+ Lägg till post" på grupp- och underkategorirader.
+    const actTd = document.createElement('td');
+    actTd.style.cssText = 'text-align:right; white-space:nowrap;';
+    if(group){
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.textContent = '+ Lägg till post';
+      add.title = 'Lägg till en post ' + (ukId ? 'under ' + label : 'i ' + group.grupp);
+      add.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink); font-family:Inter,sans-serif; font-weight:500;';
+      add.onclick = async () => {
+        const namn = prompt('Namn på den nya posten' + (ukId ? ' under ' + label : ' i ' + group.grupp) + ':');
+        if(!namn || !namn.trim()) return;
+        group.poster.push({ id: uid(), namn: namn.trim(), budget: null, underkategori: ukId || null });
+        try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+        renderEkonomiProjektBudget();
+      };
+      actTd.appendChild(add);
+    }
+    row.appendChild(actTd);
+    tbody.appendChild(row);
+  };
+  const sumOf = posts => posts.reduce((acc, p) => {
+    const t = tagna[p.id] || { reskontra: 0, mark: 0 };
+    acc.b += p.budget || 0; acc.u += t.reskontra + t.mark; return acc;
+  }, { b: 0, u: 0 });
+  struktur.kostnadsgrupper.forEach(group => {
+    const gs = sumOf(group.poster);
+    headRow(group.grupp, 0, gs.b, gs.u, group);
+    const uks = group.underkategorier || [];
+    if(!uks.length){
+      group.poster.forEach(p => postRow(p, group, 24));
+    } else {
+      const sections = uks.map(uk => ({ label: uk.namn, ukId: uk.id, rows: group.poster.filter(p => p.underkategori === uk.id) }));
+      const rest = group.poster.filter(p => !p.underkategori);
+      if(rest.length) sections.push({ label: 'Ej kategoriserade', ukId: null, rows: rest });
+      sections.forEach(sec => {
+        // Underkategorier visas även när de är tomma, så man kan lägga till poster där.
+        const ss = sumOf(sec.rows);
+        headRow(sec.label, 1, ss.b, ss.u, group, sec.ukId);
+        sec.rows.forEach(p => postRow(p, group, 34));
+      });
+    }
+  });
+  const totalDiff = totalBudget - totalUtfall;
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'eko-row-resultat';
+  totalRow.innerHTML =
+    '<td>Totalkostnad</td>' +
+    '<td>' + formatKrFull(totalBudget) + '</td>' +
+    '<td>' + formatKrPerKvm(totalBudget, kvm) + '</td>' +
+    '<td>' + formatKrFull(totalUtfall) + '</td>' +
+    '<td>' + formatKrPerKvm(totalUtfall, kvm) + '</td>' +
+    '<td class="' + (totalDiff < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatKrFull(totalDiff) + '</td>' +
+    '<td></td>';
+  tbody.appendChild(totalRow);
+
+  // Korten längst upp.
+  // Budgeterad vinst = budgeterad intäkt (inkl. föreningslån) − budgeterad kostnad.
+  // Utfall vinst = intäkter enligt lägenhetsförteckningen + föreningslån − tagna kostnader.
+  document.getElementById('ekoBudgetTotalkostnad').textContent = formatKrFull(totalBudget);
+  document.getElementById('ekoBudgetTotalkostnadBudget').textContent = formatKrFull(totalBudget);
+  document.getElementById('ekoBudgetTotalkostnadUtfall').textContent = formatKrFull(totalUtfall);
+  const budgetIntakt = ekonomiBudgetIntakt(pid);
+  const candForIntakt = nyaProjektList.find(c => c.promoted_project_id === pid);
+  document.getElementById('ekoBudgetIntaktBudget').textContent = budgetIntakt != null ? formatKrFull(budgetIntakt) : '—';
+  document.getElementById('ekoBudgetIntaktBudgetPerKvm').textContent = budgetIntakt != null ? formatKrPerKvm(budgetIntakt, kvm) : '—';
+  document.getElementById('ekoBudgetIntaktBudgetKalla').textContent = detail.budgetIntakt != null ? 'Eget värde' : (candForIntakt && budgetIntakt != null ? 'Från kalkylen ' + candForIntakt.name : 'Inget värde än');
+  const vinstBudget = budgetIntakt != null ? budgetIntakt - totalBudget : null;
+  const vinstUtfall = intakter + foreningslan - totalUtfall;
+  document.getElementById('ekoBudgetVinst').textContent = vinstBudget != null ? formatKrFull(vinstBudget) : '—';
+  document.getElementById('ekoBudgetVinstIntakt').textContent = budgetIntakt != null ? formatKrFull(budgetIntakt) : '—';
+  document.getElementById('ekoBudgetVinstBudget').textContent = formatKrFull(totalBudget);
+  document.getElementById('ekoBudgetVinstUtfall').textContent = formatKrFull(vinstUtfall);
+  document.getElementById('ekoBudgetVinstUtfallIntakt').textContent = formatKrFull(intakter);
+  document.getElementById('ekoBudgetVinstUtfallLan').textContent = formatKrFull(foreningslan);
+  document.getElementById('ekoBudgetVinstUtfallKostnad').textContent = formatKrFull(totalUtfall);
+
+  renderEkonomiReskontraTable();
+}
+
+async function saveEkonomiBudgetCategoryValue(cat, value){
+  const pid = currentEkonomiBudgetProjectId;
+  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { foreningslan: 0, kategorier: {} };
+  if(!companyEkonomiData.budgetDetalj[pid].kategorier) companyEkonomiData.budgetDetalj[pid].kategorier = {};
+  companyEkonomiData.budgetDetalj[pid].kategorier[cat] = value;
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
+    renderEkonomiProjektBudget();
+  }catch(e){
+    showDebugError('Kunde inte spara budget', e);
+  }
+}
+
+function openEkonomiForeningslanModal(){
+  const pid = currentEkonomiBudgetProjectId;
+  const detail = companyEkonomiData.budgetDetalj[pid] || {};
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  const total = detail.foreningslan || 0;
+  document.getElementById('ekoForeningslanTotalInput').value = total || '';
+  document.getElementById('ekoForeningslanPerKvmInput').value = (kvm && total) ? Math.round(total / kvm) : '';
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.add('open');
+}
+
+async function saveEkonomiForeningslanModal(){
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const total = parseFloat(document.getElementById('ekoForeningslanTotalInput').value) || 0;
+  if(!companyEkonomiData.budgetDetalj[pid]) companyEkonomiData.budgetDetalj[pid] = { foreningslan: 0, kategorier: {} };
+  companyEkonomiData.budgetDetalj[pid].foreningslan = total;
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.remove('open');
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.budgetDetalj, JSON.stringify(companyEkonomiData.budgetDetalj));
+    renderEkonomiProjektBudget();
+  }catch(err){
+    showDebugError('Kunde inte spara föreningslån', err);
+  }
+}
+
+// ---------- Reskontra: leverantörsnamn (alias) och samlad lista per leverantör ----------
+// Inlästa namn som "Inbet kameo 5089" kan döpas om till t.ex. "Kameo"; aliaset sparas per
+// projekt (budgetDetalj.levAlias[originalnamn] = visningsnamn) och gäller alla rader med samma
+// inlästa namn. Sortering, markering och den samlade listan använder visningsnamnet.
+function ekonomiLevNamn(pid, line){
+  const orig = String((line && line.leverantor) || '').trim();
+  const alias = (companyEkonomiData.budgetDetalj[pid] || {}).levAlias || {};
+  return alias[orig] || orig;
+}
+function ekonomiLevNamnList(pid){
+  const set = new Set();
+  (companyEkonomiData.reskontra[pid] || []).forEach(l => { const n = ekonomiLevNamn(pid, l); if(n) set.add(n); });
+  return [...set].sort((a, b) => a.localeCompare(b, 'sv'));
+}
+function ekonomiLevDatalistHtml(pid){
+  return '<datalist id="ekoLevDatalist">' + ekonomiLevNamnList(pid).map(n => '<option value="' + escapeHtml(n).replace(/"/g, '&quot;') + '">').join('') + '</datalist>';
+}
+function showEkonomiLevRenamePopup(pid, origArg){
+  // origArg: ett inläst namn eller en lista (en sammanslagen grupp) - alla får det nya namnet.
+  const origs = Array.isArray(origArg) ? origArg : [origArg];
+  const lines = (companyEkonomiData.reskontra[pid] || []).filter(l => origs.includes(String(l.leverantor || '').trim()));
+  const current = ekonomiLevNamn(pid, lines[0] || { leverantor: origs[0] });
+  const p = ekoPopup({ title: 'Byt namn på leverantör', sub: 'Inläst som: ' + origs.map(o => '"' + o + '"').join(', ') + ' (' + lines.length + ' rader). Välj ett befintligt namn i listan eller skriv ett eget – alla dessa rader får det nya namnet.', maxWidth: 560 });
+  p.body.innerHTML = ekonomiLevDatalistHtml(pid);
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.setAttribute('list', 'ekoLevDatalist'); inp.value = current; inp.placeholder = 'T.ex. Kameo';
+  inp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:14px;';
+  p.body.appendChild(inp);
+  const save = async () => {
+    const nytt = inp.value.trim();
+    const d = ekonomiBudgetDetail(pid);
+    d.levAlias = d.levAlias || {};
+    origs.forEach(orig => { if(!nytt || nytt === orig) delete d.levAlias[orig]; else d.levAlias[orig] = nytt; });
+    try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+    p.close();
+    renderEkonomiReskontraTable();
+  };
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Spara'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = save;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+  inp.addEventListener('keydown', e => { if(e.key === 'Enter') save(); });
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+}
+const ekonomiLevOpen = new Set();
+function renderEkonomiLevSummary(pid){
+  const wrap = document.getElementById('ekoLevSummary');
+  if(!wrap) return;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const open = !!uiPrefs.levSummaryOpen;
+  wrap.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex; align-items:center; gap:10px; margin:14px 0 6px;';
+  const tgl = document.createElement('button');
+  tgl.type = 'button'; tgl.textContent = (open ? '▾ ' : '▸ ') + 'Per leverantör';
+  tgl.style.cssText = 'background:none; border:1px solid var(--line-soft); color:var(--ink); border-radius:6px; padding:5px 10px; cursor:pointer; font-weight:600;';
+  tgl.onclick = async () => { uiPrefs.levSummaryOpen = !open; await saveUiPrefs(); renderEkonomiLevSummary(pid); };
+  head.appendChild(tgl);
+  const sub = document.createElement('span'); sub.className = 'eko-sub'; sub.style.margin = '0';
+  sub.textContent = 'Summerat belopp per leverantör. Klicka på en leverantör för att se fakturorna, ✎ för att byta namn.';
+  head.appendChild(sub);
+  wrap.appendChild(head);
+  if(!open || !lines.length) return;
+  const groups = {};
+  lines.forEach(l => {
+    const n = ekonomiLevNamn(pid, l) || '—';
+    const g = groups[n] || (groups[n] = { namn: n, lines: [], belopp: 0, orig: new Set() });
+    g.lines.push(l); g.belopp += ekonomiLedgerAmount(l); if(l.leverantor) g.orig.add(String(l.leverantor).trim());
+  });
+  const list = Object.values(groups).sort((a, b) => b.belopp - a.belopp);
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; margin-bottom:6px;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Leverantör</th><th>Antal fakturor</th><th>Belopp</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  list.forEach(g => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    const isOpen = ekonomiLevOpen.has(g.namn);
+    tr.innerHTML = '<td style="text-align:left;">' + (isOpen ? '▾ ' : '▸ ') + escapeHtml(g.namn) + (g.orig.size > 1 || (g.orig.size === 1 && [...g.orig][0] !== g.namn) ? '<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">inläst som ' + escapeHtml([...g.orig].join(', ')) + '</div>' : '') + '</td><td>' + g.lines.length + '</td><td style="font-weight:600;">' + formatKrFull(g.belopp) + '</td><td></td>';
+    tr.onclick = (e) => { if(e.target.closest('button')) return; if(isOpen) ekonomiLevOpen.delete(g.namn); else ekonomiLevOpen.add(g.namn); renderEkonomiLevSummary(pid); };
+    const ren = document.createElement('button');
+    ren.type = 'button'; ren.textContent = '✎'; ren.title = 'Byt namn';
+    ren.style.cssText = 'background:none; border:1px solid var(--line-soft); border-radius:4px; cursor:pointer; color:var(--ink-soft); padding:1px 6px;';
+    ren.onclick = () => showEkonomiLevRenamePopup(pid, g.orig.size ? [...g.orig] : [g.namn]);
+    tr.children[3].appendChild(ren);
+    tbody.appendChild(tr);
+    if(isOpen){
+      g.lines.slice().sort((a, b) => String(a.fakturadatum || '').localeCompare(String(b.fakturadatum || ''))).forEach(l => {
+        const sr = document.createElement('tr');
+        sr.style.background = 'var(--paper-soft, #f6f4ef)';
+        const kat = ekonomiLineIsSplit(l) ? 'Fördelad: ' + l.fordelning.map(p => p.kategori).join(', ') : (l.kategori || 'Ej kategoriserad');
+        sr.innerHTML = '<td style="text-align:left; padding-left:28px; font-family:Inter,sans-serif; font-weight:400; font-size:12.5px;">' + (l.manuell ? 'Manuell ' + escapeHtml(l.vernr || '') : 'Löpnr ' + escapeHtml(String(l.lopnr || ''))) + ' · ' + escapeHtml(l.fakturadatum || '—') + ' · <span style="color:var(--ink-soft);">' + escapeHtml(kat) + '</span>' + (ekonomiLineObetald(l) ? ' · <span style="color:var(--danger);">obetald</span>' : '') + '</td><td></td><td style="font-size:12.5px;">' + formatKrFull(ekonomiLedgerAmount(l)) + '</td><td></td>';
+        tbody.appendChild(sr);
+      });
+    }
+  });
+  const tot = document.createElement('tr');
+  tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td style="text-align:left;">Totalt (' + list.length + ' leverantörer)</td><td>' + lines.length + '</td><td>' + formatKrFull(list.reduce((s, g) => s + g.belopp, 0)) + '</td><td></td>';
+  tbody.appendChild(tot);
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+function renderEkonomiReskontraTable(){
+  const pid = currentEkonomiBudgetProjectId;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const tbody = document.getElementById('ekonomiReskontraBody');
+  const empty = document.getElementById('ekonomiReskontraEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = lines.length ? 'none' : 'block';
+  // Sortering: standard = okategoriserade först, sedan löpnummer. Klick på en
+  // kolumnrubrik sorterar på den kolumnen (klick igen vänder ordningen).
+  const s = ekonomiReskontraSort;
+  const cmpText = (x, y) => String(x || '').localeCompare(String(y || ''), 'sv', { numeric: true, sensitivity: 'base' });
+  // Filter "Visa ej hanterade": bara okategoriserade rader.
+  const onlyUnhandled = document.getElementById('ekonomiReskontraOnlyUnhandled').checked;
+  const unhandledCount = lines.filter(l => !ekonomiLineHandled(l)).length;
+  document.getElementById('ekonomiReskontraUnhandledCount').textContent = unhandledCount + ' av ' + lines.length + ' rader är ej hanterade';
+  const visibleLines = onlyUnhandled ? lines.filter(l => !ekonomiLineHandled(l)) : lines;
+  const sorted = [...visibleLines].sort((a, b) => {
+    if(!s.key){
+      const aUn = !a.kategori, bUn = !b.kategori;
+      if(aUn !== bUn) return aUn ? -1 : 1;
+      return cmpText(a.lopnr, b.lopnr);
+    }
+    let r = 0;
+    if(s.key === 'belopp') r = ekonomiLedgerAmount(a) - ekonomiLedgerAmount(b);
+    else if(s.key === 'kategori'){
+      const aUn = !ekonomiLineHandled(a), bUn = !ekonomiLineHandled(b);
+      const label = l => ekonomiLineIsSplit(l) ? 'Fördelad: ' + l.fordelning.map(p => p.kategori).join(', ') : (l.kategori || '');
+      if(aUn !== bUn) r = aUn ? -1 : 1; else r = cmpText(label(a), label(b));
+    }
+    else if(s.key === 'leverantor') r = cmpText(ekonomiLevNamn(pid, a), ekonomiLevNamn(pid, b));
+    else r = cmpText(a[s.key], b[s.key]);
+    if(r === 0) r = cmpText(a.lopnr, b.lopnr);
+    return s.dir === 'desc' ? -r : r;
+  });
+  document.querySelectorAll('th.reskontra-sort').forEach(th => {
+    const base = th.textContent.replace(/\s*[▲▼]$/, '');
+    th.textContent = base + (s.key === th.dataset.sort ? (s.dir === 'desc' ? ' ▼' : ' ▲') : '');
+  });
+  sorted.forEach(line => {
+    const row = document.createElement('tr');
+    if(!ekonomiLineHandled(line)) row.className = 'eko-row-uncategorized';
+    const key = String(line.lopnr);
+    if(ekonomiReskontraSelection.has(key)) row.style.background = 'var(--blue-soft)';
+    row.innerHTML =
+      '<td style="text-align:center;"></td>' +
+      '<td>' + (line.manuell
+        ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Manuell</span>' + escapeHtml(line.vernr || '')
+        : escapeHtml(line.lopnr || '')) + '</td>' +
+      '<td></td>' +
+      '<td>' + escapeHtml(line.fakturadatum || '—') + '</td>' +
+      '<td></td>' +
+      '<td></td>';
+
+    // Kryssruta för flerval (sätt kategori på många rader på en gång).
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.cssText = 'width:16px; height:16px; cursor:pointer;';
+    cb.checked = ekonomiReskontraSelection.has(key);
+    cb.onchange = () => {
+      if(cb.checked) ekonomiReskontraSelection.add(key); else ekonomiReskontraSelection.delete(key);
+      row.style.background = cb.checked ? 'var(--blue-soft)' : '';
+      ekonomiReskontraUpdateBulkBar();
+    };
+    row.children[0].appendChild(cb);
+    // Klick var som helst på raden (utom på fält, rullista, belopp och leverantör)
+    // markerar/avmarkerar raden - kryssrutan är liten att pricka.
+    row.style.cursor = 'pointer';
+    row.onclick = (e) => {
+      if(e.target.closest('input, select, button, .editable')) return;
+      cb.checked = !cb.checked;
+      cb.onchange();
+    };
+
+    // Leverantör: klick markerar alla rader från samma leverantör.
+    const lev = document.createElement('span');
+    const levNamn = ekonomiLevNamn(pid, line);
+    lev.textContent = levNamn || '—';
+    lev.className = 'editable';
+    lev.style.cursor = 'pointer';
+    lev.title = 'Markera alla rader från ' + (levNamn || 'leverantören') + (levNamn !== String(line.leverantor || '').trim() ? ' (inläst som ' + (line.leverantor || '') + ')' : '');
+    lev.onclick = () => {
+      const name = levNamn.toLowerCase();
+      const same = lines.filter(l => ekonomiLevNamn(pid, l).toLowerCase() === name);
+      const allSelected = same.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
+      same.forEach(l => { if(allSelected) ekonomiReskontraSelection.delete(String(l.lopnr)); else ekonomiReskontraSelection.add(String(l.lopnr)); });
+      renderEkonomiReskontraTable();
+    };
+    row.children[2].appendChild(lev);
+    if(line.leverantor){
+      const ren = document.createElement('button');
+      ren.type = 'button'; ren.textContent = '✎'; ren.title = 'Byt namn på leverantören (gäller alla rader med samma inlästa namn)';
+      ren.style.cssText = 'background:none; border:none; cursor:pointer; color:var(--ink-soft); font-size:12px; margin-left:4px; padding:0 3px;';
+      ren.onclick = (e) => { e.stopPropagation(); showEkonomiLevRenamePopup(pid, String(line.leverantor).trim()); };
+      row.children[2].appendChild(ren);
+    }
+
+    // En beloppskolumn i kr: visas som "411 500 kr"; klick ger ett fält att justera i.
+    // Är beloppet justerat visas det inlästa originalet under. Tomt fält = tillbaka till originalet.
+    likviditetsbudgetEditableCell(row.children[4], ekonomiLedgerAmount(line), async (v) => {
+      await saveEkonomiReskontraLine(line.lopnr, { justeratBelopp: (v == null || v === (line.belopp || 0)) ? null : v });
+    });
+    row.children[4].firstChild.title = 'Inläst belopp: ' + formatKrFull(line.belopp || 0) + '. Klicka för att justera om bara en del ska räknas (t.ex. utan amortering).';
+    if(line.justeratBelopp != null){
+      const orig = document.createElement('div');
+      orig.style.cssText = 'font-size:10px; color:var(--ink-soft); text-align:right;';
+      orig.textContent = 'inläst ' + formatKrFull(line.belopp || 0);
+      row.children[4].appendChild(orig);
+    }
+    const dub = ekonomiReskontraMarkDubblett(pid, line);
+    if(dub){
+      const d = document.createElement('div');
+      d.style.cssText = 'font-size:10px; color:var(--danger); text-align:right;';
+      d.textContent = 'även i Mark (faktura ' + (dub.fakturanummer || '?') + ') - räknas en gång';
+      row.children[4].appendChild(d);
+    }
+    // Betalstatus: kryssruta "Obetald" (sätts automatiskt från reskontrans saldo, kan ändras för hand).
+    const obLabel = document.createElement('label');
+    obLabel.style.cssText = 'display:flex; justify-content:flex-end; align-items:center; gap:4px; font-size:10.5px; color:' + (ekonomiLineObetald(line) ? 'var(--danger)' : 'var(--ink-soft)') + '; cursor:pointer; margin-top:2px;';
+    const obCb = document.createElement('input');
+    obCb.type = 'checkbox';
+    obCb.checked = ekonomiLineObetald(line);
+    obCb.title = line.saldo != null ? 'Saldo enligt reskontran: ' + formatKrFull(line.saldo) : 'Ingen saldouppgift - markera för hand';
+    obCb.onchange = () => saveEkonomiReskontraLine(line.lopnr, { obetaldManuell: obCb.checked === (line.saldo != null && Math.abs(line.saldo) > 0.5) ? null : obCb.checked });
+    obLabel.appendChild(obCb);
+    obLabel.appendChild(document.createTextNode(ekonomiLineObetald(line) ? 'Obetald' + (line.saldo != null && Math.abs(line.saldo) > 0.5 ? ' (saldo ' + formatKrFull(line.saldo) + ')' : '') : 'Betald'));
+    row.children[4].appendChild(obLabel);
+
+    const katTd = row.children[5];
+    if(ekonomiLineIsSplit(line)){
+      // Fördelad faktura: visa fördelningen i stället för rullistan.
+      const parts = ekonomiLineParts(line);
+      const sum = parts.reduce((s, p) => s + p.belopp, 0);
+      const rest = ekonomiLedgerAmount(line) - sum;
+      const box = document.createElement('div');
+      box.style.cssText = 'font-size:12px; line-height:1.4;';
+      const exOf = p => { const src = (line.fordelning || []).find(f => f.kategori === p.kategori && f.belopp === p.belopp); return src && src.exMoms != null ? src.exMoms : null; };
+      box.innerHTML = parts.map(p => '<div>' + escapeHtml(p.kategori) + ' <span style="font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + formatKrFull(p.belopp) + (exOf(p) != null ? ' <span style="font-size:10px;">(' + formatKrFull(exOf(p)) + ' ex moms)</span>' : '') + '</span></div>').join('') +
+        (Math.abs(rest) > 0.5 ? '<div style="color:var(--danger);">Ej fördelat ' + formatKrFull(rest) + '</div>' : '');
+      katTd.appendChild(box);
+    } else {
+      const select = document.createElement('select');
+      select.className = 'eko-inline-select';
+      select.innerHTML = ekonomiBudgetKategoriOptions(pid, line.kategori);
+      select.onchange = () => saveEkonomiReskontraLine(line.lopnr, { kategori: select.value || null, fordelning: null });
+      katTd.appendChild(select);
+    }
+    // "Fördela": dela upp fakturan på flera poster (t.ex. samlingsfakturor
+    // från Solvinkeln Fastigheter AB med många leverantörer).
+    const splitBtn = document.createElement('button');
+    splitBtn.type = 'button';
+    splitBtn.textContent = ekonomiLineIsSplit(line) ? '⇄ Ändra fördelning' : '⇄ Fördela';
+    splitBtn.title = 'Dela upp fakturan på flera poster';
+    splitBtn.style.cssText = 'display:block; margin-top:3px; background:none; border:none; padding:0; color:var(--blue); cursor:pointer; font-size:11px;';
+    splitBtn.onclick = () => openEkonomiFordelaModal(pid, line);
+    katTd.appendChild(splitBtn);
+    if(line.manuell){
+      // Manuella kostnader kan tas bort (inlästa reskontrarader kan det inte).
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.textContent = '✕ Ta bort';
+      delBtn.style.cssText = 'display:block; margin-top:3px; background:none; border:none; padding:0; color:var(--danger); cursor:pointer; font-size:11px;';
+      delBtn.onclick = async () => {
+        if(!confirm('Ta bort den manuella kostnaden ' + (line.vernr || '') + ' på ' + formatKrFull(ekonomiLedgerAmount(line)) + '?')) return;
+        companyEkonomiData.reskontra[pid] = (companyEkonomiData.reskontra[pid] || []).filter(l => l.lopnr !== line.lopnr);
+        try{ await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra)); }catch(e){ showDebugError('Kunde inte spara', e); }
+        renderEkonomiProjektBudget();
+      };
+      katTd.appendChild(delBtn);
+    }
+
+    tbody.appendChild(row);
+  });
+  // Rullistan i formuläret för manuella kostnader.
+  const manSel = document.getElementById('ekoManuellKategori');
+  if(manSel && !manSel.options.length) manSel.innerHTML = ekonomiBudgetKategoriOptions(pid, '', 'Ej kategoriserad');
+  // Flervalsraden: rullista med budgetens poster + antal markerade.
+  const bulkSel = document.getElementById('ekonomiReskontraBulkSelect');
+  const keep = bulkSel.value;
+  bulkSel.innerHTML = ekonomiBudgetKategoriOptions(pid, keep, 'Välj kategori…');
+  const selAll = document.getElementById('ekonomiReskontraSelectAll');
+  const uncat = lines.filter(l => !ekonomiLineHandled(l));
+  selAll.checked = uncat.length > 0 && uncat.every(l => ekonomiReskontraSelection.has(String(l.lopnr)));
+  ekonomiReskontraUpdateBulkBar();
+  renderEkonomiLevSummary(pid);
+  const dl = document.getElementById('ekoLevDatalistWrap'); if(dl) dl.innerHTML = ekonomiLevDatalistHtml(pid);
+}
+// Betalstatus: obetald om saldo > 0 enligt senaste reskontrainläsning, eller
+// om den markerats obetald manuellt (obetaldManuell). Manuell markering vinner.
+function ekonomiLineObetald(line){
+  if(line.obetaldManuell === true) return true;
+  if(line.obetaldManuell === false) return false;
+  return line.saldo != null && Math.abs(line.saldo) > 0.5;
+}
+// Månad (YYYY-MM) då en faktura väntas betalas / blev betald: förfallodatum, annars fakturadatum.
+function ekonomiLineManad(line){
+  const d = line.forfallodatum || line.fakturadatum || '';
+  return /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : null;
+}
+// En reskontrarad kan vara kategoriserad på EN post (kategori) eller fördelad
+// på flera (fordelning: [{kategori, belopp}]). Delarna är det som räknas.
+function ekonomiLineIsSplit(line){
+  return Array.isArray(line.fordelning) && line.fordelning.some(p => p.kategori && p.belopp);
+}
+function ekonomiLineParts(line){
+  if(ekonomiLineIsSplit(line)) return line.fordelning.filter(p => p.kategori && p.belopp).map(p => ({ kategori: p.kategori, belopp: p.belopp }));
+  if(line.kategori) return [{ kategori: line.kategori, belopp: ekonomiLedgerAmount(line) }];
+  return [];
+}
+function ekonomiLineHandled(line){
+  return ekonomiLineParts(line).length > 0;
+}
+// Popup: fördela en faktura på flera poster tills hela beloppet är bokat.
+function openEkonomiFordelaModal(pid, line){
+  const old = document.getElementById('ekoFordelaPopup');
+  if(old) old.remove();
+  const total = ekonomiLedgerAmount(line);
+  const MOMS = 1.25;
+  const r2 = v => Math.round(v * 100) / 100;
+  let rows = ekonomiLineIsSplit(line)
+    ? line.fordelning.map(p => ({ kategori: p.kategori || '', belopp: p.belopp, exMoms: p.exMoms != null ? p.exMoms : (p.belopp != null ? r2(p.belopp / MOMS) : null) }))
+    : [{ kategori: line.kategori || '', belopp: total, exMoms: r2(total / MOMS) }, { kategori: '', belopp: null, exMoms: null }];
+  const overlay = document.createElement('div');
+  overlay.id = 'ekoFordelaPopup';
+  overlay.className = 'modal-overlay open';
+  overlay.innerHTML = '<div class="modal-box" style="max-width:620px;">' +
+    '<h3>Fördela faktura ' + escapeHtml(String(line.lopnr || '')) + '</h3>' +
+    '<p class="modal-sub">' + escapeHtml(line.leverantor || '') + ' · ' + escapeHtml(line.fakturadatum || '') + ' · ' + formatKrFull(total) + ' inkl. moms. Skriv beloppet exkl. moms per post så läggs 25 % moms på automatiskt (eller skriv inkl. moms direkt), tills hela fakturan är fördelad.</p>' +
+    '<div style="display:flex; gap:8px; align-items:center; margin-bottom:4px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft);"><span style="flex:1;">Post</span><span style="width:120px; text-align:right;">Exkl. moms</span><span style="width:120px; text-align:right;">Inkl. moms</span><span style="width:46px;"></span><span style="width:22px;"></span></div>' +
+    '<div id="ekoFordelaRows"></div>' +
+    '<button type="button" id="ekoFordelaAdd" class="add-inline-btn" style="margin-top:6px;">+ Lägg till rad</button>' +
+    '<div id="ekoFordelaRest" style="margin-top:12px; font-family:\'JetBrains Mono\',monospace; font-size:13px;"></div>' +
+    '<div class="modal-actions" style="margin-top:14px;">' +
+      '<button type="button" id="ekoFordelaRemove" style="background:none; border:1px solid var(--line-soft); color:var(--danger); margin-right:auto;">Ta bort fördelning</button>' +
+      '<button type="button" id="ekoFordelaCancel" style="background:none; border:1px solid var(--line-soft); color:var(--ink-soft);">Avbryt</button>' +
+      '<button type="button" id="ekoFordelaSave" style="background:var(--ink); color:#fff;">Spara</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  const rowsEl = overlay.querySelector('#ekoFordelaRows');
+  const restEl = overlay.querySelector('#ekoFordelaRest');
+  const updateRest = () => {
+    const sum = rows.reduce((s, r) => s + (r.belopp || 0), 0);
+    const rest = Math.round((total - sum) * 100) / 100;
+    restEl.innerHTML = 'Fördelat ' + formatKrFull(sum) + ' av ' + formatKrFull(total) + ' · <span style="color:' + (Math.abs(rest) > 0.5 ? 'var(--danger)' : 'var(--ok, #2e7d32)') + ';">' + (Math.abs(rest) > 0.5 ? 'Kvar att fördela ' + formatKrFull(rest) : 'Hela beloppet fördelat ✓') + '</span>';
+  };
+  const render = () => {
+    rowsEl.innerHTML = '';
+    rows.forEach((r, i) => {
+      const div = document.createElement('div');
+      div.style.cssText = 'display:flex; gap:8px; align-items:center; margin-bottom:8px;';
+      const sel = document.createElement('select');
+      sel.className = 'eko-inline-select';
+      sel.style.flex = '1';
+      sel.innerHTML = ekonomiBudgetKategoriOptions(pid, r.kategori, 'Välj post…');
+      sel.onchange = () => { r.kategori = sel.value; };
+      const numStyle = 'width:120px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-family:\'JetBrains Mono\',monospace;';
+      // Exkl. moms: det man oftast har framför sig - momsen (25 %) läggs på automatiskt.
+      const exInp = document.createElement('input');
+      exInp.type = 'number';
+      exInp.step = 'any';
+      exInp.placeholder = 'exkl. moms';
+      exInp.value = r.exMoms != null ? r.exMoms : '';
+      exInp.style.cssText = numStyle;
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.step = 'any';
+      inp.placeholder = 'inkl. moms';
+      inp.value = r.belopp != null ? r.belopp : '';
+      inp.style.cssText = numStyle + ' font-weight:700;';
+      exInp.oninput = () => {
+        const raw = exInp.value.trim();
+        r.exMoms = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        r.belopp = r.exMoms != null && !isNaN(r.exMoms) ? r2(r.exMoms * MOMS) : null;
+        inp.value = r.belopp != null ? r.belopp : '';
+        updateRest();
+      };
+      inp.oninput = () => {
+        const raw = inp.value.trim();
+        r.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        r.exMoms = r.belopp != null && !isNaN(r.belopp) ? r2(r.belopp / MOMS) : null;
+        exInp.value = r.exMoms != null ? r.exMoms : '';
+        updateRest();
+      };
+      const restBtn = document.createElement('button');
+      restBtn.type = 'button';
+      restBtn.textContent = 'resten';
+      restBtn.title = 'Lägg det som är kvar (inkl. moms) på den här raden';
+      restBtn.style.cssText = 'font-size:11px; padding:3px 7px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft); width:46px;';
+      restBtn.onclick = () => { const other = rows.reduce((s, x, j) => s + (j === i ? 0 : (x.belopp || 0)), 0); r.belopp = r2(total - other); r.exMoms = r2(r.belopp / MOMS); inp.value = r.belopp; exInp.value = r.exMoms; updateRest(); };
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '✕';
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; width:22px; padding:0;';
+      del.onclick = () => { rows.splice(i, 1); if(!rows.length) rows.push({ kategori: '', belopp: null, exMoms: null }); render(); };
+      div.appendChild(sel); div.appendChild(exInp); div.appendChild(inp); div.appendChild(restBtn); div.appendChild(del);
+      rowsEl.appendChild(div);
+    });
+    updateRest();
+  };
+  render();
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  overlay.querySelector('#ekoFordelaAdd').onclick = () => { rows.push({ kategori: '', belopp: null, exMoms: null }); render(); };
+  overlay.querySelector('#ekoFordelaCancel').onclick = close;
+  overlay.querySelector('#ekoFordelaRemove').onclick = async () => {
+    close();
+    await saveEkonomiReskontraLine(line.lopnr, { fordelning: null });
+  };
+  overlay.querySelector('#ekoFordelaSave').onclick = async () => {
+    const valid = rows.filter(r => r.kategori && r.belopp);
+    if(!valid.length){ showToast('Välj minst en post med belopp.'); return; }
+    const sum = valid.reduce((s, r) => s + r.belopp, 0);
+    const rest = Math.round((total - sum) * 100) / 100;
+    if(Math.abs(rest) > 0.5 && !confirm('Fördelningen täcker ' + formatKrFull(sum) + ' av ' + formatKrFull(total) + '. ' + formatKrFull(rest) + ' förblir ofördelat. Spara ändå?')) return;
+    close();
+    if(valid.length === 1 && Math.abs(rest) <= 0.5){
+      await saveEkonomiReskontraLine(line.lopnr, { kategori: valid[0].kategori, fordelning: null });
+    } else {
+      await saveEkonomiReskontraLine(line.lopnr, { kategori: null, fordelning: valid.map(r => ({ kategori: r.kategori, belopp: r.belopp, exMoms: r.exMoms != null ? r.exMoms : r2(r.belopp / MOMS) })) });
+    }
+  };
+}
+// Flerval i reskontran: markerade löpnummer för det öppna projektet.
+const ekonomiReskontraSelection = new Set();
+// Vald sortering i reskontran (key = kolumn, dir = asc/desc; key null = standard).
+const ekonomiReskontraSort = { key: null, dir: 'asc' };
+document.querySelectorAll('th.reskontra-sort').forEach(th => {
+  th.onclick = () => {
+    const key = th.dataset.sort;
+    if(ekonomiReskontraSort.key === key){
+      if(ekonomiReskontraSort.dir === 'asc') ekonomiReskontraSort.dir = 'desc';
+      else { ekonomiReskontraSort.key = null; ekonomiReskontraSort.dir = 'asc'; } // tredje klicket = standard
+    } else {
+      ekonomiReskontraSort.key = key;
+      ekonomiReskontraSort.dir = 'asc';
+    }
+    renderEkonomiReskontraTable();
+  };
+});
+function ekonomiReskontraUpdateBulkBar(){
+  const n = ekonomiReskontraSelection.size;
+  const el = document.getElementById('ekonomiReskontraBulkCount');
+  if(el) el.textContent = n + ' markerad' + (n === 1 ? '' : 'e');
+  const bar = document.getElementById('ekonomiReskontraBulkBar');
+  if(bar) bar.style.opacity = n ? '1' : '0.75';
+}
+document.getElementById('ekonomiReskontraSelectAll').onchange = (e) => {
+  const pid = currentEkonomiBudgetProjectId;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const uncat = lines.filter(l => !ekonomiLineHandled(l));
+  if(e.target.checked) uncat.forEach(l => ekonomiReskontraSelection.add(String(l.lopnr)));
+  else ekonomiReskontraSelection.clear();
+  renderEkonomiReskontraTable();
+};
+document.getElementById('ekonomiReskontraOnlyUnhandled').onchange = () => renderEkonomiReskontraTable();
+// Manuell kostnad utanför reskontran: verifikationsnummer, datum, belopp, leverantör.
+document.getElementById('ekonomiReskontraManuellBtn').onclick = () => {
+  const form = document.getElementById('ekonomiReskontraManuellForm');
+  const show = form.style.display === 'none';
+  form.style.display = show ? 'block' : 'none';
+  if(show){
+    const pid = currentEkonomiBudgetProjectId;
+    document.getElementById('ekoManuellKategori').innerHTML = ekonomiBudgetKategoriOptions(pid, '', 'Ej kategoriserad');
+    document.getElementById('ekoManuellDatum').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('ekoManuellVernr').focus();
+  }
+};
+// Excel med verifikationer (A-serien) → manuella kostnader. Tolkas utan AI:
+// rubrikraden hittas på namn, en verifikation som är uppdelad på flera
+// konteringsrader slås ihop (belopp = summan av debet- eller positiva belopp).
+function ekoVerExcelParse(wb){
+  const isVer = h => /^ver|verifikat|vernr|ver\.?\s*nr|verifikationsnummer|^nr$|löpnr|serie/i.test(h);
+  const isDatum = h => /datum|date|bokf/i.test(h);
+  const isBelopp = h => /^belopp|summa|amount|totalt/i.test(h);
+  const isDebet = h => /debet|debit/i.test(h);
+  const isKredit = h => /kredit|credit/i.test(h);
+  const isLev = h => /leverant|motpart|text|beskrivning|benämning|namn|företag|kommentar/i.test(h);
+  const num = v => {
+    if(v == null || v === '') return null;
+    if(typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/\s|kr/gi, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  };
+  const toDate = v => {
+    if(v == null || v === '') return '';
+    if(v instanceof Date) return v.toISOString().slice(0, 10);
+    if(typeof v === 'number' && v > 20000 && v < 80000){ // Excel-serienummer
+      const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+      return d.toISOString().slice(0, 10);
+    }
+    const s = String(v).trim();
+    const m = s.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/) || s.match(/(\d{1,2})[-./](\d{1,2})[-./](\d{4})/);
+    if(!m) return s;
+    if(m[1].length === 4) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+    return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  };
+  let best = null;
+  wb.SheetNames.forEach(name => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null, raw: true });
+    for(let r = 0; r < Math.min(grid.length, 30); r++){
+      const row = grid[r] || [];
+      const cols = { ver: -1, datum: -1, belopp: -1, debet: -1, kredit: -1, lev: -1 };
+      row.forEach((cell, c) => {
+        const h = cell == null ? '' : String(cell).trim();
+        if(!h) return;
+        if(cols.ver < 0 && isVer(h)) cols.ver = c;
+        else if(cols.datum < 0 && isDatum(h)) cols.datum = c;
+        else if(cols.debet < 0 && isDebet(h)) cols.debet = c;
+        else if(cols.kredit < 0 && isKredit(h)) cols.kredit = c;
+        else if(cols.belopp < 0 && isBelopp(h)) cols.belopp = c;
+        else if(cols.lev < 0 && isLev(h)) cols.lev = c;
+      });
+      const ok = cols.ver >= 0 && (cols.belopp >= 0 || cols.debet >= 0);
+      if(!ok) continue;
+      // En rad i filen = en kostnadsrad i listan (så varje rad kan sorteras och
+      // kategoriseras för sig). Upprepas ett verifikationsnummer får raderna
+      // suffix #2, #3 ... så att de får unika nummer och inte läses in dubbelt.
+      const list = [];
+      const seen = {};
+      for(let i = r + 1; i < grid.length; i++){
+        const rr = grid[i] || [];
+        const ver = rr[cols.ver] != null ? String(rr[cols.ver]).trim() : '';
+        if(!ver) continue;
+        let amount = null;
+        if(cols.debet >= 0){
+          const d = num(rr[cols.debet]) || 0;
+          const k = cols.kredit >= 0 ? (num(rr[cols.kredit]) || 0) : 0;
+          amount = d - k;
+        } else {
+          amount = num(rr[cols.belopp]);
+        }
+        if(amount == null || amount === 0) continue;
+        seen[ver] = (seen[ver] || 0) + 1;
+        list.push({
+          vernr: ver,
+          key: ver + (seen[ver] > 1 ? '#' + seen[ver] : ''),
+          datum: cols.datum >= 0 ? toDate(rr[cols.datum]) : '',
+          leverantor: cols.lev >= 0 && rr[cols.lev] != null ? String(rr[cols.lev]).trim() : '',
+          belopp: Math.round(amount * 100) / 100
+        });
+      }
+      if(list.length && (!best || list.length > best.list.length)) best = { list, cols, sheet: name };
+      break;
+    }
+  });
+  return best;
+}
+document.getElementById('ekoVerExcelBtn').onclick = () => document.getElementById('ekoVerExcelInput').click();
+document.getElementById('ekoVerExcelInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiBudgetProjectId;
+  const statusEl = document.getElementById('ekoVerExcelStatus');
+  const setStatus = (msg, kind) => { statusEl.textContent = msg; statusEl.className = 'contract-upload-status' + (kind ? ' ' + kind : ''); };
+  if(!pid){ e.target.value = ''; return; }
+  setStatus('Läser filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const parsed = ekoVerExcelParse(wb);
+    if(!parsed || !parsed.list.length) throw new Error('Hittade inga verifikationer. Kontrollera att filen har kolumner för verifikationsnummer och belopp (eller debet/kredit).');
+    const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+    const existing = new Set(lines.map(l => String(l.lopnr)));
+    let added = 0, skipped = 0, zero = 0;
+    parsed.list.forEach(v => {
+      const lopnr = 'M:' + v.key;
+      if(ekonomiLevIgnorerad(v.leverantor)) return; // t.ex. Skatteverket läses aldrig in
+      if(existing.has(lopnr)){ skipped++; return; }
+      if(!v.belopp){ zero++; return; }
+      lines.push({ lopnr, vernr: v.key, manuell: true, leverantor: v.leverantor || '', fakturadatum: v.datum || '', forfallodatum: v.datum || '', belopp: v.belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name });
+      existing.add(lopnr);
+      added++;
+    });
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    const c = parsed.cols;
+    setStatus(added + ' verifikationer inlästa' + (skipped ? ', ' + skipped + ' fanns redan' : '') + (zero ? ', ' + zero + ' utan belopp hoppades över' : '') +
+      '. Kolumner: ver.nr=' + XLSX.utils.encode_col(c.ver) + (c.datum >= 0 ? ', datum=' + XLSX.utils.encode_col(c.datum) : '') + (c.debet >= 0 ? ', debet=' + XLSX.utils.encode_col(c.debet) + (c.kredit >= 0 ? '/kredit=' + XLSX.utils.encode_col(c.kredit) : '') : ', belopp=' + XLSX.utils.encode_col(c.belopp)) + (c.lev >= 0 ? ', leverantör=' + XLSX.utils.encode_col(c.lev) : ', leverantör saknas') + ' (blad ' + parsed.sheet + ').', added ? 'ok' : 'err');
+    renderEkonomiProjektBudget();
+  }catch(err){
+    setStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
+  }finally{
+    e.target.value = '';
+  }
+});
+// Leverantörer som aldrig ska läsas in (bokningarna är inte resultatpåverkande), t.ex. Skatteverket.
+const EKONOMI_IGNORERADE_LEVERANTORER = /skatteverket/i;
+function ekonomiLevIgnorerad(namn){ return EKONOMI_IGNORERADE_LEVERANTORER.test(String(namn || '')); }
+// Kontoanalys (PDF) → bara A-serien → kostnader utanför reskontran. AI-inläsning via
+// Edge Function extract-kontoanalys; samma dedup som Excel-inläsningen (lopnr "M:A 123").
+document.getElementById('ekoKontoanalysBtn').onclick = () => document.getElementById('ekoKontoanalysInput').click();
+document.getElementById('ekoKontoanalysInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiBudgetProjectId;
+  const statusEl = document.getElementById('ekoVerExcelStatus');
+  const setStatus = (msg, kind) => { statusEl.textContent = msg; statusEl.className = 'contract-upload-status' + (kind ? ' ' + kind : ''); };
+  if(!pid){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){ setStatus('Filen är för stor (max 8 MB).', 'err'); e.target.value = ''; return; }
+  const btn = document.getElementById('ekoKontoanalysBtn');
+  btn.disabled = true;
+  setStatus('Läser kontoanalysen… (AI, kan ta en halv minut)');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kontoanalys', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    const rows = (data && data.rows) || [];
+    const norm = v => { const m = String(v || '').trim().toUpperCase().match(/^([A-ZÅÄÖ]{1,3})\s*[-:.]?\s*(\d+)$/); return m ? m[1] + ' ' + m[2] : String(v || '').trim(); };
+    const aRows = rows.map(r => ({ ...r, key: norm(r.vernr) })).filter(r => /^A \d+$/.test(r.key));
+    if(!rows.length) throw new Error('Hittade inga transaktionsrader i filen.');
+    if(!aRows.length) throw new Error('Hittade ' + rows.length + ' rader men ingen i A-serien.');
+    const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+    const existing = new Set(lines.map(l => String(l.lopnr)));
+    let added = 0, skipped = 0, zero = 0;
+    const seen = {};
+    aRows.forEach(r => {
+      const belopp = Math.round(((r.debet || 0) - (r.kredit || 0)) * 100) / 100;
+      // Samma vernr kan förekomma på flera konton: numrera #2, #3 … precis som Excel-inläsningen.
+      seen[r.key] = (seen[r.key] || 0) + 1;
+      const key = seen[r.key] > 1 ? r.key + ' #' + seen[r.key] : r.key;
+      const lopnr = 'M:' + key;
+      if(ekonomiLevIgnorerad(r.text)) return; // t.ex. Skatteverket läses aldrig in
+      if(existing.has(lopnr)){ skipped++; return; }
+      if(!belopp){ zero++; return; }
+      lines.push({ lopnr, vernr: key, manuell: true, leverantor: (r.text || '').trim(), fakturadatum: r.datum || '', forfallodatum: r.datum || '', belopp, kategori: null, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString(), kalla: file.name, konto: r.konto ? String(r.konto) + (r.kontonamn ? ' ' + r.kontonamn : '') : '' });
+      existing.add(lopnr);
+      added++;
+    });
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    setStatus(added + ' A-verifikationer inlästa av ' + rows.length + ' rader i filen' + (skipped ? ', ' + skipped + ' fanns redan' : '') + (zero ? ', ' + zero + ' utan belopp hoppades över' : '') + '.', added ? 'ok' : 'err');
+    renderEkonomiProjektBudget();
+  }catch(err){
+    setStatus('Kunde inte läsa kontoanalysen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+document.getElementById('ekoManuellAvbryt').onclick = () => {
+  document.getElementById('ekonomiReskontraManuellForm').style.display = 'none';
+};
+document.getElementById('ekoManuellSpara').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const vernr = document.getElementById('ekoManuellVernr').value.trim();
+  const datum = document.getElementById('ekoManuellDatum').value;
+  const beloppRaw = document.getElementById('ekoManuellBelopp').value.trim();
+  const leverantor = document.getElementById('ekoManuellLeverantor').value.trim();
+  const kategori = document.getElementById('ekoManuellKategori').value || null;
+  const belopp = parseFloat(beloppRaw.replace(',', '.'));
+  if(!vernr){ showToast('Ange verifikationsnummer.'); return; }
+  if(!datum){ showToast('Ange datum.'); return; }
+  if(isNaN(belopp)){ showToast('Ange belopp.'); return; }
+  if(!leverantor){ showToast('Ange leverantör.'); return; }
+  const lines = companyEkonomiData.reskontra[pid] || (companyEkonomiData.reskontra[pid] = []);
+  const lopnr = 'M:' + vernr;
+  if(lines.some(l => l.lopnr === lopnr)){ showToast('Verifikationsnummer ' + vernr + ' finns redan.'); return; }
+  lines.push({ lopnr, vernr, manuell: true, leverantor, fakturadatum: datum, forfallodatum: datum, belopp, kategori, justeratBelopp: null, uppladdadAv: typeof myName !== 'undefined' ? myName : '', uppladdadAt: new Date().toISOString() });
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+    return;
+  }
+  ['ekoManuellVernr', 'ekoManuellBelopp', 'ekoManuellLeverantor'].forEach(id => { document.getElementById(id).value = ''; });
+  showToast('Kostnad ' + vernr + ' tillagd.');
+  renderEkonomiProjektBudget();
+  document.getElementById('ekoManuellVernr').focus();
+};
+document.getElementById('ekonomiReskontraBulkClear').onclick = () => {
+  ekonomiReskontraSelection.clear();
+  renderEkonomiReskontraTable();
+};
+document.getElementById('ekonomiReskontraBulkApply').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  const kat = document.getElementById('ekonomiReskontraBulkSelect').value || null;
+  if(!ekonomiReskontraSelection.size){ showToast('Markera först de rader som ska kategoriseras.'); return; }
+  if(!kat){ showToast('Välj en kategori i rullistan.'); return; }
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  let n = 0;
+  lines.forEach(l => { if(ekonomiReskontraSelection.has(String(l.lopnr))){ l.kategori = kat; l.fordelning = null; n++; } });
+  ekonomiReskontraSelection.clear();
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    showToast(n + ' rader satta till "' + kat + '".');
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+  renderEkonomiProjektBudget();
+};
+
+async function saveEkonomiReskontraLine(lopnr, patch){
+  const pid = currentEkonomiBudgetProjectId;
+  const lines = companyEkonomiData.reskontra[pid] || [];
+  const idx = lines.findIndex(l => l.lopnr === lopnr);
+  if(idx === -1) return;
+  lines[idx] = { ...lines[idx], ...patch };
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    renderEkonomiProjektBudget();
+  }catch(e){
+    showDebugError('Kunde inte spara reskontrarad', e);
+  }
+}
+
+function setReskontraStatus(msg, kind){
+  const el = document.getElementById('reskontraUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+// ---------- Lån-detalj: fält + inläsning från balansräkning (BR) ----------
+function openEkonomiProjektLan(project){
+  currentEkonomiLanProjectId = project.id;
+  currentEkonomiLanKey = null;
+  document.getElementById('ekonomiProjektLanTitle').textContent = project.name;
+  document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLikviditetView'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('ekonomiProjektLanView').style.display = 'block';
+  renderEkonomiProjektLan();
+}
+
+function closeEkonomiProjektLan(){
+  document.getElementById('ekonomiProjektLanView').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar').style.display = 'flex';
+  setEkonomiSubView('lan');
+}
+
+// ---------- Lån: detaljuppgifter per lån ----------
+// lan[pid].detalj[lanKey] = { ibDatum:'YYYY-MM-DD', ib, upplupenIb, ranta (% per år),
+//   tx:[{id, datum, typ:'utokning'|'aterbetalning', belopp, ranta?, text, kalla?}] }.
+// Saldo = ib + utökningar − återbetalningar (t.o.m. ett datum). Upplupen ränta
+// räknas dag för dag på saldot med gällande räntesats och redovisas BARA under Lån.
+const EKONOMI_LAN_IB_DEFAULT = '2026-10-01';
+function ekonomiLanDetalj(pid, lanKey, create){
+  const rec = companyEkonomiData.lan[pid] || (create ? (companyEkonomiData.lan[pid] = {}) : null);
+  if(!rec) return null;
+  if(!rec.detalj) { if(!create) return null; rec.detalj = {}; }
+  if(!rec.detalj[lanKey]){
+    if(!create) return null;
+    // Första gången: utgå från det belopp som redan står på fältet.
+    rec.detalj[lanKey] = { ibDatum: EKONOMI_LAN_IB_DEFAULT, ib: rec[lanKey] || 0, upplupenIb: 0, ranta: 0, tx: [] };
+  }
+  const d = rec.detalj[lanKey];
+  if(!Array.isArray(d.tx)) d.tx = [];
+  d.tx.forEach(t => { if(!t.id) t.id = uid(); });
+  return d;
+}
+function ekonomiLanTxSorted(d){
+  return [...(d.tx || [])].sort((a, b) => String(a.datum || '').localeCompare(String(b.datum || '')));
+}
+function ekonomiLanSaldoPer(d, tomDatum){
+  let saldo = d.ib || 0;
+  ekonomiLanTxSorted(d).forEach(t => {
+    if(tomDatum && t.datum > tomDatum) return;
+    saldo += t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0);
+  });
+  return saldo;
+}
+// Aktuellt saldo för ett lån (detaljuppgifter om de finns, annars fältets värde).
+function ekonomiLanSaldo(pid, lanKey){
+  const d = ekonomiLanDetalj(pid, lanKey, false);
+  if(d) return ekonomiLanSaldoPer(d, new Date().toISOString().slice(0, 10));
+  const rec = companyEkonomiData.lan[pid] || {};
+  return rec[lanKey] || 0;
+}
+// Upplupen ränta t.o.m. idag: IB-ränta + dag för dag (saldo × ränta / 365).
+function ekonomiLanUpplupen(d){
+  const today = new Date().toISOString().slice(0, 10);
+  const start = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
+  if(start > today) return { belopp: d.upplupenIb || 0, dagar: 0, ranta: d.ranta || 0 };
+  const tx = ekonomiLanTxSorted(d);
+  let saldo = d.ib || 0, ranta = d.ranta || 0, acc = 0, dagar = 0, ti = 0;
+  const dt = new Date(start + 'T00:00:00Z');
+  const end = new Date(today + 'T00:00:00Z');
+  while(dt < end){
+    const iso = dt.toISOString().slice(0, 10);
+    while(ti < tx.length && tx[ti].datum <= iso){
+      const t = tx[ti++];
+      saldo += t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0);
+      if(t.ranta != null && t.ranta !== '') ranta = parseFloat(t.ranta) || 0;
+    }
+    acc += saldo * (ranta / 100) / 365;
+    dagar++;
+    dt.setUTCDate(dt.getUTCDate() + 1);
+  }
+  return { belopp: (d.upplupenIb || 0) + acc, dagar, ranta };
+}
+let currentEkonomiLanKey = null;
+// Preliminärt bokad finansiering från likviditetsprognosen (ännu inte bekräftad).
+function ekonomiLanPlaneradNote(pid, lanKey, td){
+  const prog = (ekonomiBudgetDetail(pid) || {}).prognos;
+  const plan = ((prog && prog.planeradeLan) || []).filter(p => p.lanKey === lanKey);
+  if(!plan.length) return;
+  const n = document.createElement('div');
+  n.style.cssText = 'font-size:10.5px; color:var(--blue);';
+  const psum = plan.reduce((s, p) => s + (p.belopp || 0), 0);
+  n.textContent = (psum < 0 ? '− ' : '+ ') + formatKrFull(Math.abs(psum)) + ' preliminärt (' + plan.map(p => ekonomiPrognosShortLabel(p.manad)).join(', ') + ') – bekräftas i likviditetsprognosen';
+  td.appendChild(n);
+}
+function renderEkonomiProjektLan(){
+  const pid = currentEkonomiLanProjectId;
+  const rec = companyEkonomiData.lan[pid] || {};
+  const fields = EKONOMI_TAB_CONFIG.lan.fields;
+
+  const tbody = document.getElementById('ekonomiLanFieldsBody');
+  tbody.innerHTML = '';
+  fields.forEach(f => {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td>' + escapeHtml(f.label) + '</td><td></td><td></td>';
+    if(f.computed){
+      // Fastighetsvärde hämtas från Mark (tagna markkostnader i Budget).
+      const mk = ekonomiMarkKostnader(pid);
+      const span = document.createElement('span');
+      span.textContent = formatKrFull(mk.summa);
+      span.className = 'editable';
+      span.style.cursor = 'pointer';
+      span.title = 'Klicka för att se vilka poster som ingår';
+      span.onclick = () => showEkonomiTagnaSpec('Fastighetsvärde (tagna markkostnader)', { reskontra: 0, mark: mk.summa, items: mk.items });
+      row.children[1].appendChild(span);
+      row.children[2].textContent = 'Från Mark / Budget';
+      tbody.appendChild(row);
+      return;
+    }
+    const detalj = f.dated ? ekonomiLanDetalj(pid, f.key, false) : null;
+    if(detalj){
+      const span = document.createElement('span');
+      span.textContent = formatKrFull(ekonomiLanSaldo(pid, f.key));
+      span.style.fontWeight = '600';
+      row.children[1].appendChild(span);
+      const sub = document.createElement('div');
+      sub.style.cssText = 'font-size:10.5px; color:var(--ink-soft);';
+      sub.textContent = 'saldo idag (IB ' + formatKrFull(detalj.ib || 0) + ', ' + detalj.tx.length + ' bokningar)';
+      row.children[1].appendChild(sub);
+      ekonomiLanPlaneradNote(pid, f.key, row.children[1]);
+    } else {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'eko-inline-input';
+      input.value = rec[f.key] || '';
+      input.placeholder = '0';
+      input.onchange = () => saveEkonomiLanFieldValue(f.key, parseFloat(input.value) || 0);
+      row.children[1].appendChild(input);
+      ekonomiLanPlaneradNote(pid, f.key, row.children[1]);
+    }
+
+    if(f.dated){
+      const dateInput = document.createElement('input');
+      dateInput.type = 'date';
+      dateInput.className = 'eko-inline-input';
+      dateInput.style.cssText = 'text-align:left; width:150px;';
+      dateInput.value = rec[f.key + 'Forfallodatum'] || '';
+      dateInput.title = 'Förfallodatum: då ska lånet vara återbetalt. Saldot läggs som återbetalning den månaden i likviditetsprognosen.';
+      dateInput.onchange = () => saveEkonomiLanFieldDate(f.key, dateInput.value);
+      row.children[2].appendChild(dateInput);
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.textContent = currentEkonomiLanKey === f.key ? 'Öppet ▾' : 'Öppna';
+      openBtn.style.cssText = 'margin-left:8px; font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink);';
+      openBtn.onclick = () => { currentEkonomiLanKey = f.key; ekonomiLanDetalj(pid, f.key, true); renderEkonomiProjektLan(); };
+      row.children[2].appendChild(openBtn);
+    } else {
+      row.children[2].textContent = '—';
+    }
+    tbody.appendChild(row);
+  });
+
+  renderEkonomiLanDetaljPanel();
+  renderBrItemsTable();
+}
+function renderEkonomiLanDetaljPanel(){
+  const pid = currentEkonomiLanProjectId;
+  const panel = document.getElementById('ekoLanDetaljPanel');
+  const key = currentEkonomiLanKey;
+  const d = key ? ekonomiLanDetalj(pid, key, false) : null;
+  if(!d){ panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const field = EKONOMI_TAB_CONFIG.lan.fields.find(f => f.key === key);
+  document.getElementById('ekoLanDetaljTitle').textContent = (field ? field.label.replace(' (kr)', '') : key) + ' · ' + (projects.find(p => p.id === pid) || {}).name;
+  document.getElementById('ekoLanIbDatum').value = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
+  document.getElementById('ekoLanIb').value = d.ib != null ? d.ib : '';
+  document.getElementById('ekoLanUpplupenIb').value = d.upplupenIb != null ? d.upplupenIb : '';
+  document.getElementById('ekoLanRanta').value = d.ranta != null ? d.ranta : '';
+  const saldo = ekonomiLanSaldo(pid, key);
+  const upp = ekonomiLanUpplupen(d);
+  document.getElementById('ekoLanDetaljSaldo').textContent = formatKrFull(saldo);
+  document.getElementById('ekoLanDetaljUpplupen').textContent = Math.round(upp.belopp).toLocaleString('sv-SE') + ' kr';
+  const forfall = (companyEkonomiData.lan[pid] || {})[key + 'Forfallodatum'];
+  const dagarKvar = forfall ? Math.round((new Date(forfall + 'T00:00:00Z') - new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z')) / 86400000) : null;
+  document.getElementById('ekoLanDetaljRantaInfo').textContent = upp.ranta + ' % per år · ' + upp.dagar + ' dagar sedan ' + (d.ibDatum || EKONOMI_LAN_IB_DEFAULT) + (d.upplupenIb ? ' · varav IB ' + formatKrFull(d.upplupenIb) : '') + (forfall ? ' · förfaller ' + forfall + (dagarKvar != null ? ' (' + (dagarKvar >= 0 ? dagarKvar + ' dagar kvar' : Math.abs(dagarKvar) + ' dagar sedan') + ')' : '') : ' · inget förfallodatum satt');
+  if(!document.getElementById('ekoLanTxDatum').value) document.getElementById('ekoLanTxDatum').value = new Date().toISOString().slice(0, 10);
+
+  const tbody = document.getElementById('ekoLanTxBody');
+  tbody.innerHTML = '';
+  let running = d.ib || 0;
+  const ibRow = document.createElement('tr');
+  ibRow.style.background = 'var(--paper-soft, #f6f4ef)';
+  ibRow.innerHTML = '<td style="text-align:left;">' + escapeHtml(d.ibDatum || EKONOMI_LAN_IB_DEFAULT) + '</td><td style="text-align:left; font-weight:600;">IB</td><td></td><td style="font-weight:600;">' + formatKrFull(d.ib || 0) + '</td><td>' + (d.ranta || 0) + ' %</td><td style="font-weight:600;">' + formatKrFull(running) + '</td><td></td>';
+  tbody.appendChild(ibRow);
+  ekonomiLanTxSorted(d).forEach(t => {
+    running += t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0);
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(t.datum || '') + '</td>' +
+      '<td style="text-align:left;">' + (t.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + (t.kalla ? '<div style="font-size:10px; color:var(--ink-soft);">från ' + escapeHtml(t.kalla) + '</div>' : '') + '</td>' +
+      '<td style="text-align:left;">' + escapeHtml(t.text || '') + '</td>' +
+      '<td style="color:' + (t.typ === 'aterbetalning' ? 'var(--danger)' : 'var(--ink)') + ';">' + (t.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(t.belopp || 0) + '</td>' +
+      '<td>' + (t.ranta != null && t.ranta !== '' ? t.ranta + ' %' : '') + '</td>' +
+      '<td>' + formatKrFull(running) + '</td><td></td>';
+    const del = document.createElement('button');
+    del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort bokningen';
+    del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    del.onclick = async () => {
+      if(!confirm('Ta bort bokningen ' + t.datum + ' ' + formatKrFull(t.belopp || 0) + '?')) return;
+      d.tx = d.tx.filter(x => x.id !== t.id);
+      await saveEkonomiLan();
+    };
+    tr.children[6].appendChild(del);
+    tbody.appendChild(tr);
+  });
+}
+async function saveEkonomiLan(){
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
+  }catch(e){
+    showDebugError('Kunde inte spara lån', e);
+  }
+  renderEkonomiProjektLan();
+}
+document.getElementById('ekoLanDetaljClose').onclick = () => { currentEkonomiLanKey = null; renderEkonomiProjektLan(); };
+['ekoLanIbDatum', 'ekoLanIb', 'ekoLanUpplupenIb', 'ekoLanRanta'].forEach(id => {
+  document.getElementById(id).onchange = async () => {
+    const d = ekonomiLanDetalj(currentEkonomiLanProjectId, currentEkonomiLanKey, false);
+    if(!d) return;
+    const v = document.getElementById(id).value;
+    if(id === 'ekoLanIbDatum') d.ibDatum = v || EKONOMI_LAN_IB_DEFAULT;
+    else if(id === 'ekoLanIb') d.ib = parseFloat(String(v).replace(',', '.')) || 0;
+    else if(id === 'ekoLanUpplupenIb') d.upplupenIb = parseFloat(String(v).replace(',', '.')) || 0;
+    else d.ranta = parseFloat(String(v).replace(',', '.')) || 0;
+    await saveEkonomiLan();
+  };
+});
+document.getElementById('ekoLanTxAdd').onclick = async () => {
+  const d = ekonomiLanDetalj(currentEkonomiLanProjectId, currentEkonomiLanKey, false);
+  if(!d) return;
+  const datum = document.getElementById('ekoLanTxDatum').value;
+  const typ = document.getElementById('ekoLanTxTyp').value;
+  const belopp = parseFloat(String(document.getElementById('ekoLanTxBelopp').value).replace(',', '.'));
+  const rantaRaw = document.getElementById('ekoLanTxRanta').value;
+  const text = document.getElementById('ekoLanTxText').value.trim();
+  if(!datum){ showToast('Ange datum.'); return; }
+  if(isNaN(belopp) || belopp <= 0){ showToast('Ange belopp.'); return; }
+  d.tx.push({ id: uid(), datum, typ, belopp, ranta: rantaRaw === '' ? null : parseFloat(rantaRaw.replace(',', '.')), text });
+  document.getElementById('ekoLanTxBelopp').value = '';
+  document.getElementById('ekoLanTxRanta').value = '';
+  document.getElementById('ekoLanTxText').value = '';
+  await saveEkonomiLan();
+};
+// Kontoanalys (Excel/CSV): kolumner datum, text, debet, kredit. Debet =
+// återbetalning av lånet, kredit = utökning. Rader som redan finns hoppas över.
+function ekoLanKontoParse(wb){
+  const num = v => { if(v == null || v === '') return null; if(typeof v === 'number') return isFinite(v) ? v : null; const n = parseFloat(String(v).replace(/\s|kr/gi, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')); return isNaN(n) ? null : n; };
+  const toDate = v => { if(v == null || v === '') return ''; if(v instanceof Date) return v.toISOString().slice(0, 10); if(typeof v === 'number' && v > 20000 && v < 80000) return new Date(Math.round((v - 25569) * 86400 * 1000)).toISOString().slice(0, 10); const s = String(v).trim(); const m = s.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/) || s.match(/(\d{1,2})[-./](\d{1,2})[-./](\d{4})/); if(!m) return s; return m[1].length === 4 ? m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0') : m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0'); };
+  let best = null;
+  wb.SheetNames.forEach(name => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null, raw: true });
+    for(let r = 0; r < Math.min(grid.length, 30); r++){
+      const row = grid[r] || [];
+      const cols = { datum: -1, text: -1, debet: -1, kredit: -1, belopp: -1 };
+      row.forEach((cell, c) => {
+        const h = cell == null ? '' : String(cell).trim();
+        if(!h) return;
+        if(cols.datum < 0 && /datum|date|bokf/i.test(h)) cols.datum = c;
+        else if(cols.debet < 0 && /debet|debit/i.test(h)) cols.debet = c;
+        else if(cols.kredit < 0 && /kredit|credit/i.test(h)) cols.kredit = c;
+        else if(cols.belopp < 0 && /^belopp|summa|amount/i.test(h)) cols.belopp = c;
+        else if(cols.text < 0 && /text|beskrivning|ben[äa]mning|motpart|ver/i.test(h)) cols.text = c;
+      });
+      if(cols.datum < 0 || (cols.debet < 0 && cols.kredit < 0 && cols.belopp < 0)) continue;
+      const list = [];
+      for(let i = r + 1; i < grid.length; i++){
+        const rr = grid[i] || [];
+        const datum = toDate(rr[cols.datum]);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(datum)) continue;
+        const text = cols.text >= 0 && rr[cols.text] != null ? String(rr[cols.text]).trim() : '';
+        const deb = cols.debet >= 0 ? num(rr[cols.debet]) : null;
+        const kre = cols.kredit >= 0 ? num(rr[cols.kredit]) : null;
+        if(deb) list.push({ datum, typ: 'aterbetalning', belopp: Math.abs(deb), text });
+        if(kre) list.push({ datum, typ: 'utokning', belopp: Math.abs(kre), text });
+        if(!deb && !kre && cols.belopp >= 0){
+          const b = num(rr[cols.belopp]);
+          if(b) list.push({ datum, typ: b < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(b), text });
+        }
+      }
+      if(list.length && (!best || list.length > best.list.length)) best = { list, cols, sheet: name };
+      break;
+    }
+  });
+  return best;
+}
+document.getElementById('ekoLanKontoBtn').onclick = () => document.getElementById('ekoLanKontoInput').click();
+document.getElementById('ekoLanKontoInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('ekoLanKontoStatus');
+  const setStatus = (m, k) => { statusEl.textContent = m; statusEl.className = 'contract-upload-status' + (k ? ' ' + k : ''); };
+  const d = ekonomiLanDetalj(currentEkonomiLanProjectId, currentEkonomiLanKey, false);
+  if(!d){ e.target.value = ''; return; }
+  setStatus('Läser filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const parsed = ekoLanKontoParse(wb);
+    if(!parsed || !parsed.list.length) throw new Error('Hittade inga rader (behöver kolumner för datum och debet/kredit eller belopp).');
+    const key = t => t.datum + '|' + t.typ + '|' + Math.round(t.belopp) + '|' + (t.text || '').toLowerCase();
+    const existing = new Set(d.tx.map(key));
+    let added = 0, skipped = 0;
+    parsed.list.forEach(t => {
+      const k = key(t);
+      if(existing.has(k)){ skipped++; return; }
+      d.tx.push({ id: uid(), datum: t.datum, typ: t.typ, belopp: t.belopp, ranta: null, text: t.text, kalla: file.name });
+      existing.add(k);
+      added++;
+    });
+    await saveEkonomiLan();
+    const c = parsed.cols;
+    setStatus(added + ' bokningar inlästa' + (skipped ? ', ' + skipped + ' fanns redan' : '') + '. Kolumner: datum=' + XLSX.utils.encode_col(c.datum) + (c.debet >= 0 ? ', debet=' + XLSX.utils.encode_col(c.debet) : '') + (c.kredit >= 0 ? ', kredit=' + XLSX.utils.encode_col(c.kredit) : '') + (c.belopp >= 0 ? ', belopp=' + XLSX.utils.encode_col(c.belopp) : '') + (c.text >= 0 ? ', text=' + XLSX.utils.encode_col(c.text) : '') + ' (blad ' + parsed.sheet + ').', added ? 'ok' : 'err');
+  }catch(err){
+    setStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
+  }finally{
+    e.target.value = '';
+  }
+});
+
+async function saveEkonomiLanFieldValue(fieldKey, value){
+  const pid = currentEkonomiLanProjectId;
+  if(!companyEkonomiData.lan[pid]) companyEkonomiData.lan[pid] = {};
+  companyEkonomiData.lan[pid][fieldKey] = value;
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
+    renderEkonomiProjektLan();
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+}
+
+async function saveEkonomiLanFieldDate(fieldKey, dateValue){
+  const pid = currentEkonomiLanProjectId;
+  if(!companyEkonomiData.lan[pid]) companyEkonomiData.lan[pid] = {};
+  companyEkonomiData.lan[pid][fieldKey + 'Forfallodatum'] = dateValue;
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
+  }catch(e){
+    showDebugError('Kunde inte spara datum', e);
+  }
+}
+
+function renderBrItemsTable(){
+  const pid = currentEkonomiLanProjectId;
+  const items = companyEkonomiData.brItems[pid] || [];
+  const tbody = document.getElementById('ekonomiBrItemsBody');
+  const empty = document.getElementById('ekonomiBrItemsEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = items.length ? 'none' : 'block';
+  const fields = EKONOMI_TAB_CONFIG.lan.fields;
+
+  items.forEach((item, idx) => {
+    const row = document.createElement('tr');
+    row.innerHTML =
+      '<td>' + escapeHtml(item.konto || '') + '</td>' +
+      '<td>' + formatMSEK(item.belopp || 0) + '</td>' +
+      '<td></td>';
+    const select = document.createElement('select');
+    select.className = 'eko-inline-select';
+    select.innerHTML = '<option value="">Ignorera</option>' +
+      fields.map(f => '<option value="' + f.key + '"' + (item.kategori === f.key ? ' selected' : '') + '>' + escapeHtml(f.label) + '</option>').join('');
+    select.onchange = () => saveBrItemCategory(idx, select.value || null);
+    row.children[2].appendChild(select);
+    tbody.appendChild(row);
+  });
+}
+
+async function saveBrItemCategory(idx, kategori){
+  const pid = currentEkonomiLanProjectId;
+  const items = companyEkonomiData.brItems[pid] || [];
+  if(!items[idx]) return;
+  items[idx].kategori = kategori;
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.brItems, JSON.stringify(companyEkonomiData.brItems));
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+}
+
+async function applyBrItemsToLan(){
+  const pid = currentEkonomiLanProjectId;
+  const items = companyEkonomiData.brItems[pid] || [];
+  const fields = EKONOMI_TAB_CONFIG.lan.fields;
+  const sums = {};
+  fields.forEach(f => { sums[f.key] = 0; });
+  items.forEach(item => {
+    if(item.kategori && sums.hasOwnProperty(item.kategori)){
+      sums[item.kategori] += (item.belopp || 0);
+    }
+  });
+  // Behåll ev. redan satta inbetalningsdatum - BR:n ersätter bara beloppen.
+  const existing = companyEkonomiData.lan[pid] || {};
+  companyEkonomiData.lan[pid] = { ...existing, ...sums };
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
+    renderEkonomiProjektLan();
+    showToast('Fälten uppdaterade från BR.');
+  }catch(e){
+    showDebugError('Kunde inte tillämpa BR-värden', e);
+  }
+}
+
+function setBrUploadStatus(msg, kind){
+  const el = document.getElementById('brUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+// ---------- Likviditetsplan: 12 månader framåt per projekt ----------
+function parseKr(str){
+  const n = parseInt(String(str || '').replace(/[^0-9]/g, ''), 10);
+  return isNaN(n) ? 0 : n;
+}
+
+async function openEkonomiProjektLikviditet(project){
+  currentEkonomiLikviditetProjectId = project.id;
+  document.getElementById('ekonomiProjektLikviditetTitle').textContent = project.name;
+  document.getElementById('ekonomiSubTabsBar').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar2').style.display = 'none';
+  ['ekonomiOversiktView', 'ekonomiProjektView', 'ekonomiBudgetView', 'ekonomiMarkView', 'ekonomiLikviditetView',
+    'ekonomiLanView', 'ekonomiVinstSolvinkelnView', 'ekonomiKoncernView', 'ekonomiKoncernFordranView', 'ekonomiKoncernLanView', 'ekonomiProjektMarkView', 'ekonomiProjektBudgetView', 'ekonomiProjektLanView'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('ekonomiProjektLikviditetView').style.display = 'block';
+  await renderEkonomiProjektLikviditet();
+}
+
+function closeEkonomiProjektLikviditet(){
+  document.getElementById('ekonomiProjektLikviditetView').style.display = 'none';
+  document.getElementById('ekonomiSubTabsBar').style.display = 'flex';
+  setEkonomiSubView('likviditet');
+}
+
+async function renderEkonomiProjektLikviditet(){
+  const pid = currentEkonomiLikviditetProjectId;
+  const rec = companyEkonomiData.likviditet[pid] || {};
+  document.getElementById('ekoLikviditetIngaendeInput').value = rec.belopp || '';
+  // Lägenheterna behövs för insatsraden (inflyttningsdag / slutbetalning).
+  try{
+    const raw = await fetchApartmentsRaw(pid);
+    ekonomiPrognosAptsCache[pid] = raw.apartments.map(normalizeApartment);
+  }catch(e){ ekonomiPrognosAptsCache[pid] = []; }
+  renderEkonomiPrognos();
+}
+const ekonomiPrognosAptsCache = {};
+async function ekonomiSaveApartments(pid, apts){
+  await withRetry(() => window.storage.set(apartmentsKey(pid), JSON.stringify(apts), true));
+  ekonomiPrognosAptsCache[pid] = apts;
+}
+// Vilken månad en bostads insats väntas (inflyttningsdagen) eller kom in
+// (slutbetalningsdatumet i projektöversikten går alltid före).
+function ekonomiInsatsManad(apt, prog){
+  if(apt.slutbetald && apt.slutbetald.date) return { m: apt.slutbetald.date.slice(0, 7), fast: true };
+  const bek = apt.inflyttningBekraftat && apt.inflyttningBekraftat.date;
+  if(bek) return { m: bek.slice(0, 7), fast: true };
+  const vald = prog && prog.insatsManad && prog.insatsManad[apt.id];
+  if(vald) return { m: vald, fast: false };
+  const pre = preliminarInflyttningDate(apt);
+  return { m: pre ? pre.slice(0, 7) : '', fast: false };
+}
+
+function ekonomiInsatsBelopp(apt){
+  return parseKr(apt.slutbetald && apt.slutbetald.amount) || parseKr(apt.totalpris) || 0;
+}
+function ekonomiForeningslanBudget(pid){
+  // I första hand projektbudgeten (Budget-fliken), annars kalkylen i Nya projekt.
+  const bd = companyEkonomiData.budgetDetalj[pid];
+  if(bd && bd.foreningslan) return bd.foreningslan;
+  const cand = (typeof nyaProjektList !== 'undefined' ? nyaProjektList : []).find(c => c.promoted_project_id === pid);
+  if(!cand) return null;
+  try{
+    const row = nyaProjektForeningslanRow(migrateNyaProjektData(cand.data));
+    return row && row.belopp ? parseFloat(row.belopp) || null : null;
+  }catch(e){ return null; }
+}
+// Inbetalningar till prognosen per månad: insatser (per inflyttningsdag/slutbetalning),
+// lån (bokningar i Lån-fliken + preliminärt bokad finansiering från prognosen) och
+// föreningslån (preliminärt, fylls i direkt i prognosen). IB = det som kommit in före start.
+function ekonomiPrognosInbetalningar(pid, start, months){
+  const monthSet = new Set(months);
+  const prog = ekonomiPrognosRec(pid);
+  const insatser = { ib: 0, per: {}, items: {}, ibItems: [], utanDatum: [], budget: 0 };
+  (ekonomiPrognosAptsCache[pid] || []).forEach(a => {
+    const amount = ekonomiInsatsBelopp(a);
+    if(!amount) return;
+    insatser.budget += amount;
+    // Månad: slutbetalning > bekräftat datum > månad vald i prognosen > preliminärt datum.
+    const im = ekonomiInsatsManad(a, prog);
+    const m = im.m;
+    const item = { apt: a, belopp: amount, betald: !!(a.slutbetald && a.slutbetald.done), manad: m, fast: im.fast };
+    if(!m){ insatser.utanDatum.push(item); return; }
+    if(m < start){ insatser.ib += amount; insatser.ibItems.push(item); }
+    else if(monthSet.has(m)){ insatser.per[m] = (insatser.per[m] || 0) + amount; (insatser.items[m] = insatser.items[m] || []).push(item); }
+  });
+  const lan = []; // en rad per lån: { key, namn, ib, per:{m:v}, items:{m:[...]}, planerade:{m:[...]} }
+  const lanRec = companyEkonomiData.lan[pid] || {};
+  const planerade = prog.planeradeLan || [];
+  EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated).forEach(f => {
+    const d = ekonomiLanDetalj(pid, f.key, false);
+    const row = { key: f.key, namn: f.label.replace(' (kr)', ''), ib: 0, per: {}, items: {}, planerade: {} };
+    const add = (m, v, item) => { row.per[m] = (row.per[m] || 0) + v; if(item) (row.items[m] = row.items[m] || []).push(item); };
+    if(d){
+      const ibDatum = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
+      // Lånets IB-datum i eller före startmånaden: saldot vid start är IB.
+      // Senare IB-datum: IB-beloppet räknas som inbetalning den månaden.
+      row.ib = (ibDatum.slice(0, 7) <= start ? ekonomiLanSaldoPer(d, start + '-00') : 0);
+      if(ibDatum.slice(0, 7) > start && monthSet.has(ibDatum.slice(0, 7)) && (d.ib || 0)){
+        add(ibDatum.slice(0, 7), d.ib || 0, { datum: ibDatum, typ: 'utokning', belopp: d.ib || 0, text: 'IB enligt Lån-fliken' });
+      }
+      d.tx.forEach(t => {
+        const m = String(t.datum || '').slice(0, 7);
+        if(!monthSet.has(m)) return;
+        add(m, t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), { datum: t.datum, typ: t.typ, belopp: t.belopp || 0, text: t.text || '', kalla: t.kalla, jvKassa: !!t.jvKassa });
+      });
+    } else {
+      // Inga bokningar: fältets belopp är lånets saldo och räknas som IB.
+      row.ib = lanRec[f.key] || 0;
+    }
+    // Förfallodatum: hela saldot återbetalas den månaden.
+    const forfall = lanRec[f.key + 'Forfallodatum'];
+    if(forfall && monthSet.has(forfall.slice(0, 7))){
+      const saldoVid = d ? ekonomiLanSaldoPer(d, forfall) : (lanRec[f.key] || 0);
+      if(saldoVid > 0){ add(forfall.slice(0, 7), -saldoVid, { datum: forfall, typ: 'aterbetalning', belopp: saldoVid, text: 'Förfallodatum – hela saldot återbetalas' }); row.forfall = forfall; }
+    }
+    // Preliminärt bokad finansiering (från likviditetspopupen) tills den bekräftas.
+    planerade.filter(p => p.lanKey === f.key).forEach(p => {
+      if(!monthSet.has(p.manad)) return;
+      row.per[p.manad] = (row.per[p.manad] || 0) + (p.belopp || 0);
+      (row.planerade[p.manad] = row.planerade[p.manad] || []).push(p);
+    });
+    // Delbetalningar av markförvärv som betalas av den här aktören (Mark → Betalningsplan).
+    ekonomiMarkPlaneradeBetalningar(pid).filter(x => x.b.aktor === f.key && monthSet.has(x.b.manad)).forEach(({ fast, b }) => {
+      row.per[b.manad] = (row.per[b.manad] || 0) + (b.belopp || 0);
+      (row.planerade[b.manad] = row.planerade[b.manad] || []).push({ id: 'mark:' + fast.id + ':' + b.id, lanKey: f.key, belopp: b.belopp || 0, manad: b.manad, text: 'Markförvärv ' + (fast.fastighetsbeteckning || '') + ' – betalas av ' + ekonomiMarkAktorNamn(f.key), mark: true });
+    });
+    if(row.ib || Object.keys(row.per).length) lan.push(row);
+  });
+  // Egna inbetalningsrader (föreningslån och övriga): preliminära belopp per månad
+  // tills de markeras som genomförda (med datum och faktiskt belopp).
+  const customRow = (key, namn, prel, klart) => {
+    const row = { key, namn, ib: 0, per: {}, items: {}, planerade: {} };
+    (klart || []).forEach(k => {
+      const m = String(k.datum || '').slice(0, 7);
+      if(m < start) row.ib += k.belopp || 0;
+      else if(monthSet.has(m)){
+        row.per[m] = (row.per[m] || 0) + (k.belopp || 0);
+        (row.items[m] = row.items[m] || []).push({ id: k.id, datum: k.datum, typ: (k.belopp || 0) < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(k.belopp || 0), text: k.text || 'Genomförd', kalla: 'likviditetsprognosen' });
+      }
+    });
+    Object.keys(prel || {}).forEach(m => {
+      const v = prel[m];
+      if(!v || !monthSet.has(m)) return;
+      row.per[m] = (row.per[m] || 0) + v;
+      (row.planerade[m] = row.planerade[m] || []).push({ id: key + '-' + m, lanKey: key, belopp: v, manad: m, text: namn + ' (preliminärt)' });
+    });
+    return row;
+  };
+  const flRow = customRow('foreningslan', 'Föreningslån', prog.foreningslan, prog.foreningslanKlart);
+  flRow.budget = ekonomiForeningslanBudget(pid);
+  const ovriga = (prog.ovriga || []).map(o => customRow('ovrig:' + o.id, o.namn || 'Övrigt', o.prel, o.klart));
+  return { insatser, lan, foreningslan: flRow, ovriga };
+
+}
+// Preliminär bokning i en lånerad (eller föreningslånet): sätter/ersätter månadens belopp.
+// Var preliminära/genomförda belopp för en egen rad ligger: föreningslånet eller en övrig inbetalning.
+function ekonomiPrognosCustomStore(prog, key){
+  if(key === 'foreningslan'){
+    return { namn: 'Föreningslån', prel: prog.foreningslan || (prog.foreningslan = {}), klart: prog.foreningslanKlart || (prog.foreningslanKlart = []) };
+  }
+  if(/^ovrig:/.test(key || '')){
+    const o = (prog.ovriga || []).find(x => 'ovrig:' + x.id === key);
+    if(!o) return null;
+    if(!o.prel) o.prel = {};
+    if(!Array.isArray(o.klart)) o.klart = [];
+    return { namn: o.namn || 'Övrigt', prel: o.prel, klart: o.klart, entry: o };
+  }
+  return null;
+}
+async function ekonomiPrognosSetPlanerad(pid, key, m, val, add, ranta){
+  const prog = ekonomiPrognosRec(pid);
+  const store = ekonomiPrognosCustomStore(prog, key);
+  if(ranta != null && ranta !== '' && !store) (prog.senasteRanta = prog.senasteRanta || {})[key] = parseFloat(ranta) || 0;
+  if(store){
+    const fl = store.prel;
+    const nv = add ? (fl[m] || 0) + (val || 0) : val;
+    if(nv == null || nv === 0) delete fl[m]; else fl[m] = nv;
+  } else {
+
+    if(!add) prog.planeradeLan = (prog.planeradeLan || []).filter(p => !(p.lanKey === key && p.manad === m));
+    if(val != null && val !== 0) (prog.planeradeLan = prog.planeradeLan || []).push({ id: uid(), lanKey: key, belopp: val, manad: m, ranta: ranta != null && ranta !== '' ? parseFloat(ranta) || 0 : null, text: val < 0 ? 'Återbetalning (preliminär)' : 'Utökning (preliminär)', skapad: new Date().toISOString() });
+  }
+  await saveEkonomiPrognos();
+
+}
+
+// ---------- Likviditetsprognos från budgeten ----------
+// Per projekt: budgetDetalj[pid].prognos = { start:'YYYY-MM', manader:N,
+// celler:{ [postId]: { 'YYYY-MM': belopp } }, oppna:[groupId...] }.
+// IB = betalda tagna kostnader (reskontra ej obetalda + Mark) per post.
+// Prognos per månad = manuellt fördelat belopp + obetalda fakturor med
+// förfallomånad i den månaden. Utfall = kategoriserade betalda fakturor per månad.
+function ekonomiPrognosRec(pid){
+  const d = ekonomiBudgetDetail(pid);
+  if(!d.prognos) d.prognos = { start: '2026-10', manader: 24, celler: {}, oppna: [] };
+  if(!d.prognos.celler) d.prognos.celler = {};
+  if(!Array.isArray(d.prognos.oppna)) d.prognos.oppna = [];
+  if(!/^\d{4}-\d{2}$/.test(d.prognos.start || '')) d.prognos.start = '2026-10';
+  if(!d.prognos.manader || d.prognos.manader < 3) d.prognos.manader = 24;
+  return d.prognos;
+}
+function ekonomiPrognosMonths(start, n){
+  const [y0, m0] = start.split('-').map(Number);
+  const out = [];
+  for(let i = 0; i < n; i++){
+    const idx = (m0 - 1) + i;
+    const y = y0 + Math.floor(idx / 12);
+    const m = (idx % 12) + 1;
+    out.push(y + '-' + String(m).padStart(2, '0'));
+  }
+  return out;
+}
+// Föreslagen ränta för ett lån: senast använda i prognosen, annars Lån-flikens räntesats.
+function ekonomiPrognosForeslagenRanta(pid, lanKey){
+  const prog = ekonomiPrognosRec(pid);
+  if(prog.senasteRanta && prog.senasteRanta[lanKey] != null) return prog.senasteRanta[lanKey];
+  const d = ekonomiLanDetalj(pid, lanKey, false);
+  return d && d.ranta ? d.ranta : '';
+}
+// Andel av månaden som återstår från ett datum (inkl. dagen), för exakt ränta den
+// månad en bokning markerats som genomförd.
+function ekonomiMonthFraction(datum){
+  const d = new Date(datum + 'T00:00:00Z');
+  if(isNaN(d)) return 1;
+  const days = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  return (days - d.getUTCDate() + 1) / days;
+}
+// Ränta per månad på lånen: IB och bokningar i Lån-fliken (lånets räntesats om bokningen saknar egen)
+// samt preliminära bokningar i prognosen (med sin ränta).
+// Varje bokning är en tranch med egen räntesats (ränta/12 per hel månad); en
+// amortering med samma sats minskar den tranchen. Samma månad som bokningen:
+// hela månaden om preliminär, annars exakt från datumet.
+function ekonomiPrognosRanta(pid, lanKey, months){
+  const prog = ekonomiPrognosRec(pid);
+  const trancher = [];
+  const d = ekonomiLanDetalj(pid, lanKey, false);
+  const basRanta = d ? parseFloat(d.ranta) || 0 : 0;
+  const planerade = (prog.planeradeLan || []).filter(p => p.lanKey === lanKey);
+  // Återbetalning utan egen räntesats ska ändå minska skulden: lånets ränta (Lån-fliken),
+  // annars senast använda ränta för lånet, annars snitträntan på det som lånats dittills.
+  const fallbackRanta = manad => {
+    if(basRanta) return basRanta;
+    const s = prog.senasteRanta && prog.senasteRanta[lanKey]; if(s && parseFloat(s)) return parseFloat(s);
+    const pos = trancher.filter(t => t.belopp > 0 && t.manad <= manad); const sum = pos.reduce((a, t) => a + t.belopp, 0);
+    return sum ? pos.reduce((a, t) => a + t.belopp * t.ranta, 0) / sum : 0;
+  };
+  planerade.filter(p => p.ranta).forEach(p => trancher.push({ manad: p.manad, belopp: p.belopp || 0, ranta: parseFloat(p.ranta) || 0, prelim: true }));
+  // Lån-fliken: IB och alla bokningar räknas också, med lånets räntesats när bokningen saknar egen.
+  if(d){
+    const ibDatum = d.ibDatum || EKONOMI_LAN_IB_DEFAULT;
+    if((d.ib || 0) && basRanta) trancher.push({ manad: ibDatum.slice(0, 7), datum: ibDatum, belopp: d.ib || 0, ranta: basRanta, prelim: false });
+    d.tx.forEach(t => {
+      const manad = String(t.datum || '').slice(0, 7);
+      let r = (t.ranta != null && t.ranta !== '') ? parseFloat(t.ranta) || 0 : basRanta;
+      if(!r && t.typ === 'aterbetalning') r = fallbackRanta(manad);
+      if(!r) return;
+      trancher.push({ manad, datum: t.datum, belopp: t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), ranta: r, prelim: false });
+    });
+  }
+  planerade.filter(p => !p.ranta && (p.belopp || 0) < 0).forEach(p => { const r = fallbackRanta(p.manad); if(r) trancher.push({ manad: p.manad, belopp: p.belopp, ranta: r, prelim: true }); });
+  const per = {}, prelim = {};
+  months.forEach(m => {
+    let r = 0;
+    trancher.forEach(t => {
+      if(t.manad > m) return;
+      const frac = t.manad < m ? 1 : (t.datum ? ekonomiMonthFraction(t.datum) : 1);
+      r += t.belopp * (t.ranta / 100 / 12) * frac;
+      if(t.prelim) prelim[m] = true;
+    });
+    // Löst lån ger ingen ränta: en återbetalning som är större än skulden får inte bli en intäkt.
+    per[m] = Math.max(0, Math.round(r));
+  });
+  return { per, prelim, any: trancher.length > 0 };
+}
+function ekonomiPrognosShortLabel(m){
+  const [y, mo] = m.split('-').map(Number);
+  return MONTH_NAMES[mo - 1].slice(0, 3) + ' ' + String(y).slice(2);
+}
+// Beräknar per post: ib (betalt före start), obetalt per månad, utfall per månad.
+function ekonomiPrognosData(pid){
+  const prog = ekonomiPrognosRec(pid);
+  const months = ekonomiPrognosMonths(prog.start, prog.manader);
+  const monthSet = new Set(months);
+  const per = {}; // postId -> { ib, obetalt:{m:v}, utfall:{m:v}, obetaltItems:{m:[...]}, ibItems:[] }
+  const entry = id => per[id] || (per[id] = { ib: 0, obetalt: {}, utfall: {}, obetaltItems: {}, ibItems: [] });
+  (companyEkonomiData.reskontra[pid] || []).forEach(line => {
+    const parts = ekonomiLineParts(line);
+    if(!parts.length) return;
+    const split = ekonomiLineIsSplit(line);
+    if(!split && ekonomiReskontraMarkDubblett(pid, line)) return; // räknas via Mark
+    const obetald = ekonomiLineObetald(line);
+    const manad = ekonomiLineManad(line);
+    parts.forEach(part => {
+      const post = ekonomiBudgetFindPost(pid, part.kategori);
+      if(!post) return;
+      const e = entry(post.id);
+      if(obetald){
+        // Obetald: väntas betalas förfallomånaden - om den ligger före start, i startmånaden.
+        const m = manad && manad > prog.start ? manad : prog.start;
+        if(monthSet.has(m)){
+          e.obetalt[m] = (e.obetalt[m] || 0) + part.belopp;
+          (e.obetaltItems[m] = e.obetaltItems[m] || []).push({ lopnr: line.lopnr, text: (line.leverantor || '—') + ' · förfaller ' + (line.forfallodatum || '—'), belopp: part.belopp });
+        }
+      } else if(manad && manad >= prog.start){
+        if(monthSet.has(manad)) e.utfall[manad] = (e.utfall[manad] || 0) + part.belopp;
+      } else {
+        e.ib += part.belopp;
+        e.ibItems.push({ lopnr: line.lopnr, text: (line.leverantor || '—') + ' · ' + (line.fakturadatum || '—'), belopp: part.belopp });
+      }
+    });
+  });
+  // Mark (förvärv, gatukostnad, vattenanslutning) räknas som betalt = IB.
+  const tagna = ekonomiBudgetTagna(pid);
+  Object.keys(tagna).forEach(postId => {
+    if(!tagna[postId].mark) return;
+    const e = entry(postId);
+    e.ib += tagna[postId].mark;
+    tagna[postId].items.filter(it => it.typ === 'mark').forEach(it => e.ibItems.push({ text: it.text, belopp: it.belopp }));
+  });
+  // Delbetalningar av förvärvet (Mark → Betalningsplan) som inte är betalda: bort från IB, in på sin månad.
+  const markPost = ekonomiMarkPostFor(pid, 'forvarv', false);
+  if(markPost) ekonomiMarkPlaneradeBetalningar(pid).forEach(({ fast, b }) => {
+    const e = entry(markPost.id);
+    e.ib -= b.belopp || 0;
+    if(monthSet.has(b.manad)){
+      e.obetalt[b.manad] = (e.obetalt[b.manad] || 0) + (b.belopp || 0);
+      (e.obetaltItems[b.manad] = e.obetaltItems[b.manad] || []).push({ lopnr: 'Mark', text: 'Förvärv ' + (fast.fastighetsbeteckning || '') + ' · delbetalning' + (b.aktor ? ' · betalas av ' + ekonomiMarkAktorNamn(b.aktor) : ''), belopp: b.belopp || 0 });
+    }
+  });
+  // Flyttat från IB till en senare månad (prog.ibFlytt): IB minskar, beloppet läggs på vald månad.
+  Object.keys(prog.ibFlytt || {}).forEach(postId => {
+    (prog.ibFlytt[postId] || []).forEach(f => {
+      const e = entry(postId);
+      e.ib -= f.belopp || 0;
+      if(monthSet.has(f.manad)){
+        e.obetalt[f.manad] = (e.obetalt[f.manad] || 0) + (f.belopp || 0);
+        (e.obetaltItems[f.manad] = e.obetaltItems[f.manad] || []).push({ lopnr: f.lopnr, text: (f.text || '') + ' · flyttad från IB', belopp: f.belopp });
+      }
+    });
+  });
+  return { prog, months, per };
+}
+async function saveEkonomiPrognos(){
+  try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara prognosen', e); }
+}
+// Enkel popup för prognosen (samma utseende som specifikationerna i Budget).
+function ekoPopup(opts){
+  const old = document.getElementById('ekoPrognosPopup');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ekoPrognosPopup';
+  overlay.className = 'modal-overlay open';
+  const box = document.createElement('div');
+  box.className = 'modal-box';
+  box.style.cssText = 'width:min(96vw, ' + (opts.maxWidth || 640) + 'px); max-width:none;';
+  box.innerHTML = '<h3>' + escapeHtml(opts.title || '') + '</h3>' + (opts.sub ? '<p class="modal-sub">' + escapeHtml(opts.sub) + '</p>' : '');
+  const body = document.createElement('div');
+  body.style.cssText = 'max-height:60vh; overflow:auto;';
+  box.appendChild(body);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  actions.style.marginTop = '14px';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button'; closeBtn.textContent = 'Stäng';
+  closeBtn.style.cssText = 'background:var(--ink); color:#fff;';
+  actions.appendChild(closeBtn);
+  box.appendChild(actions);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  closeBtn.onclick = close;
+  return { overlay, box, body, actions, close };
+}
+function ekoPopupLine(left, right, opts){
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex; justify-content:space-between; gap:14px; padding:7px 0; border-bottom:1px solid var(--line-soft); align-items:center;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.muted ? ' color:var(--ink-soft);' : '');
+  const l = document.createElement('div'); l.style.minWidth = '0';
+  if(typeof left === 'string') l.innerHTML = left; else l.appendChild(left);
+  const r = document.createElement('div');
+  r.style.cssText = "font-family:'JetBrains Mono',monospace; white-space:nowrap; font-size:13px; display:flex; align-items:center; gap:10px;";
+  if(typeof right === 'string') r.innerHTML = right; else r.appendChild(right);
+  row.appendChild(l); row.appendChild(r);
+  return row;
+}
+function ekoSmallBtn(text, onClick, danger){
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = text;
+  b.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid ' + (danger ? 'var(--danger)' : 'var(--line-soft)') + '; background:#fff; border-radius:5px; cursor:pointer; color:' + (danger ? 'var(--danger)' : 'var(--ink)') + ';';
+  b.onclick = onClick;
+  return b;
+}
+function ekoAptLabel(apt){
+  const buyer = apt.sald && apt.sald.buyer1 && apt.sald.buyer1.name;
+  return '<div style="font-size:13px;"><b>LGH ' + escapeHtml(apt.lgh || '—') + '</b>' + (apt.address ? ' · ' + escapeHtml(apt.address) : '') + '</div>' +
+    '<div style="font-size:11px; color:var(--ink-soft);">' + (buyer ? escapeHtml(buyer) + ' · ' : '') + 'inflyttning ' + escapeHtml(effectiveInflyttningDate(apt) || '—') +
+    (apt.slutbetald && apt.slutbetald.done ? ' · <span style="color:var(--green, #2e7d32);">inbetald ' + escapeHtml(apt.slutbetald.date || '') + '</span>' : ' · ej inbetald') + '</div>';
+}
+// Insatser en viss månad: vilka bostäder, och markera om inbetalningen skett.
+// Markeringen skriver slutbetald i projektöversikten (samma fält), så beloppet
+// flyttar till inbetalningsmånaden om kunden betalade en annan månad.
+function showEkonomiInsatserPopup(pid, title, items){
+  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 860 });
+  if(!items.length){ p.body.innerHTML = '<p class="eko-sub">Inga bostäder.</p>'; return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const prog = ekonomiPrognosRec(pid);
+  const pending = {}; // aptId -> 'YYYY-MM' | '' (ändringar som sparas med "Applicera ändringar")
+  const pendingF = {}; // aptId -> beräknad försäljningsmånad för osålda
+  const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; white-space:nowrap;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th style="text-align:left;">Beräknad försäljning</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  const render = () => {
+    tbody.innerHTML = '';
+    let sum = 0;
+    sorted.forEach(it => {
+      sum += it.belopp;
+      const apt = it.apt;
+      const paid = !!(apt.slutbetald && apt.slutbetald.done);
+      const bek = apt.inflyttningBekraftat && apt.inflyttningBekraftat.date;
+      const fast = paid || !!bek;
+      const tr = document.createElement('tr');
+      const tdStyle = 'padding:6px 8px; font-size:12.5px; text-align:left;';
+      tr.innerHTML = '<td style="' + tdStyle + ' font-weight:600;">' + escapeHtml(apt.lgh || '—') + '</td>' +
+        '<td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td><td style="' + tdStyle + '"></td>' +
+        '<td style="padding:6px 8px; font-size:12.5px;"></td><td style="' + tdStyle + '"></td>';
+      const mTd = tr.children[1], dTd = tr.children[2], fTd = tr.children[3], amtTd = tr.children[4], stTd = tr.children[5];
+      // Beräknad försäljning: sålda visar datumet, osålda får en månadsväljare (styr försäljningsprognosen).
+      if(apt.sald && apt.sald.done){
+        fTd.innerHTML = '<span style="color:var(--good, #2e7d32);">Såld ' + escapeHtml((apt.sald.at || '').slice(0, 10)) + '</span>';
+      } else {
+        const fi = document.createElement('input');
+        fi.type = 'month';
+        fi.value = pendingF[apt.id] != null ? pendingF[apt.id] : ((prog.forsaljningManad || {})[apt.id] || '');
+        fi.title = 'När försäljningen beräknas ske (används i försäljningsprognosen)';
+        fi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
+        fi.onchange = () => { pendingF[apt.id] = fi.value; applyBtn.disabled = false; applyBtn.style.opacity = '1'; };
+        fTd.appendChild(fi);
+        const t = document.createElement('span'); t.style.cssText = 'font-size:10px; color:var(--ink-soft); margin-left:6px;'; t.textContent = 'osåld'; fTd.appendChild(t);
+      }
+      if(fast){
+        const m = paid && apt.slutbetald.date ? apt.slutbetald.date.slice(0, 7) : bek.slice(0, 7);
+        mTd.textContent = ekonomiPrognosShortLabel(m);
+        dTd.innerHTML = paid ? '' : '<span style="color:var(--good, #2e7d32);">Bekräftat ' + escapeHtml(bek) + '</span>';
+      } else {
+        const mi = document.createElement('input');
+        mi.type = 'month';
+        mi.value = pending[apt.id] != null ? pending[apt.id] : (it.manad || '');
+        mi.title = 'Månad i likviditetsprognosen (påverkar inte Inflyttningsinformation)';
+        mi.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; color:var(--danger);';
+        mi.onchange = () => { pending[apt.id] = mi.value; applyBtn.disabled = false; applyBtn.style.opacity = '1'; };
+        mTd.appendChild(mi);
+        const pre = preliminarInflyttningDate(apt);
+        dTd.innerHTML = pre ? '<span style="color:var(--ink-soft);">Prel. ' + escapeHtml(pre) + '</span>' : '<span style="color:var(--ink-soft);">Inget datum</span>';
+      }
+      if(paid){
+        amtTd.textContent = formatKrFull(it.belopp);
+        const st = document.createElement('span');
+        st.style.cssText = 'color:var(--good, #2e7d32); margin-right:8px;';
+        st.textContent = 'Inbetald ' + (apt.slutbetald.date || '');
+        stTd.appendChild(st);
+        stTd.appendChild(ekoSmallBtn('Ångra', async () => {
+          if(!confirm('Ta bort markeringen "inbetald" för LGH ' + (apt.lgh || '') + '?')) return;
+          apt.slutbetald.done = false; apt.slutbetald.by = ''; apt.slutbetald.at = ''; apt.slutbetald.date = '';
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          render(); renderEkonomiPrognos();
+        }, true));
+      } else {
+        const amt = document.createElement('input');
+        amt.type = 'number'; amt.value = it.belopp; amt.title = 'Faktiskt inbetalt belopp';
+        amt.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px; color:var(--danger);';
+        amtTd.appendChild(amt);
+        const date = document.createElement('input');
+        date.type = 'date'; date.value = it.manad && it.manad > today.slice(0, 7) ? it.manad + '-01' : today;
+        date.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; margin-right:6px;';
+        stTd.appendChild(date);
+        stTd.appendChild(ekoSmallBtn('Markera inbetald', async () => {
+          if(!date.value){ showToast('Ange datum.'); return; }
+          apt.slutbetald.done = true; apt.slutbetald.by = myName || ''; apt.slutbetald.at = new Date().toISOString();
+          apt.slutbetald.date = date.value;
+          const ab = parseFloat(String(amt.value).replace(',', '.'));
+          apt.slutbetald.amount = String(ab > 0 ? Math.round(ab) : it.belopp);
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          showToast('LGH ' + (apt.lgh || '') + ' markerad som inbetald ' + date.value);
+          render(); renderEkonomiPrognos();
+        }));
+      }
+      tbody.appendChild(tr);
+    });
+    const sumTr = document.createElement('tr');
+    sumTr.className = 'eko-row-resultat';
+    sumTr.innerHTML = '<td style="padding:8px; text-align:left;">Summa (' + sorted.length + ' bostäder)</td><td></td><td></td><td></td><td style="padding:8px; font-size:12.5px;">' + formatKrFull(sum) + '</td><td></td>';
+    tbody.appendChild(sumTr);
+  };
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button'; applyBtn.textContent = 'Applicera ändringar';
+  applyBtn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  applyBtn.disabled = true; applyBtn.style.opacity = '0.5';
+  applyBtn.onclick = async () => {
+    prog.insatsManad = prog.insatsManad || {};
+    Object.keys(pending).forEach(id => { if(pending[id]) prog.insatsManad[id] = pending[id]; else delete prog.insatsManad[id]; });
+    prog.forsaljningManad = prog.forsaljningManad || {};
+    Object.keys(pendingF).forEach(id => { if(pendingF[id]) prog.forsaljningManad[id] = pendingF[id]; else delete prog.forsaljningManad[id]; });
+    await saveEkonomiPrognos();
+    showToast('Månader uppdaterade i likviditetsprognosen.');
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+  };
+  p.actions.insertBefore(applyBtn, p.actions.firstChild);
+  render();
+  p.body.appendChild(table);
+}
+// Lånets rörelser en viss månad: bokningar från Lån-fliken och preliminärt bokad
+// finansiering som kan bekräftas (datum) – då bokas den som utökning i Lån-fliken.
+function showEkonomiLanManadPopup(pid, l, m){
+  const isFl = !!ekonomiPrognosCustomStore(ekonomiPrognosRec(pid), l.key); // egen rad (föreningslån/övrigt), inte ett lån
+  const p = ekoPopup({ title: l.namn + ' · ' + ekonomiPrognosShortLabel(m), sub: isFl ? 'Röda belopp är preliminära. Markera som genomfört med datum och faktiskt belopp – då blir det svart.' : 'Röda belopp är preliminära. Markera som genomfört med datum och faktiskt belopp – då bokas det i Lån-fliken och blir svart (plus = utökning, minus = återbetalning).' });
+  const items = l.items[m] || [];
+  const plan = l.planerade[m] || [];
+  if(!items.length && !plan.length) p.body.innerHTML = '<p class="eko-sub">Inga rörelser den här månaden.</p>';
+  items.forEach(it => {
+    p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + (it.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + ' ' + escapeHtml(it.datum || '') + '</div><div style="font-size:11px; color:var(--ink-soft);">' + escapeHtml(it.text || '') + (it.kalla ? ' · från ' + escapeHtml(it.kalla) : '') + (isFl ? ' · genomförd' : ' · Lån-fliken') + '</div>',
+      (it.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(it.belopp)));
+  });
+  const prog = ekonomiPrognosRec(pid);
+  const jvPartner = !isFl && ekonomiProjektAgande(pid).partner;
+  const prelBadge = '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Preliminär</span>';
+  plan.forEach(pl => {
+    if(pl.mark){
+      p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + prelBadge + escapeHtml(pl.text || '') + '</div><div style="font-size:11px; color:var(--ink-soft);">ändras under Ekonomi → Mark → Betalningsplan</div>', '+' + formatKrFull(pl.belopp || 0)));
+      return;
+    }
+    const right = document.createElement('div');
+    right.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;';
+    const belopp = document.createElement('input');
+    belopp.type = 'number'; belopp.value = pl.belopp || '';
+    const rInp = document.createElement('input');
+    rInp.type = 'number'; rInp.step = '0.01'; rInp.placeholder = '% ränta'; rInp.title = 'Ränta % per år'; rInp.value = pl.ranta != null ? pl.ranta : '';
+    rInp.style.cssText = 'width:70px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+    rInp.onchange = async () => { pl.ranta = parseFloat(rInp.value.replace(',', '.')) || 0; if(!isFl){ const pp = (prog.planeradeLan || []).find(x => x.id === pl.id); if(pp) pp.ranta = pl.ranta; (prog.senasteRanta = prog.senasteRanta || {})[l.key] = pl.ranta; await saveEkonomiPrognos(); } };
+    belopp.style.cssText = 'width:120px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+    const date = document.createElement('input');
+    date.type = 'date';
+    const today = new Date().toISOString().slice(0, 10);
+    date.value = m > today.slice(0, 7) ? m + '-01' : today;
+    date.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px;';
+    right.appendChild(belopp); if(!isFl) right.appendChild(rInp); right.appendChild(date);
+    if(jvPartner && (pl.belopp || 0) < 0){
+      // Återbetalning till JV-kassan i stället för till aktören (syns under Gemensamma projekt i Koncern).
+      const jvL = document.createElement('label'); jvL.style.cssText = 'font-size:11px; display:flex; gap:4px; align-items:center; cursor:pointer; white-space:nowrap;';
+      jvL.title = 'Pengarna läggs i JV-kassan (Solvinkeln + ' + jvPartner + ') i stället för att gå tillbaka till aktören';
+      const jvCb = document.createElement('input'); jvCb.type = 'checkbox'; jvCb.checked = !!pl.jvKassa;
+      jvCb.onchange = async () => { const pp = (prog.planeradeLan || []).find(x => x.id === pl.id); if(pp) pp.jvKassa = jvCb.checked; pl.jvKassa = jvCb.checked; await saveEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern(); };
+      jvL.appendChild(jvCb); jvL.appendChild(document.createTextNode('Till JV-kassan'));
+      right.appendChild(jvL);
+    }
+    right.appendChild(ekoSmallBtn('Markera genomförd', async () => {
+      const b = parseFloat(String(belopp.value).replace(',', '.'));
+      if(!date.value){ showToast('Ange datum.'); return; }
+      if(!b){ showToast('Ange belopp (minus = återbetalning).'); return; }
+      try{
+        if(isFl){
+          const st = ekonomiPrognosCustomStore(prog, l.key);
+          st.klart.push({ id: uid(), datum: date.value, belopp: b, text: st.namn });
+          delete st.prel[m];
+          await saveEkonomiPrognos();
+          showToast(formatKrFull(Math.abs(b)) + ' ' + st.namn + ' markerat som genomfört ' + date.value);
+        } else {
+          const d = ekonomiLanDetalj(pid, l.key, true);
+          d.tx.push({ id: uid(), datum: date.value, typ: b < 0 ? 'aterbetalning' : 'utokning', belopp: Math.abs(b), ranta: rInp.value !== '' ? parseFloat(rInp.value.replace(',', '.')) || 0 : null, text: pl.text || 'Enligt likviditetsprognosen', kalla: 'likviditetsprognosen', jvKassa: !!pl.jvKassa });
+          prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
+          await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan));
+          await saveEkonomiPrognos();
+          showToast(formatKrFull(Math.abs(b)) + (b < 0 ? ' bokat som återbetalning av ' : ' bokat som utökning av ') + l.namn + ' ' + date.value);
+        }
+      }catch(e){ showDebugError('Kunde inte spara', e); }
+
+      p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+    }));
+    right.appendChild(ekoSmallBtn('Ta bort', async () => {
+      if(!confirm('Ta bort den preliminära bokningen ' + formatKrFull(Math.abs(pl.belopp || 0)) + '?')) return;
+      if(isFl){ const st = ekonomiPrognosCustomStore(prog, l.key); if(st) delete st.prel[m]; } else prog.planeradeLan = (prog.planeradeLan || []).filter(x => x.id !== pl.id);
+      await saveEkonomiPrognos();
+      p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+    }, true));
+    p.body.appendChild(ekoPopupLine('<div style="font-size:13px;"><span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Preliminär</span>' + escapeHtml(pl.text || 'Finansiering') + '</div><div style="font-size:11px; color:var(--ink-soft);">' + (pl.skapad ? 'bokad ' + escapeHtml(pl.skapad.slice(0, 10)) + ' · ' : '') + 'ej genomförd' + (isFl ? '' : ' · ännu inte i Lån-fliken') + '</div>', right));
+  });
+  p.body.appendChild(ekoPopupLine('Netto ' + ekonomiPrognosShortLabel(m), formatKrFull(l.per[m] || 0), { bold: true }));
+  // Lägg till ytterligare en preliminär bokning den här månaden.
+  const addRowEl = document.createElement('div');
+  addRowEl.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap;';
+  const addInp = document.createElement('input');
+  addInp.type = 'number'; addInp.placeholder = 'Belopp (kr, minus = återbetalning)';
+  addInp.style.cssText = 'width:230px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  addRowEl.appendChild(addInp);
+  const addR = document.createElement('input');
+  addR.type = 'number'; addR.step = '0.01'; addR.placeholder = '% ränta'; addR.title = 'Ränta % per år'; addR.value = isFl ? '' : ekonomiPrognosForeslagenRanta(pid, l.key);
+  addR.style.cssText = 'width:80px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  if(!isFl) addRowEl.appendChild(addR);
+  addRowEl.appendChild(ekoSmallBtn('Lägg till preliminärt', async () => {
+    const b = parseFloat(String(addInp.value).replace(',', '.'));
+    if(!b){ showToast('Ange belopp.'); return; }
+    await ekonomiPrognosSetPlanerad(pid, l.key, m, b, true, isFl ? null : (parseFloat(addR.value.replace(',', '.')) || 0));
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+  }));
+  p.body.appendChild(addRowEl);
+}
+
+// Föreningslån: beloppet enligt projektbudgeten bokas preliminärt på vald månad (rött tills
+// det markeras som inbetalt via klick på beloppet i raden).
+function showEkonomiForeningslanPopup(pid, l, months){
+  const budget = ekonomiForeningslanBudget(pid) || 0;
+  const bokat = months.reduce((s, m) => s + (l.per[m] || 0), 0) + (l.ib || 0);
+  const p = ekoPopup({ title: 'Föreningslån', sub: 'Välj vilken månad föreningslånet väntas betalas ut. Beloppet ligger rött i prognosen tills du klickar på det och markerar det som inbetalt.' });
+  p.body.appendChild(ekoPopupLine('Föreningslån enligt projektbudgeten' + (budget ? '' : ' (inte ifyllt under Ekonomi → Budget)'), formatKrFull(budget), { bold: true }));
+  months.forEach(m => {
+    if(!l.per[m]) return;
+    const plan = (l.planerade[m] || []).length;
+    const line = ekoPopupLine(ekonomiPrognosShortLabel(m) + (plan ? ' · preliminärt' : ' · inbetalt'), formatKrFull(l.per[m]), { muted: !plan });
+    if(plan) line.style.color = 'var(--danger)';
+    p.body.appendChild(line);
+  });
+  if(l.ib) p.body.appendChild(ekoPopupLine('Inbetalt före startmånaden (IB)', formatKrFull(l.ib), { muted: true }));
+  p.body.appendChild(ekoPopupLine('Kvar att boka', formatKrFull(Math.max(0, budget - bokat)), { bold: true }));
+  const form = document.createElement('div');
+  form.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:14px; flex-wrap:wrap;';
+  const sel = document.createElement('select');
+  sel.className = 'eko-inline-select';
+  sel.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join('');
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.value = Math.max(0, budget - bokat) || ''; inp.placeholder = 'Belopp (kr)';
+  inp.style.cssText = 'width:150px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  form.appendChild(sel); form.appendChild(inp);
+  form.appendChild(ekoSmallBtn('Boka preliminärt', async () => {
+    const b = parseFloat(String(inp.value).replace(',', '.'));
+    if(!b){ showToast('Ange belopp.'); return; }
+    await ekonomiPrognosSetPlanerad(pid, 'foreningslan', sel.value, b, true);
+    showToast(formatKrFull(b) + ' föreningslån bokat preliminärt ' + ekonomiPrognosShortLabel(sel.value));
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+  }));
+  p.body.appendChild(form);
+}
+// Vad händer med likviditeten en viss månad – och boka finansiering om den är negativ.
+function showEkonomiLikviditetPopup(pid, m, info){
+  const p = ekoPopup({ title: 'Likviditet ' + ekonomiPrognosShortLabel(m), sub: 'Så här räknas likviditeten fram den här månaden.' });
+  p.body.appendChild(ekoPopupLine(info.prevLabel, formatKrFull(info.prev), { muted: true }));
+  info.inb.forEach(x => { if(x.belopp) p.body.appendChild(ekoPopupLine('+ ' + escapeHtml(x.namn), formatKrFull(x.belopp))); });
+  info.ut.forEach(x => { if(x.belopp) p.body.appendChild(ekoPopupLine('− ' + escapeHtml(x.namn), '−' + formatKrFull(x.belopp))); });
+  const res = ekoPopupLine('= Likviditet ' + ekonomiPrognosShortLabel(m), formatKrFull(info.saldo), { bold: true });
+  if(info.saldo < 0) res.style.color = 'var(--danger)';
+  p.body.appendChild(res);
+
+  const form = document.createElement('div');
+  form.style.cssText = 'margin-top:16px; padding:12px 14px; border:1px solid var(--line-soft); border-radius:8px; background:var(--paper-soft, #f6f4ef);';
+  form.innerHTML = '<div style="font-weight:700; margin-bottom:6px;">Boka finansiering</div><p class="eko-sub" style="margin:0 0 8px;">' + (info.saldo < 0 ? 'Likviditeten är negativ. ' : '') + 'Boka ett lån preliminärt – det läggs som inbetalning på lånets rad den här månaden. När pengarna kommit in klickar du på beloppet i lånets rad och bekräftar, då bokas det även i Lån-fliken.</p>';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; align-items:center;';
+  const sel = document.createElement('select');
+  sel.className = 'eko-inline-select';
+  EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated).forEach(f => {
+    const o = document.createElement('option'); o.value = f.key; o.textContent = f.label.replace(' (kr)', ''); sel.appendChild(o);
+  });
+  sel.value = 'lanSparbanken';
+  const belopp = document.createElement('input');
+  belopp.type = 'number'; belopp.placeholder = 'Belopp (kr)';
+  belopp.value = info.saldo < 0 ? Math.ceil(-info.saldo / 100000) * 100000 : '';
+  belopp.style.cssText = 'width:140px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  const text = document.createElement('input');
+  text.type = 'text'; text.placeholder = 'Text (valfritt)'; text.value = 'Finansiering enligt likviditetsprognosen';
+  text.style.cssText = 'flex:1; min-width:180px; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'upload-btn'; btn.textContent = 'Boka preliminärt';
+  btn.onclick = async () => {
+    const b = parseFloat(String(belopp.value).replace(',', '.'));
+    if(!b || b <= 0){ showToast('Ange belopp.'); return; }
+    const prog = ekonomiPrognosRec(pid);
+    (prog.planeradeLan = prog.planeradeLan || []).push({ id: uid(), lanKey: sel.value, belopp: b, manad: m, text: text.value.trim(), skapad: new Date().toISOString() });
+    await saveEkonomiPrognos();
+    const f = EKONOMI_TAB_CONFIG.lan.fields.find(x => x.key === sel.value);
+    showToast(formatKrFull(b) + ' bokat preliminärt på ' + (f ? f.label.replace(' (kr)', '') : sel.value) + ' ' + ekonomiPrognosShortLabel(m));
+    p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+  };
+  row.appendChild(sel); row.appendChild(belopp); row.appendChild(text); row.appendChild(btn);
+  form.appendChild(row);
+  p.body.appendChild(form);
+}
+// IB för en kostnadspost: vad som ingår, och flytta hela eller delar av en faktura
+// till en senare månad (t.ex. obetalda leverantörsskulder som betalas i november).
+// Flyttarna sparas i prog.ibFlytt[postId] = [{ id, lopnr, text, belopp, manad }].
+function showEkonomiIbFlyttPopup(pid, post, e, months, prog){
+  const p = ekoPopup({ title: post.namn + ' – IB ' + ekonomiPrognosShortLabel(prog.start), sub: 'Fakturor och Mark-belopp som är betalda före startmånaden. Flytta hela eller en del av en faktura till den månad den faktiskt betalas – då minskar IB och beloppet läggs på den månaden.', maxWidth: 820 });
+  const flytt = () => (prog.ibFlytt && prog.ibFlytt[post.id]) || [];
+  const render = () => {
+    p.body.innerHTML = '';
+    const moves = flytt();
+    const movedFor = lopnr => moves.filter(f => f.lopnr === lopnr).reduce((s, f) => s + (f.belopp || 0), 0);
+    let kvar = 0;
+    e.ibItems.forEach(it => {
+      const flyttat = it.lopnr ? movedFor(it.lopnr) : 0;
+      const rest = (it.belopp || 0) - flyttat;
+      kvar += rest;
+      const right = document.createElement('div');
+      right.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;';
+      const amt = document.createElement('span');
+      amt.textContent = formatKrFull(rest) + (flyttat ? ' (av ' + formatKrFull(it.belopp) + ')' : '');
+      right.appendChild(amt);
+      if(it.lopnr && rest > 0.5){
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.placeholder = 'Belopp'; inp.value = Math.round(rest);
+        inp.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+        const sel = document.createElement('select');
+        sel.className = 'eko-inline-select';
+        sel.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join('');
+        right.appendChild(inp); right.appendChild(sel);
+        right.appendChild(ekoSmallBtn('Flytta', async () => {
+          const b = parseFloat(String(inp.value).replace(',', '.'));
+          if(!b || b <= 0){ showToast('Ange belopp.'); return; }
+          if(b > rest + 0.5){ showToast('Högst ' + formatKrFull(rest) + ' kan flyttas.'); return; }
+          prog.ibFlytt = prog.ibFlytt || {};
+          (prog.ibFlytt[post.id] = prog.ibFlytt[post.id] || []).push({ id: uid(), lopnr: it.lopnr, text: it.text, belopp: b, manad: sel.value });
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+          render();
+        }));
+      }
+      p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + (it.lopnr ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--ink); color:#fff; margin-right:6px;">Reskontra ' + escapeHtml(String(it.lopnr)) + '</span>' : '<span style="font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue); margin-right:6px;">Mark</span>') + escapeHtml(it.text || '') + '</div>', right));
+    });
+    p.body.appendChild(ekoPopupLine('IB ' + ekonomiPrognosShortLabel(prog.start), formatKrFull(kvar), { bold: true }));
+    if(moves.length){
+      const h = document.createElement('div');
+      h.style.cssText = 'font-weight:700; margin-top:14px;';
+      h.textContent = 'Flyttat från IB';
+      p.body.appendChild(h);
+      moves.forEach(f => {
+        const right = document.createElement('div');
+        right.style.cssText = 'display:flex; align-items:center; gap:8px;';
+        const amt = document.createElement('span'); amt.textContent = formatKrFull(f.belopp); right.appendChild(amt);
+        right.appendChild(ekoSmallBtn('Ångra', async () => {
+          prog.ibFlytt[post.id] = prog.ibFlytt[post.id].filter(x => x.id !== f.id);
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+          render();
+        }, true));
+        p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + escapeHtml(String(f.lopnr)) + ' ' + escapeHtml(f.text || '') + ' → <b>' + ekonomiPrognosShortLabel(f.manad) + '</b></div>', right));
+      });
+    }
+  };
+  render();
+}
+// ---------- Försäljningsprognos (andel sålda enheter och andel av insatser per månad) ----------
+// Sålda enheter räknas från sitt försäljningsdatum (när Såld kryssades i), osålda från
+// den beräknade försäljningsmånad som anges i insatslistan (prog.forsaljningManad[aptId]).
+function ekonomiForsaljningManad(apt, prog){
+  if(apt.sald && apt.sald.done) return { m: (apt.sald.at || '').slice(0, 7), sald: true };
+  return { m: (prog && prog.forsaljningManad && prog.forsaljningManad[apt.id]) || '', sald: false };
+}
+function ekonomiForsaljningsData(pid){
+  const prog = ekonomiPrognosRec(pid);
+  const apts = ekonomiPrognosAptsCache[pid] || [];
+  const total = apts.length;
+  const totalKr = apts.reduce((s, a) => s + (parseKr(a.totalpris) || 0), 0);
+  const per = {}; let utanDatum = 0;
+  apts.forEach(a => {
+    const f = ekonomiForsaljningManad(a, prog);
+    if(!f.m){ utanDatum++; return; }
+    const kr = f.sald ? (parseKr(a.sald.price) || parseKr(a.totalpris) || 0) : (parseKr(a.totalpris) || 0);
+    per[f.m] = per[f.m] || { n: 0, kr: 0, planN: 0, planKr: 0 };
+    if(f.sald){ per[f.m].n++; per[f.m].kr += kr; } else { per[f.m].planN++; per[f.m].planKr += kr; }
+  });
+  const prognosMonths = ekonomiPrognosMonths(prog.start, prog.manader);
+  const all = Object.keys(per).concat(prognosMonths).sort();
+  if(!all.length) return { pts: [], total, totalKr, utanDatum, saldaN: 0, saldaKr: 0 };
+  const months = ekonomiPrognosMonths(all[0], 1);
+  while(months[months.length - 1] < all[all.length - 1]) months.push(ekonomiPrognosMonths(months[months.length - 1], 2)[1]);
+  const today = new Date().toISOString().slice(0, 7);
+  let soldN = 0, soldKr = 0, planN = 0, planKr = 0, saldaKr = 0;
+  const pts = months.map(m => {
+    const s = per[m] || { n: 0, kr: 0, planN: 0, planKr: 0 };
+    soldN += s.n; soldKr += s.kr; planN += s.planN; planKr += s.planKr; saldaKr += s.kr;
+    // Ackumulerat: t.o.m. innevarande månad bara det som faktiskt sålts; framåt läggs det
+    // planerade till (även planerat i tidigare månader som ännu inte sålts).
+    const fut = m > today;
+    const cn = soldN + (fut ? planN : 0), ckr = soldKr + (fut ? planKr : 0);
+    return { m, n: s.n, kr: s.kr, planN: s.planN, planKr: s.planKr, cn, ckr, pn: total ? cn / total : 0, pk: totalKr ? ckr / totalKr : 0, prognos: fut };
+  });
+  return { pts, total, totalKr, utanDatum, saldaN: apts.filter(a => a.sald && a.sald.done).length, saldaKr };
+}
+function renderEkonomiForsaljning(){
+  const wrap = document.getElementById('ekoForsaljningWrap');
+  const pid = currentEkonomiLikviditetProjectId;
+  if(!wrap || !pid) return;
+  const D = ekonomiForsaljningsData(pid);
+  wrap.innerHTML = '';
+  if(!D.pts.length){ wrap.innerHTML = '<p class="eko-sub">Inga bostäder än.</p>'; return; }
+  const sub = document.createElement('p');
+  sub.className = 'eko-sub';
+  sub.style.margin = '0 0 8px';
+  sub.textContent = D.saldaN + ' av ' + D.total + ' enheter sålda (' + Math.round(D.total ? D.saldaN / D.total * 100 : 0) + ' %), ' + Math.round(D.totalKr ? D.saldaKr / D.totalKr * 100 : 0) + ' % av insatserna.' + (D.utanDatum ? ' ' + D.utanDatum + ' osålda saknar beräknat försäljningsdatum (anges i insatslistan) och ingår inte i prognosen.' : '');
+  wrap.appendChild(sub);
+  const legend = document.createElement('div');
+  legend.style.cssText = 'display:flex; gap:18px; font-size:12.5px; color:var(--ink-soft); margin:0 0 6px;';
+  legend.innerHTML = '<span><i style="display:inline-block; width:18px; height:2px; background:#2f5f8f; vertical-align:middle; margin-right:6px;"></i>Andel av enheter</span><span><i style="display:inline-block; width:18px; height:2px; background:#b08a00; vertical-align:middle; margin-right:6px;"></i>Andel av insatser</span><span><i style="display:inline-block; width:18px; height:2px; background:repeating-linear-gradient(90deg, #7a7368 0 4px, transparent 4px 7px); vertical-align:middle; margin-right:6px;"></i>Prognos (ej sålt än)</span>';
+  wrap.appendChild(legend);
+  const pts = D.pts, W = 940, H = 280, L = 46, R = 130, T = 16, B = 36;
+  const X = i => L + (pts.length > 1 ? i * (W - L - R) / (pts.length - 1) : 0), Y = v => T + (1 - v) * (H - T - B);
+  const lbl = m => ekonomiPrognosShortLabel(m);
+  let g = '';
+  [0, .25, .5, .75, 1].forEach(v => { g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="#e9e4da"/><text x="' + (L - 8) + '" y="' + (Y(v) + 4) + '" text-anchor="end" style="font-family:JetBrains Mono,monospace; font-size:10.5px; fill:#7a7368;">' + Math.round(v * 100) + ' %</text>'; });
+  pts.forEach((p, i) => { if(pts.length <= 14 || i % 2 === 0) g += '<text x="' + X(i) + '" y="' + (H - B + 18) + '" text-anchor="middle" style="font-family:JetBrains Mono,monospace; font-size:10.5px; fill:#7a7368;">' + lbl(p.m) + '</text>'; });
+  const split = pts.findIndex(p => p.prognos);
+  if(split > 0){ const sx = X(split) - (X(1) - X(0)) / 2; g += '<line x1="' + sx + '" x2="' + sx + '" y1="' + T + '" y2="' + (H - B) + '" stroke="#d9d3c7" stroke-dasharray="3 3"/><text x="' + (sx + 6) + '" y="' + (T + 10) + '" style="font-family:JetBrains Mono,monospace; font-size:10px; fill:#7a7368;">prognos →</text>'; }
+  const series = (key, color, name, dy) => {
+    let d = '';
+    for(let i = 1; i < pts.length; i++) d += '<line x1="' + X(i - 1) + '" y1="' + Y(pts[i - 1][key]) + '" x2="' + X(i) + '" y2="' + Y(pts[i][key]) + '" stroke="' + color + '" stroke-width="2.2"' + (pts[i].prognos ? ' stroke-dasharray="5 4"' : '') + '/>';
+    d += pts.map((p, i) => '<circle cx="' + X(i) + '" cy="' + Y(p[key]) + '" r="4" fill="' + (p.prognos ? '#fff' : color) + '" stroke="' + color + '" stroke-width="2"/>').join('');
+    const last = pts[pts.length - 1];
+    d += '<text x="' + (X(pts.length - 1) + 10) + '" y="' + (Y(last[key]) + 4 + dy) + '" fill="' + color + '" style="font-family:Inter,sans-serif; font-weight:600; font-size:11.5px;">' + Math.round(last[key] * 100) + ' % ' + name + '</text>';
+    return d;
+  };
+  const last = pts[pts.length - 1];
+  const overlap = Math.abs(Y(last.pn) - Y(last.pk)) < 14;
+  g += series('pk', '#b08a00', 'insatser', overlap ? 8 : 0) + series('pn', '#2f5f8f', 'enheter', overlap ? -8 : 0);
+  g += pts.map((p, i) => '<rect data-i="' + i + '" x="' + (X(i) - 18) + '" y="' + T + '" width="36" height="' + (H - T - B) + '" fill="transparent"/>').join('');
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:relative; background:#fff; border:1px solid var(--line-soft); border-radius:12px; padding:14px 16px 6px;';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('width', '100%'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Ackumulerad försäljning per månad');
+  svg.innerHTML = g;
+  const tip = document.createElement('div');
+  tip.style.cssText = 'position:absolute; pointer-events:none; background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12px; box-shadow:0 6px 20px rgba(0,0,0,0.12); display:none; min-width:180px; z-index:2;';
+  svg.addEventListener('mousemove', e => {
+    const r = e.target.closest('rect[data-i]'); if(!r){ tip.style.display = 'none'; return; }
+    const p = pts[+r.dataset.i];
+    tip.innerHTML = '<div style="font-weight:700;">' + lbl(p.m) + (p.prognos ? ' · prognos' : '') + '</div>' + p.n + ' sålda' + (p.planN ? ' <span style="color:var(--danger);">(' + p.planN + ' planerade)</span>' : '') + '<br>Ackumulerat <b>' + p.cn + ' av ' + D.total + '</b> (' + Math.round(p.pn * 100) + ' %)<br>Insatser ' + (p.ckr / 1e6).toFixed(1) + ' MSEK (' + Math.round(p.pk * 100) + ' %)';
+    tip.style.display = 'block'; tip.style.left = (e.offsetX + 16) + 'px'; tip.style.top = (e.offsetY - 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  holder.appendChild(svg); holder.appendChild(tip);
+  wrap.appendChild(holder);
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; margin-top:12px; white-space:nowrap;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Månad</th><th>Sålda enheter</th><th>Ackumulerat</th><th>Andel enheter</th><th>Insatser (sålt)</th><th>Andel av insatser</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  pts.forEach(p => {
+    const tr = document.createElement('tr');
+    const st = ' style="font-size:12.5px; padding:6px 10px;"';
+    const pl = (v, txt) => v ? ' <span style="color:var(--danger);">(' + txt + ')</span>' : '';
+    tr.innerHTML = '<td' + st + '>' + lbl(p.m) + (p.prognos ? ' <span style="font-size:10px; color:var(--ink-soft);">prognos</span>' : '') + '</td><td' + st + '>' + p.n + pl(p.planN, p.planN) + '</td><td' + st + '>' + p.cn + ' av ' + D.total + '</td><td' + st + '>' + Math.round(p.pn * 100) + ' %</td><td' + st + '>' + formatKrFull(p.kr) + pl(p.planKr, formatKrFull(p.planKr)) + '</td><td' + st + '>' + Math.round(p.pk * 100) + ' %</td>';
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(table);
+  wrap.appendChild(scroll);
+}
+// Försäljningsprognosen som sida 2 i PDF:en.
+function ekonomiForsaljningPdfPage(doc, pid){
+  const D = ekonomiForsaljningsData(pid);
+  if(!D.pts.length) return;
+  const pts = D.pts, lbl = m => ekonomiPrognosShortLabel(m);
+  const fmtSp = s => s.replace(/[  ]/g, ' ').replace(/−/g, '-');
+  doc.addPage();
+  doc.setFontSize(15); doc.setTextColor(31, 26, 20); doc.text('Försäljningsprognos', 12, 14);
+  doc.setFontSize(9); doc.setTextColor(110); doc.text(D.saldaN + ' av ' + D.total + ' enheter sålda · andel sålda enheter och andel av insatserna, ackumulerat per månad · heldraget = sålt, streckat = prognos', 12, 19.5);
+  const leg = (x, color, text, dash) => { doc.setDrawColor(...color); doc.setLineWidth(0.7); if(dash) doc.setLineDashPattern([1.5, 1.2], 0); doc.line(x, 24.5, x + 7, 24.5); doc.setLineDashPattern([], 0); doc.setFontSize(8); doc.setTextColor(90); doc.text(text, x + 9, 25.8); };
+  leg(12, [47, 95, 143], 'Andel av enheter'); leg(50, [176, 138, 0], 'Andel av insatser'); leg(90, [120, 120, 120], 'Prognos', true);
+  const L = 22, Rr = 215, T = 32, Bt = 110;
+  const X = i => L + (pts.length > 1 ? i * (Rr - L) / (pts.length - 1) : 0), Y = v => T + (1 - v) * (Bt - T);
+  doc.setDrawColor(233, 228, 218); doc.setLineWidth(0.25);
+  [0, .25, .5, .75, 1].forEach(v => { doc.line(L, Y(v), Rr, Y(v)); doc.setFontSize(7); doc.setTextColor(122, 115, 104); doc.text(Math.round(v * 100) + ' %', L - 2, Y(v) + 1, { align: 'right' }); });
+  pts.forEach((p, i) => { if(pts.length <= 14 || i % 2 === 0){ doc.setFontSize(7); doc.setTextColor(122, 115, 104); doc.text(lbl(p.m), X(i), Bt + 5, { align: 'center' }); } });
+  const split = pts.findIndex(p => p.prognos);
+  if(split > 0){ const sx = X(split) - (X(1) - X(0)) / 2; doc.setDrawColor(200); doc.setLineDashPattern([1, 1], 0); doc.line(sx, T, sx, Bt); doc.setLineDashPattern([], 0); doc.setFontSize(7); doc.setTextColor(140); doc.text('prognos', sx + 1.5, T + 3); }
+  const last = pts[pts.length - 1];
+  const overlap = Math.abs(Y(last.pn) - Y(last.pk)) < 4;
+  const series = (key, color, name, dy) => {
+    doc.setDrawColor(...color); doc.setLineWidth(0.8);
+    for(let i = 1; i < pts.length; i++){ if(pts[i].prognos) doc.setLineDashPattern([1.5, 1.2], 0); else doc.setLineDashPattern([], 0); doc.line(X(i - 1), Y(pts[i - 1][key]), X(i), Y(pts[i][key])); }
+    doc.setLineDashPattern([], 0);
+    pts.forEach((p, i) => { doc.setFillColor(...(p.prognos ? [255, 255, 255] : color)); doc.circle(X(i), Y(p[key]), 1.1, 'FD'); });
+    doc.setFontSize(8); doc.setTextColor(...color); doc.setFont(undefined, 'bold'); doc.text(Math.round(last[key] * 100) + ' % ' + name, Rr + 3, Y(last[key]) + 1 + dy); doc.setFont(undefined, 'normal');
+  };
+  series('pk', [176, 138, 0], 'insatser', overlap ? 2.5 : 0); series('pn', [47, 95, 143], 'enheter', overlap ? -2.5 : 0);
+  doc.autoTable({ startY: Bt + 10, head: [['Månad', 'Sålda enheter', 'Ackumulerat', 'Andel enheter', 'Insatser (sålt)', 'Andel av insatser']],
+    body: pts.map(p => [lbl(p.m) + (p.prognos ? ' (prognos)' : ''), String(p.n) + (p.planN ? ' (' + p.planN + ')' : ''), p.cn + ' av ' + D.total, Math.round(p.pn * 100) + ' %', fmtSp(Math.round(p.kr / 1000).toLocaleString('sv-SE')) + (p.planKr ? ' (' + fmtSp(Math.round(p.planKr / 1000).toLocaleString('sv-SE')) + ')' : '') + ' tkr', Math.round(p.pk * 100) + ' %']),
+    styles: { fontSize: 7, cellPadding: 1.2, halign: 'center', textColor: 30 }, headStyles: { fillColor: [58, 44, 32], textColor: 255, fontSize: 7 }, columnStyles: { 0: { halign: 'left' } }, margin: { left: 12, right: 12 },
+    didParseCell: h => { const p = pts[h.row.index]; if(h.section === 'body' && p && (h.column.index === 1 || h.column.index === 4) && p.planN && !p.n && !p.kr) h.cell.styles.textColor = [178, 58, 58]; } });
+}
+// Fördela en kostnadspost i prognosen: jämnt (kvar att fördela över N månader) eller
+// ett fast belopp per månad under N månader från vald månad.
+function showEkonomiFordelaPopup(pid, post, kvar, obetaltSum, months, prog){
+  // Obetalda fakturor ingår redan i tagna kostnader (och ligger på sina förfallomånader), så de dras inte av igen.
+  const attFordela = Math.max(0, kvar);
+  const p = ekoPopup({ title: 'Fördela: ' + post.namn, sub: 'Kvar att fördela ' + formatKrFull(attFordela) + ' (budget minus tagna kostnader' + (obetaltSum ? ', varav obetalda fakturor ' + formatKrFull(obetaltSum) + ' redan ligger på sina förfallomånader' : '') + '). Välj hur beloppen ska läggas ut i månaderna.', maxWidth: 560 });
+  const mk = (tag, css) => { const el = document.createElement(tag); if(css) el.style.cssText = css; return el; };
+  const monthSel = () => { const s = mk('select'); s.className = 'eko-inline-select'; s.innerHTML = months.map(m => '<option value="' + m + '">' + ekonomiPrognosShortLabel(m) + '</option>').join(''); return s; };
+  const numInp = (val, ph, w) => { const i = mk('input', 'width:' + (w || 90) + 'px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;'); i.type = 'number'; i.value = val; i.placeholder = ph || ''; return i; };
+  const row = (labelText, els) => { const r = mk('div', 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 12px;'); const l = mk('span', 'font-size:12.5px; color:var(--ink-soft); min-width:110px;'); l.textContent = labelText; r.appendChild(l); els.forEach(e => r.appendChild(e)); return r; };
+  const apply = async (from, n, fn) => {
+    const startIdx = months.indexOf(from);
+    if(startIdx < 0){ showToast('Från-månaden ligger utanför prognosen.'); return; }
+    if(!n || n < 1){ showToast('Ange antal månader.'); return; }
+    const slice = months.slice(startIdx, startIdx + n);
+    fn(slice);
+    await saveEkonomiPrognos();
+    p.close();
+    renderEkonomiPrognos();
+  };
+  // Alternativ 1: jämnt
+  const h1 = mk('div', 'font-weight:700; margin-top:4px;'); h1.textContent = 'Fördela jämnt';
+  const s1 = mk('div', 'font-size:12px; color:var(--ink-soft);'); s1.textContent = formatKrFull(attFordela) + ' delas lika över månaderna (ersätter tidigare fördelning på posten).';
+  const from1 = monthSel(); from1.value = prog.start;
+  const n1 = numInp(6, 'mån', 70);
+  const b1 = ekoSmallBtn('Fördela jämnt', () => apply(from1.value, parseInt(n1.value, 10), slice => {
+    const perM = Math.round(attFordela / slice.length);
+    const cells = prog.celler[post.id] = {};
+    slice.forEach((m, i) => { cells[m] = i === slice.length - 1 ? attFordela - perM * (slice.length - 1) : perM; });
+  }));
+  b1.style.cssText += 'background:var(--blue); color:#fff; border-color:var(--blue);';
+  p.body.appendChild(h1); p.body.appendChild(s1);
+  p.body.appendChild(row('Från månad', [from1, mk('span', 'font-size:12.5px; color:var(--ink-soft);'), n1, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'månader'; return t; })(), b1]));
+  // Alternativ 2: fast belopp per månad
+  const h2 = mk('div', 'font-weight:700; margin-top:10px; padding-top:12px; border-top:1px solid var(--line-soft);'); h2.textContent = 'Fast belopp per månad';
+  const s2 = mk('div', 'font-size:12px; color:var(--ink-soft);'); s2.textContent = 'Samma belopp bokas varje månad under valt antal månader från vald månad. Andra månader på posten rörs inte.';
+  const bel = numInp('', 'kr per månad', 130);
+  const from2 = monthSel(); from2.value = prog.start;
+  const n2 = numInp(12, 'mån', 70);
+  const sum2 = mk('span', 'font-size:12px; color:var(--ink-soft);');
+  const upd = () => { const b = parseFloat(String(bel.value).replace(',', '.')) || 0, n = parseInt(n2.value, 10) || 0; sum2.textContent = b && n ? '= ' + formatKrFull(b * n) + ' totalt' : ''; };
+  bel.oninput = upd; n2.oninput = upd;
+  const b2 = ekoSmallBtn('Boka belopp', () => {
+    const b = parseFloat(String(bel.value).replace(',', '.'));
+    if(!b){ showToast('Ange belopp per månad.'); return; }
+    return apply(from2.value, parseInt(n2.value, 10), slice => {
+      const cells = prog.celler[post.id] || (prog.celler[post.id] = {});
+      slice.forEach(m => { cells[m] = b; });
+    });
+  });
+  b2.style.cssText += 'background:var(--blue); color:#fff; border-color:var(--blue);';
+  p.body.appendChild(h2); p.body.appendChild(s2);
+  p.body.appendChild(row('Belopp', [bel, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'kr/mån'; return t; })()]));
+  p.body.appendChild(row('Från månad', [from2, n2, (() => { const t = mk('span', 'font-size:12.5px; color:var(--ink-soft);'); t.textContent = 'månader'; return t; })(), sum2, b2]));
+  // Rensa
+  const clr = ekoSmallBtn('Rensa fördelningen på posten', async () => { delete prog.celler[post.id]; await saveEkonomiPrognos(); p.close(); renderEkonomiPrognos(); }, true);
+  const cw = mk('div', 'margin-top:8px; padding-top:10px; border-top:1px solid var(--line-soft);'); cw.appendChild(clr);
+  p.body.appendChild(cw);
+}
+// Kvar att fördela för en kostnadspost (budget − tagna − det som ligger i prognosen).
+function showEkonomiPostKvarPopup(post, t, pp, months, prog){
+  const tagna = t.reskontra + t.mark;
+  const kvar = (post.budget || 0) - tagna;
+  const obetalt = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
+  const manuellt = months.reduce((s, m) => s + (pp.cells[m] || 0), 0);
+  const rest = kvar - manuellt; // obetalda fakturor ingår redan i tagna
+  const p = ekoPopup({ title: post.namn, sub: 'Kvar att fördela i likviditetsprognosen.' });
+  p.body.appendChild(ekoPopupLine('Budget', formatKrFull(post.budget || 0)));
+  p.body.appendChild(ekoPopupLine('− Tagna kostnader (reskontra ' + formatKrFull(t.reskontra) + (t.mark ? ' + Mark ' + formatKrFull(t.mark) : '') + ')', '−' + formatKrFull(tagna)));
+  p.body.appendChild(ekoPopupLine('= Kvar att fördela', formatKrFull(kvar), { bold: true }));
+  if(obetalt) p.body.appendChild(ekoPopupLine('Varav obetalda fakturor, ligger på sina förfallomånader (ingår i tagna)', formatKrFull(obetalt), { muted: true }));
+  p.body.appendChild(ekoPopupLine('− Fördelat i prognosen (' + months.filter(m => pp.cells[m]).length + ' månader)', '−' + formatKrFull(manuellt), { muted: true }));
+  const r = ekoPopupLine(Math.abs(rest) > 0.5 ? (rest > 0 ? '= Ofördelat' : '= Fördelat utöver budget') : '= Allt fördelat ✓', formatKrFull(rest), { bold: true });
+  if(Math.abs(rest) > 0.5) r.style.color = 'var(--danger)';
+  p.body.appendChild(r);
+  if(pp.e.ib){
+    p.body.appendChild(ekoPopupLine('IB ' + ekonomiPrognosShortLabel(prog.start) + ' (betalt före start, ingår i tagna)', formatKrFull(pp.e.ib), { muted: true }));
+  }
+}
+// Ägande i ett projekt: Solvinkelns andel (Ägarandel under Projekt) och JV-partnern.
+function ekonomiProjektAgande(pid){
+  const meta = companyEkonomiData.meta[pid] || {};
+  const andel = meta.agarandel != null && meta.agarandel !== '' ? Math.max(0, Math.min(100, parseFloat(meta.agarandel) || 0)) : 100;
+  const partner = (meta.jvPartner || '').trim();
+  return { solvinkeln: andel, partner: partner || null, partnerAndel: partner ? 100 - andel : 0 };
+}
+// Preliminärt slutförande: den månad projektet avslutas fördelas kvarvarande kapital
+// (likviditeten den månaden) enligt ägandet. Returnerar { manad, belopp, delar:[{namn, andel, belopp}] }.
+function ekonomiPrognosSlutforande(pid, months, saldoPerManad){
+  const prog = ekonomiPrognosRec(pid);
+  const m = prog.slutforandeManad;
+  if(!m || !months.includes(m)) return null;
+  const belopp = Math.max(0, saldoPerManad[m] || 0);
+  const ag = ekonomiProjektAgande(pid);
+  // Vinsten behålls i JV-kassan (valet görs under Koncern → Gemensamma projekt): ingen utdelning till aktörerna.
+  if(prog.vinstHantering === 'kassa' && ag.partner) return { manad: m, belopp, jv: true, delar: [{ namn: 'JV-kassan (Solvinkeln + ' + ag.partner + ')', andel: 100, belopp, key: null, jv: true }] };
+  const delar = [{ namn: 'Solvinkeln', andel: ag.solvinkeln, belopp: Math.round(belopp * ag.solvinkeln / 100), key: 'lanSolvinkeln' }];
+  if(ag.partner){
+    const key = /derome/i.test(ag.partner) ? 'lanDerome' : /nbe/i.test(ag.partner) ? 'lanNBE' : /boro/i.test(ag.partner) ? 'lanBORO' : null;
+    delar.push({ namn: ag.partner, andel: ag.partnerAndel, belopp: belopp - delar[0].belopp, key });
+  }
+  return { manad: m, belopp, delar };
+}
+
+function renderEkonomiPrognos(){
+  const pid = currentEkonomiLikviditetProjectId;
+  const wrap = document.getElementById('ekoPrognosWrap');
+  if(!wrap || !pid) return;
+  const struktur = ekonomiBudgetStruktur(pid);
+  const { prog, months, per } = ekonomiPrognosData(pid);
+  document.getElementById('ekoPrognosStart').value = prog.start;
+  document.getElementById('ekoPrognosManader').value = prog.manader;
+  const visaUtfall = document.getElementById('ekoPrognosVisaUtfall').checked;
+  const tkr = (prog.enhet || 'tkr') === 'tkr';
+  document.getElementById('ekoPrognosEnhet').value = tkr ? 'tkr' : 'kr';
+  const fmtV = v => { if(tkr){ const r = Math.round(v / 1000); return r === 0 ? '0' : r.toLocaleString('sv-SE'); } return formatKrFull(v); };
+  const cell = v => (v && Math.round(tkr ? v / 1000 : v) !== 0) ? fmtV(v) : ''; // inga "−0"
+  const cellOpts = { fmt: fmtV, scale: tkr ? 1000 : 1 };
+  const mono = "font-family:'JetBrains Mono',monospace; text-align:center; font-size:12px; padding:7px 8px;";
+  const pdfRows = [];
+  const sumPer = obj => months.reduce((s, m) => s + (obj[m] || 0), 0);
+  const nVal = 3 + months.length; // Budget, IB, månader…, Prognos totalt
+  const blank = n => Array.from({ length: n }, () => '');
+
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  const thead = document.createElement('thead');
+  const thc = 'style="text-align:center;"';
+  thead.innerHTML = '<tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Kostnadspost' + (tkr ? ' <span style="font-weight:400; text-transform:none;">(tkr)</span>' : '') + '</th><th ' + thc + '>Budget</th><th ' + thc + '>IB ' + ekonomiPrognosShortLabel(prog.start) + '</th>' +
+    months.map(m => '<th ' + thc + '>' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th ' + thc + '>Prognos totalt</th></tr>';
+  thead.querySelector('th:last-child').title = 'IB + alla månader i prognosen';
+  // Klick på en månadsrubrik = markera månaden som preliminärt slutförande (★).
+  [...thead.querySelectorAll('th')].slice(3, 3 + months.length).forEach((th, i) => {
+    const m = months[i];
+    th.style.cursor = 'pointer';
+    if(prog.slutforandeManad === m){ th.innerHTML = '★ ' + th.textContent; th.style.color = 'var(--blue)'; th.title = 'Preliminärt slutförande – klicka för att ta bort markeringen'; }
+    else th.title = 'Klicka för att markera som preliminärt slutförande';
+    th.onclick = async () => {
+      if(prog.slutforandeManad === m){ if(!confirm('Ta bort markeringen preliminärt slutförande ' + ekonomiPrognosShortLabel(m) + '?')) return; prog.slutforandeManad = null; }
+      else { if(!confirm('Markera ' + ekonomiPrognosShortLabel(m) + ' som preliminärt slutförande? Kvarvarande kapital den månaden fördelas enligt ägandet (Ägarandel under Projekt).')) return; prog.slutforandeManad = m; }
+      await saveEkonomiPrognos(); renderEkonomiPrognos();
+    };
+  });
+
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+
+  const addRow = (cls, label, indent, values, opts, nums) => {
+    pdfRows.push({ label: (opts && opts.pdfLabel) || (typeof label === 'string' ? label : (label.firstChild && label.firstChild.nodeType === 3 ? label.firstChild.textContent : label.textContent)), nums: nums || [], bold: !!(opts && opts.bold), small: !!(opts && opts.small), section: !!(opts && opts.section), indent });
+    const tr = document.createElement('tr');
+    if(cls) tr.className = cls;
+    const first = document.createElement('td');
+    first.style.cssText = 'font-size:12.5px; text-align:left; padding-left:' + indent + 'px; position:sticky; left:0; background:' + (opts && opts.bg ? opts.bg : 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    if(typeof label === 'string') first.textContent = label; else first.appendChild(label);
+    tr.appendChild(first);
+    values.forEach(v => {
+      const td = document.createElement('td');
+      td.style.cssText = mono + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11px; color:var(--ink-soft);' : '');
+      if(v && v.nodeType) td.appendChild(v); else td.textContent = v == null ? '' : v;
+      tr.appendChild(td);
+    });
+    if(opts && opts.bg) tr.style.background = opts.bg;
+    tbody.appendChild(tr);
+    return tr;
+  };
+  const sectionRow = text => {
+    const tr = addRow('', text, 6, blank(nVal), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', section: true });
+    tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;';
+    return tr;
+  };
+  const clickable = (text, title, onClick) => {
+    const s = document.createElement('span');
+    s.textContent = text;
+    if(onClick){ s.className = 'editable'; s.style.cursor = 'pointer'; s.title = title; s.onclick = onClick; }
+    return s;
+  };
+
+  // ----- Inbetalningar (alltid först) -----
+  sectionRow('Inbetalningar');
+  const inb = ekonomiPrognosInbetalningar(pid, prog.start, months);
+  const inbTot = { ib: 0, per: {} };
+  months.forEach(m => { inbTot.per[m] = 0; });
+  const inbRows = []; // för likviditetspopupen: { namn, ib, per }
+
+  // Insatser enligt inflyttningsdag/slutbetalning.
+  const insLbl = document.createElement('span');
+  insLbl.textContent = 'Insatser';
+  insLbl.className = 'editable'; insLbl.style.cursor = 'pointer'; insLbl.title = 'Visa alla bostäder';
+  insLbl.onclick = () => showEkonomiInsatserPopup(pid, 'Insatser – alla bostäder', [].concat(inb.insatser.ibItems, ...months.map(m => inb.insatser.items[m] || []), inb.insatser.utanDatum));
+  inbTot.ib += inb.insatser.ib;
+  months.forEach(m => { inbTot.per[m] += inb.insatser.per[m] || 0; });
+  inbRows.push({ namn: 'Insatser', ib: inb.insatser.ib, per: inb.insatser.per });
+  addRow('', insLbl, 6, [cell(inb.insatser.budget), clickable(cell(inb.insatser.ib), 'Visa bostäderna', inb.insatser.ib ? () => showEkonomiInsatserPopup(pid, 'Insatser före ' + ekonomiPrognosShortLabel(prog.start) + ' (IB)', inb.insatser.ibItems) : null)]
+    .concat(months.map(m => { const c = clickable(cell(inb.insatser.per[m] || 0), 'Visa bostäderna och markera inbetalt', inb.insatser.per[m] ? () => showEkonomiInsatserPopup(pid, 'Insatser ' + ekonomiPrognosShortLabel(m), inb.insatser.items[m] || []) : null); if((inb.insatser.items[m] || []).some(it => !it.betald)) c.style.color = 'var(--danger)'; return c; }), [cell(inb.insatser.ib + sumPer(inb.insatser.per))]), { bg: 'var(--blue-soft)', pdfLabel: 'Insatser' }, [inb.insatser.budget, inb.insatser.ib].concat(months.map(m => inb.insatser.per[m] || 0), [inb.insatser.ib + sumPer(inb.insatser.per)]));
+
+  // Lån och föreningslån: tom cell = skriv in preliminärt belopp (plus = utökning, minus =
+  // återbetalning). Röda belopp är ej genomförda - klick öppnar popupen där de markeras
+  // som genomförda (bokas då i Lån-fliken) och blir svarta.
+  const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
+  const visadeLan = prog.visadeLan || [];
+  const lanRows = lanFields.map(f => inb.lan.find(l => l.key === f.key) || (visadeLan.includes(f.key) ? { key: f.key, namn: f.label.replace(' (kr)', ''), ib: 0, per: {}, items: {}, planerade: {} } : null)).filter(Boolean);
+  lanRows.concat([inb.foreningslan], inb.ovriga).forEach(l => {
+    inbTot.ib += l.ib;
+    months.forEach(m => { inbTot.per[m] += l.per[m] || 0; });
+    inbRows.push({ namn: l.namn, ib: l.ib, per: l.per });
+    const cells = months.map(m => {
+      const wrapEl = document.createElement('div');
+      wrapEl.style.minWidth = '70px';
+      const plan = l.planerade[m] || [], real = l.items[m] || [];
+      if(!plan.length && !real.length){
+        likviditetsbudgetEditableCell(wrapEl, null, async (val) => {
+          let ranta = null;
+          if(val && !ekonomiPrognosCustomStore(prog, l.key)){ // ränta bara på riktiga lån
+            const r = prompt('Ränta (% per år) på ' + formatKrFull(Math.abs(val)) + ' ' + l.namn + '?\nRäntan läggs som kostnad under Finansiering varje månad.', String(ekonomiPrognosForeslagenRanta(pid, l.key)));
+            if(r === null){ renderEkonomiPrognos(); return; }
+            ranta = parseFloat(String(r).replace(',', '.').replace('%', '')) || 0;
+          }
+          await ekonomiPrognosSetPlanerad(pid, l.key, m, val, false, ranta);
+          renderEkonomiPrognos();
+        }, cellOpts);
+
+      } else {
+        const sp = clickable(cell(l.per[m] || 0) || '0', plan.length ? 'Ej genomfört – klicka för att markera som genomfört' : 'Visa bokningarna', () => showEkonomiLanManadPopup(pid, l, m));
+        if(plan.length) sp.style.color = 'var(--danger)';
+        wrapEl.appendChild(sp);
+      }
+      return wrapEl;
+    });
+    const lbl = document.createElement('span');
+    lbl.textContent = l.namn + (l.forfall ? ' (förfaller ' + l.forfall + ')' : '');
+    if(l.key === 'foreningslan') lbl.title = 'Skriv in beloppet den månad lånet väntas betalas ut (rött tills det markerats som genomfört).' + (l.budget ? ' Enligt kalkylen ' + formatKrFull(l.budget) + '.' : '');
+    if(l.key === 'foreningslan'){ lbl.className = 'editable'; lbl.style.cursor = 'pointer'; lbl.onclick = () => showEkonomiForeningslanPopup(pid, l, months); }
+    if(/^ovrig:/.test(l.key)){
+      // Egen inbetalningsrad: klicka på namnet för att byta, ✕ tar bort raden.
+      lbl.className = 'editable'; lbl.style.cursor = 'pointer'; lbl.title = 'Klicka för att byta namn';
+      lbl.onclick = async () => {
+        const st = ekonomiPrognosCustomStore(prog, l.key);
+        const nytt = prompt('Namn på inbetalningen:', st ? st.namn : '');
+        if(nytt === null || !st) return;
+        st.entry.namn = nytt.trim() || 'Övrigt';
+        await saveEkonomiPrognos(); renderEkonomiPrognos();
+      };
+      const del = document.createElement('button');
+      del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort raden';
+      del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; margin-left:6px; font-size:11px;';
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if(!confirm('Ta bort inbetalningsraden "' + l.namn + '" med alla belopp?')) return;
+        prog.ovriga = (prog.ovriga || []).filter(x => 'ovrig:' + x.id !== l.key);
+        await saveEkonomiPrognos(); renderEkonomiPrognos();
+      };
+      lbl.appendChild(del);
+    }
+    addRow('', lbl, 6, [cell(l.budget || 0), cell(l.ib)].concat(cells, [cell(l.ib + sumPer(l.per))]), { bg: 'var(--blue-soft)', pdfLabel: l.namn }, [l.budget || 0, l.ib].concat(months.map(m => l.per[m] || 0), [l.ib + sumPer(l.per)]));
+  });
+  // "+ Visa lån": lägg till en lånerad som ännu inte har några bokningar.
+  const dolda = lanFields.filter(f => !lanRows.some(l => l.key === f.key));
+  if(dolda.length){
+    const sel = document.createElement('select');
+    sel.className = 'eko-inline-select';
+    sel.style.cssText = 'font-size:11px; color:var(--ink-soft);';
+    sel.innerHTML = '<option value="">+ Visa lån…</option>' + dolda.map(f => '<option value="' + f.key + '">' + escapeHtml(f.label.replace(' (kr)', '')) + '</option>').join('');
+    sel.onchange = async () => {
+      if(!sel.value) return;
+      (prog.visadeLan = prog.visadeLan || []).push(sel.value);
+      await saveEkonomiPrognos();
+      renderEkonomiPrognos();
+    };
+    const tr = addRow('', sel, 6, blank(nVal), { pdfLabel: '' });
+    pdfRows.pop();
+    tr.style.background = 'var(--blue-soft)';
+  }
+  // "+ Övrig inbetalning": egen rad med fritt namn, belopp skrivs direkt i cellerna.
+  {
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button'; addBtn.textContent = '+ Övrig inbetalning';
+    addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
+    addBtn.onclick = async () => {
+      const namn = prompt('Namn på inbetalningen (t.ex. Övrigt, Bidrag, Försäljning av tomt):', 'Övrigt');
+      if(namn === null) return;
+      (prog.ovriga = prog.ovriga || []).push({ id: uid(), namn: namn.trim() || 'Övrigt', prel: {}, klart: [] });
+      await saveEkonomiPrognos(); renderEkonomiPrognos();
+    };
+    const tr2 = addRow('', addBtn, 6, blank(nVal), { pdfLabel: '' });
+    pdfRows.pop();
+    tr2.style.background = 'var(--blue-soft)';
+  }
+  addRow('eko-row-resultat', 'Summa inbetalningar', 6, ['', cell(inbTot.ib)].concat(months.map(m => cell(inbTot.per[m])), [cell(inbTot.ib + sumPer(inbTot.per))]), { bold: true }, ['', inbTot.ib].concat(months.map(m => inbTot.per[m]), [inbTot.ib + sumPer(inbTot.per)]));
+
+  // ----- Utbetalningar (budgetens struktur) -----
+  sectionRow('Utbetalningar');
+  const tagna = ekonomiBudgetTagna(pid);
+  const totals = { budget: 0, ib: 0, prognos: {}, utfall: {} };
+  months.forEach(m => { totals.prognos[m] = 0; totals.utfall[m] = 0; });
+  const utRows = []; // för likviditetspopupen: { namn, per }
+
+  const postPrognos = post => {
+    const cells = prog.celler[post.id] || {};
+    const e = per[post.id] || { ib: 0, obetalt: {}, utfall: {}, obetaltItems: {}, ibItems: [] };
+    const perMonth = {};
+    months.forEach(m => { perMonth[m] = (cells[m] || 0) + (e.obetalt[m] || 0); });
+    return { cells, e, perMonth, sum: months.reduce((s, m) => s + perMonth[m], 0) };
+  };
+
+  // Ränta på lånebokningar i prognosen: en rad per lån under Finansiering.
+  const rantaRows = lanFields.map(f => Object.assign({ key: f.key, namn: 'Ränta ' + f.label.replace(' (kr)', '') }, ekonomiPrognosRanta(pid, f.key, months))).filter(r => r.any);
+  const grupper = struktur.kostnadsgrupper.slice();
+  let finGroup = grupper.find(gr => /finansiering/i.test(gr.grupp || ''));
+  if(rantaRows.length && !finGroup){ finGroup = { id: 'prognos-finansiering', grupp: 'Finansiering', poster: [] }; grupper.push(finGroup); }
+  const finId = finGroup ? finGroup.id : null;
+  grupper.forEach(group => {
+    const open = prog.oppna.includes(group.id);
+    const g = { budget: 0, ib: 0, prognos: {}, utfall: {}, sum: 0 };
+    months.forEach(m => { g.prognos[m] = 0; g.utfall[m] = 0; });
+    group.poster.forEach(post => {
+      const pp = postPrognos(post);
+      g.budget += post.budget || 0;
+      g.ib += pp.e.ib;
+      months.forEach(m => { g.prognos[m] += pp.perMonth[m]; g.utfall[m] += pp.e.utfall[m] || 0; });
+      g.sum += pp.sum;
+    });
+    if(group.id === finId) rantaRows.forEach(r => { months.forEach(m => { g.prognos[m] += r.per[m] || 0; }); g.sum += sumPer(r.per); });
+    totals.budget += g.budget; totals.ib += g.ib;
+    months.forEach(m => { totals.prognos[m] += g.prognos[m]; totals.utfall[m] += g.utfall[m]; });
+    utRows.push({ namn: group.grupp, per: g.prognos });
+
+    const lbl = document.createElement('span');
+    lbl.style.cursor = 'pointer';
+    lbl.textContent = (open ? '▾ ' : '▸ ') + group.grupp;
+    lbl.title = open ? 'Fäll ihop' : 'Visa posterna';
+    lbl.onclick = async () => {
+      prog.oppna = open ? prog.oppna.filter(id => id !== group.id) : prog.oppna.concat([group.id]);
+      await saveEkonomiPrognos();
+      renderEkonomiPrognos();
+    };
+    addRow('', lbl, 6, [cell(g.budget), cell(g.ib)].concat(months.map(m => cell(g.prognos[m])), [cell(g.ib + g.sum)]), { bold: true, bg: 'var(--paper-soft, #f6f4ef)', pdfLabel: group.grupp }, [g.budget, g.ib].concat(months.map(m => g.prognos[m]), [g.ib + g.sum]));
+    if(visaUtfall && months.some(m => g.utfall[m])){
+      addRow('', 'Utfall', 18, ['', ''].concat(months.map(m => cell(g.utfall[m])), ['']), { small: true, bg: 'var(--paper-soft, #f6f4ef)' }, ['', ''].concat(months.map(m => g.utfall[m]), ['']));
+    }
+    if(!open) return;
+
+    group.poster.forEach(post => {
+      const t = tagna[post.id] || { reskontra: 0, mark: 0, items: [] };
+      const pp = postPrognos(post);
+      const kvar = (post.budget || 0) - (t.reskontra + t.mark);
+      // IB-cell: klick visar specifikationen.
+      const ibSpan = document.createElement('span');
+      ibSpan.textContent = cell(pp.e.ib);
+      if(pp.e.ib || pp.e.ibItems.length){ ibSpan.className = 'editable'; ibSpan.style.cursor = 'pointer'; ibSpan.title = 'Visa vad som ingår och flytta fakturor till en senare månad'; ibSpan.onclick = () => showEkonomiIbFlyttPopup(pid, post, pp.e, months, prog); if(!pp.e.ib) ibSpan.textContent = '0'; }
+      // Postens namn (klick = kvar att fördela) + "Fördela jämnt".
+      const nameWrap = document.createElement('span');
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = post.namn;
+      nameSpan.className = 'editable';
+      nameSpan.style.cursor = 'pointer';
+      nameSpan.title = 'Visa kvar att fördela';
+      nameSpan.onclick = () => showEkonomiPostKvarPopup(post, t, pp, months, prog);
+      nameWrap.appendChild(nameSpan);
+      const obetaltSum = months.reduce((s, m) => s + (pp.e.obetalt[m] || 0), 0);
+      const restEfter = kvar - months.reduce((s, m) => s + (pp.cells[m] || 0), 0); // obetalda fakturor ingår redan i tagna
+      // Status: gul = inte helt fördelad enligt budget, grön = helt fördelad, röd = över budget (visas inte i PDF).
+      const statusBg = (!(post.budget || 0) && !(t.reskontra + t.mark) && !pp.sum) ? '' : (restEfter < -0.5 ? '#f8d7da' : (restEfter > 0.5 ? '#fff3bf' : '#d9f2dc'));
+      nameSpan.title = restEfter < -0.5 ? 'Över budget med ' + formatKrFull(-restEfter) : (restEfter > 0.5 ? 'Kvar att fördela ' + formatKrFull(restEfter) : 'Helt fördelad enligt budget');
+      const spread = document.createElement('button');
+      spread.type = 'button';
+      spread.textContent = 'Fördela…';
+      spread.title = 'Fördela jämnt eller boka ett fast belopp per månad';
+      spread.style.cssText = 'font-size:10px; padding:1px 6px; border:1px solid var(--line-soft); background:#fff; border-radius:4px; cursor:pointer; color:var(--ink-soft); margin-left:6px;';
+      spread.onclick = () => showEkonomiFordelaPopup(pid, post, kvar, obetaltSum, months, prog);
+      nameWrap.appendChild(spread);
+      const monthCells = months.map(m => {
+        const td = document.createElement('span');
+        const manual = pp.cells[m];
+        const ob = pp.e.obetalt[m] || 0;
+        const wrapEl = document.createElement('div');
+        wrapEl.style.minWidth = '70px';
+        likviditetsbudgetEditableCell(wrapEl, manual != null && manual !== 0 ? manual : null, async (val) => {
+          const cells = prog.celler[post.id] || (prog.celler[post.id] = {});
+          if(val == null || val === 0) delete cells[m]; else cells[m] = val;
+          await saveEkonomiPrognos();
+          renderEkonomiPrognos();
+        }, cellOpts);
+        if(manual){ const msp = wrapEl.querySelector('span.editable'); if(msp){ msp.style.color = 'var(--danger)'; msp.title = 'Prognos (ej utfall)'; } }
+        if(ob){
+          const obEl = document.createElement('div');
+          obEl.style.cssText = 'font-size:10px; color:var(--danger); cursor:pointer;';
+          obEl.textContent = '+ faktura ' + fmtV(ob);
+          obEl.title = (pp.e.obetaltItems[m] || []).map(it => it.lopnr + ' ' + it.text + ' ' + formatKrFull(it.belopp)).join('\n');
+          obEl.onclick = () => showEkonomiTagnaSpec(post.namn + ' - obetalda fakturor ' + ekonomiPrognosShortLabel(m), { reskontra: ob, mark: 0, items: (pp.e.obetaltItems[m] || []).map(it => ({ typ: 'reskontra', lopnr: it.lopnr, text: it.text, belopp: it.belopp })) });
+          wrapEl.appendChild(obEl);
+        }
+        td.appendChild(wrapEl);
+        return td;
+      });
+      const postTr = addRow('', nameWrap, 24, [cell(post.budget || 0), ibSpan].concat(monthCells, [cell(pp.e.ib + pp.sum)]), { pdfLabel: post.namn }, [post.budget || 0, pp.e.ib].concat(months.map(m => pp.perMonth[m]), [pp.e.ib + pp.sum]));
+      if(statusBg) postTr.firstChild.style.background = statusBg;
+      if(visaUtfall && months.some(m => pp.e.utfall[m])){
+        addRow('', 'Utfall', 36, ['', ''].concat(months.map(m => cell(pp.e.utfall[m] || 0)), [cell(months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0))]), { small: true }, ['', ''].concat(months.map(m => pp.e.utfall[m] || 0), [months.reduce((s, m) => s + (pp.e.utfall[m] || 0), 0)]));
+      }
+    });
+    if(group.id === finId) rantaRows.forEach(r => {
+      const cells = months.map(m => {
+        const sp = document.createElement('span');
+        sp.textContent = cell(r.per[m] || 0);
+        sp.title = 'Beräknad ränta på lånebokningar i prognosen' + (r.prelim[m] ? ' (preliminära bokningar)' : '');
+        if(r.prelim[m]) sp.style.color = 'var(--danger)';
+        return sp;
+      });
+      addRow('', r.namn, 24, ['', ''].concat(cells, [cell(sumPer(r.per))]), { pdfLabel: r.namn }, ['', ''].concat(months.map(m => r.per[m] || 0), [sumPer(r.per)]));
+    });
+  });
+
+  addRow('eko-row-resultat', 'Summa utbetalningar', 6, [cell(totals.budget), cell(totals.ib)].concat(months.map(m => cell(totals.prognos[m])), [cell(totals.ib + sumPer(totals.prognos))]), { bold: true }, [totals.budget, totals.ib].concat(months.map(m => totals.prognos[m]), [totals.ib + sumPer(totals.prognos)]));
+  if(visaUtfall && months.some(m => totals.utfall[m])) addRow('', 'Summa utfall', 6, ['', ''].concat(months.map(m => cell(totals.utfall[m])), [cell(sumPer(totals.utfall))]), { small: true }, ['', ''].concat(months.map(m => totals.utfall[m]), [sumPer(totals.utfall)]));
+
+  // ----- Netto och likviditet -----
+  // Preliminärt slutförande: likviditeten den månaden (före fördelning) delas ut enligt ägandet.
+  const ingaende = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
+  const saldoFore = {}; { let s0 = ingaende; months.forEach(m => { s0 += inbTot.per[m] - totals.prognos[m]; saldoFore[m] = s0; }); }
+  const slut = ekonomiPrognosSlutforande(pid, months, saldoFore);
+  const dist = {}; months.forEach(m => { dist[m] = 0; });
+  if(slut){
+    dist[slut.manad] = slut.belopp;
+    const red = v => { const sp = document.createElement('span'); sp.textContent = cell(v); sp.style.color = 'var(--danger)'; sp.title = 'Preliminärt – fördelas när projektet slutförs'; return sp; };
+    addRow('', '★ Fördelning av kapital vid slutförande ' + ekonomiPrognosShortLabel(slut.manad), 6, ['', ''].concat(months.map(m => m === slut.manad ? red(slut.belopp) : ''), [cell(slut.belopp)]), { bold: true, pdfLabel: 'Fördelning av kapital vid slutförande ' + ekonomiPrognosShortLabel(slut.manad) }, ['', ''].concat(months.map(m => dist[m]), [slut.belopp]));
+    slut.delar.forEach(d => {
+      addRow('', 'varav ' + d.namn + ' (' + d.andel + ' %)', 24, ['', ''].concat(months.map(m => m === slut.manad ? red(d.belopp) : ''), [cell(d.belopp)]), { small: true }, ['', ''].concat(months.map(m => m === slut.manad ? d.belopp : 0), [d.belopp]));
+    });
+    utRows.push({ namn: 'Fördelning av kapital vid slutförande', per: dist });
+  }
+  addRow('', 'Netto per månad', 6, ['', cell(inbTot.ib - totals.ib)].concat(months.map(m => cell(inbTot.per[m] - totals.prognos[m] - dist[m])), [cell((inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos) - sumPer(dist))]), { small: true }, ['', inbTot.ib - totals.ib].concat(months.map(m => inbTot.per[m] - totals.prognos[m] - dist[m]), [(inbTot.ib - totals.ib) + sumPer(inbTot.per) - sumPer(totals.prognos) - sumPer(dist)]));
+  let saldo = ingaende;
+
+  const saldoCells = months.map((m, i) => {
+    const prev = saldo;
+    saldo += inbTot.per[m] - totals.prognos[m] - dist[m];
+    const s = document.createElement('span');
+    s.textContent = cell(saldo) || '0';
+    s.className = 'editable';
+    s.style.cursor = 'pointer';
+    s.title = 'Visa vad som händer med likviditeten' + (saldo < 0 ? ' och boka finansiering' : '');
+    if(saldo < 0) s.style.color = 'var(--danger)';
+    const info = {
+      prev, prevLabel: i === 0 ? 'Ingående likviditet' : 'Likviditet ' + ekonomiPrognosShortLabel(months[i - 1]),
+      inb: inbRows.map(r => ({ namn: r.namn, belopp: r.per[m] || 0 })),
+      ut: utRows.map(r => ({ namn: r.namn, belopp: r.per[m] || 0 })),
+      saldo
+    };
+    s.onclick = () => showEkonomiLikviditetPopup(pid, m, info);
+    return s;
+  });
+  const saldoNums = []; let s2 = ingaende; months.forEach(m => { s2 += inbTot.per[m] - totals.prognos[m] - dist[m]; saldoNums.push(s2); });
+  addRow('eko-row-resultat', 'Likviditet', 6, ['', cell(ingaende) || '0'].concat(saldoCells, ['']), { bold: true }, ['', ingaende].concat(saldoNums, ['']));
+
+  ekonomiPrognosPdfModel = { pid, start: prog.start, months, rows: pdfRows, tkr, lan: lanRows.map(l => ({ key: l.key, namn: l.namn, ib: l.ib || 0, per: l.per })) };
+  renderEkonomiPrognosNyckeltal();
+  wrap.innerHTML = '';
+  wrap.appendChild(table);
+  renderEkonomiForsaljning();
+}
+// ---------- Likviditetsprognos som PDF (liggande A4, 12 månader per sida) ----------
+let ekonomiPrognosPdfModel = null;
+// Högsta belåning under prognosperioden: summan av saldona på Kameo, Sparbanken och Triol
+// månad för månad, det högsta värdet. LTC = högsta belåning / totalkostnad.
+const EKONOMI_LTC_LAN = ['lanKameo', 'lanSparbanken', 'lanTriol'];
+function ekonomiPrognosMaxBelaning(M){
+  const lan = (M.lan || []).filter(l => EKONOMI_LTC_LAN.includes(l.key)); // bara externa byggkreditiv
+  const bal = lan.map(l => l.ib || 0);
+  let max = bal.reduce((s, v) => s + v, 0);
+  M.months.forEach(m => {
+    lan.forEach((l, i) => { bal[i] += l.per[m] || 0; });
+    const t = bal.reduce((s, v) => s + v, 0);
+    if(t > max) max = t;
+  });
+  return max;
+}
+// Nyckeltal till prognosen och PDF:en. Beräknade värden kommer från Budget (samma
+// definitioner som korten där); varje värde kan skrivas över i prognosvyn och
+// sparas då i prognosen (prog.nyckeltal[key]). Marginal och LTC räknas på de
+// värden som visas (ev. överskrivna) om de inte själva är överskrivna.
+const EKONOMI_PROGNOS_NYCKELTAL = [
+  { key: 'kvm', label: 'Total antal kvm', typ: 'kvm' },
+  { key: 'insatser', label: 'Insatser', typ: 'kr' },
+  { key: 'foreningslan', label: 'Föreningslån', typ: 'kr' },
+  { key: 'totalkostnad', label: 'Totalkostnad', typ: 'kr' },
+  { key: 'vinst', label: 'Budgeterad vinst', typ: 'kr' },
+  { key: 'marginal', label: 'Projektmarginal', typ: 'pct' },
+  { key: 'belaning', label: 'Högsta belåning', typ: 'kr' },
+  { key: 'ltc', label: 'LTC (belåning / totalkostnad)', typ: 'pct' }
+];
+function ekonomiPrognosNyckeltalFormat(typ, v){
+  if(v == null || isNaN(v)) return '—';
+  const clean = s => s.replace(/[  ]/g, ' ').replace(/−/g, '-');
+  if(typ === 'kvm') return clean(Math.round(v).toLocaleString('sv-SE')) + ' kvm';
+  if(typ === 'pct') return clean((v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 })) + ' %';
+  return clean(Math.round(v).toLocaleString('sv-SE')) + ' kr';
+}
+function ekonomiPrognosNyckeltal(M){
+  const pid = M.pid;
+  const prog = ekonomiPrognosRec(pid);
+  const over = prog.nyckeltal || {};
+  const apts = ekonomiPrognosAptsCache[pid] || [];
+  const kvm = apts.reduce((s, a) => { const n = parseFloat(String(a.totalyta || '').replace(',', '.').replace(/[^0-9.]/g, '')); return s + (isNaN(n) ? 0 : n); }, 0);
+  const insatser = apts.reduce((s, a) => s + (parseKr(a.totalpris) || 0), 0);
+  const detail = ekonomiBudgetDetail(pid);
+  const totalkostnad = ekonomiProjectBudgetTotals(pid).budget;
+  const budgetIntakt = ekonomiBudgetIntakt(pid);
+  const computed = {
+    kvm, insatser, foreningslan: detail.foreningslan || 0, totalkostnad,
+    vinst: budgetIntakt != null ? budgetIntakt - totalkostnad : null,
+    belaning: ekonomiPrognosMaxBelaning(M)
+  };
+  const val = k => (over[k] != null ? over[k] : computed[k]);
+  // Härledda: marginal på visad vinst / budgeterad intäkt, LTC på visad belåning / visad totalkostnad.
+  const intaktVisad = budgetIntakt != null ? (over.vinst != null ? over.vinst + val('totalkostnad') : budgetIntakt) : null;
+  computed.marginal = val('vinst') != null && intaktVisad ? val('vinst') / intaktVisad : null;
+  computed.ltc = val('totalkostnad') ? val('belaning') / val('totalkostnad') : null;
+  return EKONOMI_PROGNOS_NYCKELTAL.map(d => {
+    const v = over[d.key] != null ? over[d.key] : computed[d.key];
+    return { key: d.key, label: d.label, typ: d.typ, value: v, computed: computed[d.key], override: over[d.key] != null, text: ekonomiPrognosNyckeltalFormat(d.typ, v) };
+  });
+}
+// Nyckeltalskorten ovanför prognosen: klicka på värdet för att skriva över det.
+function renderEkonomiPrognosNyckeltal(){
+  const wrap = document.getElementById('ekoPrognosNyckeltal');
+  const M = ekonomiPrognosPdfModel;
+  if(!wrap || !M) return;
+  const pid = M.pid;
+  const prog = ekonomiPrognosRec(pid);
+  wrap.innerHTML = '';
+  ekonomiPrognosNyckeltal(M).forEach(k => {
+    const card = document.createElement('div');
+    card.className = 'home-card';
+    card.style.cssText = 'padding:12px 14px 10px; gap:4px; cursor:default;';
+    const title = document.createElement('div');
+    title.className = 'home-card-title editable';
+    title.style.cssText = 'font-size:16px; cursor:pointer;' + (k.override ? ' color:var(--blue);' : '');
+    title.textContent = k.text;
+    title.title = 'Klicka för att skriva över värdet (används i PDF:en)';
+    title.onclick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = 'any';
+      inp.value = k.value == null ? '' : (k.typ === 'pct' ? Math.round(k.value * 1000) / 10 : Math.round(k.value));
+      inp.placeholder = k.typ === 'pct' ? '%' : (k.typ === 'kvm' ? 'kvm' : 'kr');
+      inp.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px; font-size:14px;';
+      card.replaceChild(inp, title);
+      inp.focus(); inp.select();
+      let done = false;
+      const save = async () => {
+        if(done) return; done = true;
+        const raw = inp.value.trim();
+        prog.nyckeltal = prog.nyckeltal || {};
+        if(raw === '') delete prog.nyckeltal[k.key];
+        else { const n = parseFloat(raw.replace(',', '.')); if(!isNaN(n)) prog.nyckeltal[k.key] = k.typ === 'pct' ? n / 100 : n; }
+        await saveEkonomiPrognos();
+        renderEkonomiPrognosNyckeltal();
+      };
+      inp.addEventListener('blur', save);
+      inp.addEventListener('keydown', e => { if(e.key === 'Enter') inp.blur(); if(e.key === 'Escape'){ done = true; renderEkonomiPrognosNyckeltal(); } });
+    };
+    card.appendChild(title);
+    const sub = document.createElement('div');
+    sub.className = 'home-card-sub';
+    sub.textContent = k.label;
+    card.appendChild(sub);
+    if(k.override){
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:10.5px; color:var(--ink-soft); display:flex; gap:6px; align-items:center;';
+      note.textContent = 'Eget värde · beräknat ' + ekonomiPrognosNyckeltalFormat(k.typ, k.computed);
+      const reset = document.createElement('button');
+      reset.type = 'button'; reset.textContent = '↺'; reset.title = 'Återgå till beräknat värde';
+      reset.style.cssText = 'background:none; border:1px solid var(--line-soft); border-radius:4px; cursor:pointer; font-size:10px; padding:0 5px; color:var(--ink-soft);';
+      reset.onclick = async () => { delete prog.nyckeltal[k.key]; await saveEkonomiPrognos(); renderEkonomiPrognosNyckeltal(); };
+      note.appendChild(reset);
+      card.appendChild(note);
+    }
+    wrap.appendChild(card);
+  });
+}
+async function ekonomiPrognosPdf(){
+  const M = ekonomiPrognosPdfModel;
+  if(!M) return;
+  const proj = projects.find(p => p.id === M.pid) || {};
+  const nyckeltal = ekonomiPrognosNyckeltal(M).map(k => ({ label: k.label, value: k.text }));
+  const logoEl = document.querySelector('.brand-logo');
+  const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
+  const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const fmt = v => (v === '' || v == null) ? '' : (!v || Math.round(M.tkr ? v / 1000 : v) === 0 ? '' : (M.tkr ? Math.round(v / 1000) : Math.round(v)).toLocaleString('sv-SE').replace(/[  ]/g, ' ').replace(/−/g, '-'));
+  const chunks = [];
+  for(let i = 0; i < M.months.length; i += 12) chunks.push(M.months.slice(i, i + 12));
+  chunks.forEach((chunk, ci) => {
+    if(ci > 0) doc.addPage();
+    // Sidhuvud: logga till vänster, titel och info till höger.
+    if(logo){ try{ doc.addImage(logo, 'PNG', 12, 9, logoW, logoH); }catch(e){ /* utan logga */ } }
+    doc.setFontSize(15); doc.setTextColor(31, 26, 20);
+    doc.text('Likviditetsprognos', 285, 14, { align: 'right' });
+    doc.setFontSize(11); doc.setTextColor(60);
+    doc.text(String(proj.name || ''), 285, 19.5, { align: 'right' });
+    doc.setFontSize(8); doc.setTextColor(120);
+    doc.text('Belopp i ' + (M.tkr ? 'tkr' : 'kr') + ' · startmånad ' + ekonomiPrognosShortLabel(M.start) + ' · sida ' + (ci + 1) + ' av ' + chunks.length + ' · skapad ' + new Date().toLocaleDateString('sv-SE'), 285, 24, { align: 'right' });
+    doc.setDrawColor(217, 211, 199); doc.setLineWidth(0.4);
+    doc.line(12, 27, 285, 27);
+    let startY = 31;
+    if(ci === 0){
+      // Nyckeltal från Budget som en rad med rutor.
+      const gap = 3, w = (273 - gap * (nyckeltal.length - 1)) / nyckeltal.length, h = 17, y0 = 31;
+      nyckeltal.forEach((k, i) => {
+        const x = 12 + i * (w + gap);
+        doc.setFillColor(246, 244, 239); doc.setDrawColor(233, 228, 218);
+        doc.roundedRect(x, y0, w, h, 2, 2, 'FD');
+        doc.setFontSize(6.5); doc.setTextColor(122, 115, 104);
+        doc.text(k.label.toUpperCase(), x + 3, y0 + 5.2, { maxWidth: w - 6 });
+        doc.setFontSize(10.5); doc.setTextColor(31, 26, 20); doc.setFont(undefined, 'bold');
+        doc.text(k.value, x + 3, y0 + 12.5);
+        doc.setFont(undefined, 'normal');
+      });
+      startY = y0 + h + 5;
+    }
+
+    const first = ci === 0, last = ci === chunks.length - 1;
+    const offset = M.months.indexOf(chunk[0]);
+    const head = ['Kostnadspost'].concat(first ? ['Budget', 'IB ' + ekonomiPrognosShortLabel(M.start)] : [], chunk.map(ekonomiPrognosShortLabel), last ? ['Prognos totalt'] : []);
+    const body = M.rows.map(r => {
+      const n = r.nums;
+      const vals = n.length ? [].concat(first ? [fmt(n[0]), fmt(n[1])] : [], chunk.map((m, i) => fmt(n[2 + offset + i])), last ? [fmt(n[n.length - 1])] : []) : head.slice(1).map(() => '');
+      return [r.label].concat(vals);
+    });
+    doc.autoTable({
+      startY: startY,
+      head: [head],
+      body,
+      styles: { fontSize: 6.5, cellPadding: 1.2, halign: 'center', textColor: 30 },
+      headStyles: { fillColor: [58, 44, 32], textColor: 255, halign: 'center', fontSize: 6.5 },
+      columnStyles: { 0: { halign: 'left', cellWidth: 52 } },
+      margin: { left: 12, right: 12 },
+      didParseCell: h => {
+        const r = M.rows[h.row.index];
+        if(h.section !== 'body' || !r) return;
+        // Fet: raderna Summa inbetalningar, Summa utbetalningar och Likviditet samt IB-kolumnen.
+        // Kursiv: Budget-kolumnen. Netto per månad ljusgrå. Allt annat normalt.
+        const fetRad = /^(Summa inbetalningar|Summa utbetalningar|Likviditet)$/.test(r.label || '');
+        const isBudget = first && h.column.index === 1, isIb = first && h.column.index === 2;
+        h.cell.styles.fontStyle = isBudget ? (fetRad ? 'bolditalic' : 'italic') : ((fetRad || isIb) && !r.section ? 'bold' : 'normal');
+        if(r.section){ h.cell.styles.fillColor = [240, 236, 228]; h.cell.styles.textColor = 90; h.cell.styles.fontStyle = 'bold'; }
+        if(r.small || /^Netto per månad$/.test(r.label || '')) h.cell.styles.textColor = 150;
+        if(h.column.index === 0 && r.indent > 12) h.cell.styles.cellPadding = { left: 1.2 + (r.indent - 6) / 4, top: 1.2, bottom: 1.2, right: 1.2 };
+      }
+    });
+  });
+  ekonomiForsaljningPdfPage(doc, M.pid);
+  doc.save('Likviditetsprognos-' + (proj.name || 'projekt').replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') + '.pdf');
+}
+document.getElementById('ekoPrognosPdf').onclick = ekonomiPrognosPdf;
+document.getElementById('ekoLanDoljNoll').onchange = async () => {
+  uiPrefs.lanDoljNoll = document.getElementById('ekoLanDoljNoll').checked;
+  await saveUiPrefs();
+  renderEkonomiNumberTab('lan');
+};
+document.getElementById('ekoPrognosEnhet').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  ekonomiPrognosRec(pid).enhet = document.getElementById('ekoPrognosEnhet').value;
+  await saveEkonomiPrognos();
+  renderEkonomiPrognos();
+};
+
+document.getElementById('ekoPrognosStart').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const v = document.getElementById('ekoPrognosStart').value;
+  if(/^\d{4}-\d{2}$/.test(v)){ ekonomiPrognosRec(pid).start = v; await saveEkonomiPrognos(); renderEkonomiPrognos(); }
+};
+document.getElementById('ekoPrognosManader').onchange = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const n = parseInt(document.getElementById('ekoPrognosManader').value, 10);
+  if(n >= 3 && n <= 60){ ekonomiPrognosRec(pid).manader = n; await saveEkonomiPrognos(); renderEkonomiPrognos(); }
+};
+document.getElementById('ekoPrognosVisaUtfall').onchange = () => renderEkonomiPrognos();
+document.getElementById('ekoPrognosExpandAll').onclick = async () => {
+  const pid = currentEkonomiLikviditetProjectId; if(!pid) return;
+  const prog = ekonomiPrognosRec(pid);
+  const all = ekonomiBudgetStruktur(pid).kostnadsgrupper.map(g => g.id);
+  prog.oppna = prog.oppna.length === all.length ? [] : all;
+  document.getElementById('ekoPrognosExpandAll').textContent = prog.oppna.length ? 'Fäll ihop alla' : 'Fäll ut alla';
+  await saveEkonomiPrognos();
+  renderEkonomiPrognos();
+};
+
+async function saveEkonomiLikviditetIngaende(value){
+  const pid = currentEkonomiLikviditetProjectId;
+  if(!companyEkonomiData.likviditet[pid]) companyEkonomiData.likviditet[pid] = {};
+  companyEkonomiData.likviditet[pid].belopp = value;
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS.likviditet, JSON.stringify(companyEkonomiData.likviditet));
+    await renderEkonomiProjektLikviditet();
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+}
+
+function likviditetsbudgetEditableCell(td, value, onSave, opts){
+  const scale = (opts && opts.scale) || 1;
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.style.cursor = 'pointer';
+  span.textContent = value != null ? (opts && opts.fmt ? opts.fmt(value) : formatKrFull(value)) : '—';
+  span.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.value = value != null ? Math.round(value / scale * 100) / 100 : '';
+    input.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus(); input.select();
+    const save = async () => {
+      const raw = input.value.trim();
+      await onSave(raw === '' ? null : parseFloat(raw.replace(',', '.')) * scale);
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  td.appendChild(span);
+}
+
+// Förväntad vinst Solvinkeln = förväntad entreprenadsvinst + ägarandel × förväntad vinst
+function ekonomiVinstSolvinkeln(meta){
+  const agarandel = (meta && meta.agarandel) || 0;
+  const forvantadVinst = (meta && meta.forvantadVinst) || 0;
+  const entreprenadsvinst = (meta && meta.forvantadEntreprenadsvinst) || 0;
+  return entreprenadsvinst + (agarandel / 100) * forvantadVinst;
+}
+
+const EKO_PROJEKT_STATUS_LABELS = [
+  { status: 'Pågående', label: 'aktiva' },
+  { status: 'Bygglov/projektering', label: 'bygg/projektering' },
+  { status: 'Kommande', label: 'kommande' },
+  { status: 'Slutförd', label: 'slutförda' },
+  { status: 'Avslutat', label: 'avslutade' }
+];
+
+function renderEkonomiOversikt(){
+  const sumField = (key, field) => projects.reduce((s, p) => {
+    const rec = (companyEkonomiData[key] && companyEkonomiData[key][p.id]) || {};
+    return s + (rec[field] || 0);
+  }, 0);
+  const vinstSolvinkelnTotal = projects.reduce((s, p) => s + ekonomiVinstSolvinkeln(companyEkonomiData.meta[p.id]), 0);
+
+  const breakdown = EKO_PROJEKT_STATUS_LABELS.map(({ status, label }) => {
+    const count = projects.filter(p => (p.status || 'Pågående') === status).length;
+    return { label, count };
+  });
+  document.getElementById('ekoKpiAktivaProjekt').textContent = projects.length;
+  document.getElementById('ekoKpiProjektBreakdown').textContent =
+    breakdown.map(b => b.count + ' ' + b.label).join(' · ');
+  document.getElementById('ekoKpiLikviditet').textContent = formatMSEK(sumField('likviditet', 'belopp'));
+  const sumLan = key => projects.reduce((s, p) => s + ekonomiLanSaldo(p.id, key), 0);
+  document.getElementById('ekoKpiLanevolym').textContent = formatMSEK(sumLan('lanKameo') + sumLan('lanSparbanken') + sumLan('lanTriol'));
+  document.getElementById('ekoKpiLanSolvinkeln').textContent = formatMSEK(sumLan('lanSolvinkeln'));
+  document.getElementById('ekoKpiLanNBE').textContent = formatMSEK(sumLan('lanNBE'));
+  document.getElementById('ekoKpiLanDerome').textContent = formatMSEK(sumLan('lanDerome'));
+  document.getElementById('ekoKpiLanBORO').textContent = formatMSEK(sumLan('lanBORO'));
+  document.getElementById('ekoKpiFastighetsvarde').textContent = formatMSEK(projects.reduce((s, p) => s + ekonomiMarkKostnader(p.id).summa, 0));
+  document.getElementById('ekoKpiVinstSolvinkeln').textContent = formatMSEK(vinstSolvinkelnTotal);
+}
+
+function renderEkonomiProjekt(){
+  // Samma format som Projektöversikten: statusfilter (sparas per användare) och listrader.
+  const statuses = buildStatusFilterBar(document.getElementById('ekoProjektFilters'), 'ekoProjektStatus', renderEkonomiProjekt);
+  const order = {}; HOME_STATUS_GROUPS.forEach((g, i) => { order[g.status] = i; });
+  const tbody = document.getElementById('ekonomiProjektBody');
+  tbody.innerHTML = '';
+  const rows = projects.filter(p => statuses.includes(p.status || 'Pågående')).sort((a, b) => (order[a.status || 'Pågående'] - order[b.status || 'Pågående']) || a.name.localeCompare(b.name, 'sv'));
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="7" style="text-align:left; color:var(--ink-soft); font-family:Inter,sans-serif; font-weight:400;">Inga projekt matchar filtret.</td></tr>'; return; }
+  rows.forEach(p => {
+    const meta = companyEkonomiData.meta[p.id] || {};
+    const status = p.status || 'Pågående';
+    const sold = ekonomiSoldCounts[p.id] || { sold: 0, total: 0 };
+    const row = document.createElement('tr');
+    row.className = 'home-list-row';
+    row.onclick = () => openEkonomiProjektModal(p);
+    const pct = sold.total ? Math.round(sold.sold / sold.total * 100) : 0;
+    row.innerHTML =
+      '<td class="home-list-name">' + escapeHtml(p.name) + '</td>' +
+      '<td style="text-align:left; font-family:Inter,sans-serif; font-weight:400;">' + escapeHtml(p.ort || '—') + '</td>' +
+      '<td style="text-align:left; font-family:Inter,sans-serif; font-weight:400;">' + escapeHtml(meta.jvPartner || '—') + '</td>' +
+      '<td>' + (meta.agarandel ? meta.agarandel + '%' : '—') + '</td>' +
+      '<td style="text-align:left;">' + homeStatusPillHtml(status) + '</td>' +
+      '<td>' + formatMSEK(meta.forvantadVinst || 0) + '</td>' +
+      '<td><span class="home-salda"><span class="home-bar"><i style="width:' + pct + '%"></i></span>' + (sold.total ? sold.sold + ' av ' + sold.total : '—') + '</span></td>';
+    tbody.appendChild(row);
+  });
+}
+
+function renderEkonomiVinstSolvinkeln(){
+  const statuses = buildStatusFilterBar(document.getElementById('ekoVinstFilters'), 'vinstStatus', renderEkonomiVinstSolvinkeln);
+  const tbody = document.getElementById('ekonomiVinstSolvinkelnBody');
+  tbody.innerHTML = '';
+  let total = 0;
+  ekonomiFilteredProjects(statuses).forEach(p => {
+    const v = ekonomiVinstSolvinkeln(companyEkonomiData.meta[p.id]);
+    total += v;
+    const row = document.createElement('tr');
+    row.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td><td>' + formatMSEK(v) + '</td>';
+    tbody.appendChild(row);
+  });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'eko-row-resultat';
+  totalRow.innerHTML = '<td>Totalt</td><td></td><td>' + formatMSEK(total) + '</td>';
+  tbody.appendChild(totalRow);
+}
+
+// ---------- Nya projekt: projektkalkyler under utvärdering ----------
+// Ligger i en egen delad tabell (nya_projekt, se schema-nya-projekt.sql) - inte
+// personal_data som resten av Ekonomi - eftersom en rad kan göras publikt
+// läsbar (utan inloggning) när den delas som investeringspropå.
+function nyaProjektFormatValue(type, value){
+  if(value === null || value === undefined || value === '') return '—';
+  if(type === 'kr') return formatKrFull(value);
+  if(type === 'pct') return (value * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %';
+  if(type === 'int') return Math.round(value).toLocaleString('sv-SE');
+  return value;
+}
+function nyaProjektPerKvm(total, kvm){
+  return (total != null && kvm) ? formatKrPerKvm(total, kvm) : null;
+}
+
+// Normaliserar en kandidats data till den aktuella formen (id:n på alla rader,
+// listor istället för äldre fasta fält) - körs varje gång en kandidat öppnas,
+// så äldre inlästa kalkyler (från innan omläggningen till fritt redigerbara
+// listor) fortsätter fungera utan att tappa data.
+function migrateNyaProjektData(data){
+  data = data || {};
+  delete data.antalParkering;
+
+  if(!Array.isArray(data.kostnadsgrupper)) data.kostnadsgrupper = [];
+  // En kostnadsgrupp literally kallad "Intäkter" är alltid en felgruppering av
+  // intäktsposterna (som redan finns i data.intakter) - aldrig en riktig kostnad.
+  // Städas bort systematiskt så den inte dubbelräknas i Kostnad/Resultat.
+  data.kostnadsgrupper = data.kostnadsgrupper.filter(g => {
+    const namn = (g.grupp || '').trim().toLowerCase();
+    return namn !== 'intäkter' && namn !== 'intakter';
+  });
+  data.kostnadsgrupper.forEach(g => {
+    if(!g.id) g.id = uid();
+    if(!Array.isArray(g.poster)) g.poster = [];
+    g.poster.forEach(p => { if(!p.id) p.id = uid(); });
+    delete g.summa;
+    if(!Array.isArray(g.underkategorier)) g.underkategorier = [];
+    g.underkategorier.forEach(u => { if(!u.id) u.id = uid(); });
+    // Byggherrekostnader får standarduppsättningen underkategorier första
+    // gången, och poster med tydliga namn sorteras in - resten lämnas
+    // okategoriserade så inget gissas fel.
+    if(/byggherre/i.test(g.grupp || '') && !g.underkategorier.length && !g.underkategorierInit){
+      const mk = namn => ({ id: uid(), namn });
+      const forsaljning = mk('Försäljning'), anslutningar = mk('Anslutningar'), ekonomi = mk('Ekonomi'), ovriga = mk('Övriga kostnader');
+      g.underkategorier = [forsaljning, anslutningar, ekonomi, ovriga];
+      g.underkategorierInit = true;
+      g.poster.forEach(p => {
+        if(p.underkategori) return;
+        const n = (p.namn || '').toLowerCase();
+        if(/anslutning/.test(n)) p.underkategori = anslutningar.id;
+        else if(/m[äa]klar|f[öo]rs[äa]ljning|marknad|rendering|sociala|visning|bop[äa]rm|annons/.test(n)) p.underkategori = forsaljning.id;
+        else if(/ekonomisk|revision|bokf[öo]ring|bank|r[äa]nta|finansiering|kassa|f[öo]rs[äa]kring/.test(n)) p.underkategori = ekonomi.id;
+      });
+    }
+    // Poster som pekar på en borttagen underkategori blir okategoriserade.
+    const ukIds = new Set(g.underkategorier.map(u => u.id));
+    g.poster.forEach(p => { if(p.underkategori && !ukIds.has(p.underkategori)) p.underkategori = null; });
+  });
+  if(data.fordelning){
+    // "fordelning" var en ALTERNATIV, grövre vy av SAMMA totalkostnad som
+    // kostnadsgrupper (inte en tillkommande post) - fälls bara in som en egen
+    // grupp om det inte redan finns en detaljerad uppställning, annars
+    // skulle kostnaden räknas dubbelt.
+    if(data.kostnadsgrupper.length === 0){
+      const labels = { mark: 'Mark', entreprenad: 'Entreprenad', projektering: 'Projektering', finansiering: 'Finansiering', aktier: 'Aktier' };
+      const poster = Object.keys(labels)
+        .filter(k => data.fordelning[k] != null)
+        .map(k => ({ id: uid(), namn: labels[k], belopp: data.fordelning[k] }));
+      if(poster.length) data.kostnadsgrupper.unshift({ id: uid(), grupp: 'Övrigt', poster });
+    }
+    delete data.fordelning;
+  }
+
+  if(!Array.isArray(data.intakter)){
+    const val = typeof data.intakter === 'number' ? data.intakter : null;
+    data.intakter = val != null ? [{ id: uid(), namn: 'Intäkter', belopp: val }] : [];
+  }
+  data.intakter.forEach(i => { if(!i.id) i.id = uid(); });
+
+  if(!Array.isArray(data.finansiering)) data.finansiering = [];
+  data.finansiering.forEach(f => {
+    if(!f.id) f.id = uid();
+    if(f.period === undefined) f.period = '';
+    if(typeof f.part !== 'string') f.part = '';
+  });
+
+  if(!Array.isArray(data.bostader)) data.bostader = [];
+  data.bostader.forEach(b => { if(!b.id) b.id = uid(); });
+
+  if(!Array.isArray(data.handelser)) data.handelser = [];
+  data.handelser.forEach(h => {
+    if(!h.id) h.id = uid();
+    if(h.period === undefined) h.period = '';
+  });
+
+  // Talfält som råkat sparas som text ("null", "12") normaliseras till tal eller null.
+  ['avkastningEgetKapital', 'antalBostader', 'boaTotal'].forEach(k => {
+    if(typeof data[k] === 'string'){
+      const n = parseFloat(data[k].replace(',', '.'));
+      data[k] = isNaN(n) ? null : n;
+    }
+  });
+  if(typeof data.allmanInfo !== 'string') data.allmanInfo = '';
+  if(typeof data.marknadslage !== 'string') data.marknadslage = '';
+  if(typeof data.risker !== 'string') data.risker = '';
+  if(!Array.isArray(data.kartpunkter)) data.kartpunkter = [];
+  data.kartpunkter = data.kartpunkter.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number');
+  data.kartpunkter.forEach(p => {
+    if(!p.id) p.id = uid();
+    if(typeof p.namn !== 'string') p.namn = '';
+    if(typeof p.beskrivning !== 'string') p.beskrivning = '';
+  });
+  if(!data.bild || typeof data.bild !== 'object') data.bild = null;
+  if(!Array.isArray(data.bilagor)) data.bilagor = [];
+  data.bilagor.forEach(b => { if(!b.id) b.id = uid(); });
+
+  delete data.utgifter;
+  delete data.resultat;
+  delete data.projektmarginal;
+  return data;
+}
+
+function nyaProjektGroupTotal(group){
+  return (group.poster || []).reduce((s, p) => s + (p.belopp || 0), 0);
+}
+function nyaProjektTotals(data){
+  const totalIntakter = (data.intakter || []).reduce((s, i) => s + (i.belopp || 0), 0);
+  const totalKostnader = (data.kostnadsgrupper || []).reduce((s, g) => s + nyaProjektGroupTotal(g), 0);
+  const totalFinansiering = (data.finansiering || []).reduce((s, f) => s + (f.belopp || 0), 0);
+  const resultat = totalIntakter - totalKostnader;
+  const marginal = totalIntakter ? resultat / totalIntakter : null;
+  return { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal };
+}
+function nyaProjektBostaderCounts(data){
+  const rows = data.bostader || [];
+  const withKvm = rows.filter(r => r.kvm != null);
+  return {
+    antal: rows.length ? rows.length : (data.antalBostader != null ? data.antalBostader : null),
+    boa: withKvm.length ? withKvm.reduce((s, r) => s + r.kvm, 0) : (data.boaTotal != null ? data.boaTotal : null)
+  };
+}
+
+async function loadNyaProjektList(){
+  try{
+    const [list] = await Promise.all([DB.listNyaProjekt(), loadNyaProjektMall()]);
+    nyaProjektList = list;
+    nyaProjektList.forEach(c => { c.data = migrateNyaProjektData(c.data); });
+  }catch(e){
+    nyaProjektList = [];
+    showDebugError('Kunde inte läsa nya projekt', e);
+  }
+  renderNyaProjektList();
+  renderNyaProjektMallInfo();
+}
+
+// ---- Mall för nya kalkyler ----
+// Strukturen (intäktsrader, kostnadsgrupper med underkategorier och poster,
+// finansieringsposter - bara namn, inga belopp) sparas från en befintlig kalkyl
+// med "Spara struktur som mall". Varje ny kalkyl utgår från mallen; vid
+// Excel-inläsning fylls mallens poster med de belopp som känns igen på namnet
+// och resten hamnar i gruppen "Oplacerade kostnader" längst ner.
+const NYA_PROJEKT_MALL_KEY = 'nya-projekt-mall';
+let nyaProjektMall = null;
+const NYA_PROJEKT_MALL_DEFAULT = {
+  intakter: ['Insatser', 'Föreningslån'],
+  kostnadsgrupper: [
+    { grupp: 'Anskaffningskostnad mark', underkategorier: [], poster: [
+      { namn: 'Mark' }, { namn: 'Aktier' }
+    ] },
+    { grupp: 'Entreprenad', underkategorier: [], poster: [
+      { namn: 'Entreprenad' }
+    ] },
+    { grupp: 'Byggherrekostnader', underkategorier: ['Försäljning', 'Anslutningar', 'Ekonomi', 'Övriga kostnader'], poster: [
+      { namn: 'Mäklararvode', underkategori: 'Försäljning' },
+      { namn: 'Renderingar', underkategori: 'Försäljning' },
+      { namn: 'Säljbroschyr', underkategori: 'Försäljning' },
+      { namn: 'Byggskylt', underkategori: 'Försäljning' },
+      { namn: 'Eftermarknad', underkategori: 'Försäljning' },
+      { namn: 'VA-anslutning', underkategori: 'Anslutningar' },
+      { namn: 'Elanslutning', underkategori: 'Anslutningar' },
+      { namn: 'Tele/internet', underkategori: 'Anslutningar' },
+      { namn: 'Ekonomisk plan', underkategori: 'Ekonomi' },
+      { namn: 'Kassa BRF', underkategori: 'Ekonomi' },
+      { namn: 'Lagfart (Brf)', underkategori: 'Ekonomi' },
+      { namn: 'Pantbrev Föreningslån', underkategori: 'Ekonomi' },
+      { namn: 'Kontrollansvarig', underkategori: 'Övriga kostnader' },
+      { namn: 'Arkitekt', underkategori: 'Övriga kostnader' },
+      { namn: 'Slutbesiktning', underkategori: 'Övriga kostnader' },
+      { namn: 'Slutstädning bostäder', underkategori: 'Övriga kostnader' },
+      { namn: 'Solvinkeln Fastigheter AB', underkategori: 'Övriga kostnader' },
+      { namn: 'Övriga kostnader', underkategori: 'Övriga kostnader' }
+    ] },
+    { grupp: 'Finansiering', underkategorier: [], poster: [
+      { namn: 'Byggkreditiv bank' }, { namn: 'Markfinansiering' }
+    ] }
+  ],
+  finansiering: []
+};
+async function loadNyaProjektMall(){
+  try{
+    const rec = await DB.getPersonalData(NYA_PROJEKT_MALL_KEY);
+    // personal_data lagrar värdet som JSON-text (samma som övriga ekonominycklar).
+    let v = rec ? rec.value : null;
+    if(typeof v === 'string'){ try{ v = JSON.parse(v); }catch(e){ v = null; } }
+    nyaProjektMall = v && Array.isArray(v.kostnadsgrupper) ? v : null;
+  }catch(e){
+    nyaProjektMall = null;
+  }
+}
+function nyaProjektGetMall(){
+  return nyaProjektMall || NYA_PROJEKT_MALL_DEFAULT;
+}
+function renderNyaProjektMallInfo(){
+  const el = document.getElementById('nyaProjektMallInfo');
+  if(!el) return;
+  const m = nyaProjektGetMall();
+  const nPoster = m.kostnadsgrupper.reduce((s, g) => s + g.poster.length, 0);
+  el.textContent = nyaProjektMall
+    ? 'Mall: sparad från "' + (m.sparadFran || 'kalkyl') + '" ' + (m.sparadAt ? new Date(m.sparadAt).toLocaleDateString('sv-SE') : '') + ' · ' + m.kostnadsgrupper.length + ' kostnadsgrupper, ' + nPoster + ' poster. Nya kalkyler och Excel-inläsningar utgår från mallen.'
+    : 'Ingen egen mall sparad än - standardmallen används (' + m.kostnadsgrupper.length + ' kostnadsgrupper, ' + nPoster + ' poster). Öppna en kalkyl och klicka "Spara struktur som mall" för att använda den som förlaga.';
+}
+function nyaProjektMallFromCandidate(candidate){
+  const d = candidate.data;
+  return {
+    intakter: d.intakter.map(r => (r.namn || '').trim()).filter(Boolean),
+    kostnadsgrupper: d.kostnadsgrupper.filter(g => !g.oplacerade).map(g => {
+      const uks = g.underkategorier || [];
+      return {
+        grupp: g.grupp || 'Namnlös grupp',
+        underkategorier: uks.map(u => u.namn),
+        poster: g.poster.filter(p => (p.namn || '').trim()).map(p => {
+          const uk = uks.find(u => u.id === p.underkategori);
+          return { namn: p.namn.trim(), underkategori: uk ? uk.namn : null };
+        })
+      };
+    }),
+    finansiering: d.finansiering.map(f => (f.namn || '').trim()).filter(Boolean),
+    sparadFran: candidate.name,
+    sparadAt: new Date().toISOString()
+  };
+}
+function nyaProjektNormName(s){
+  return String(s || '').toLowerCase().replace(/[^a-z0-9åäö]/g, '');
+}
+// Bygger upp kalkylstrukturen från mallen och lägger in inlästa belopp där
+// namnet känns igen. Allt som inte matchar hamnar i "Oplacerade kostnader".
+// Läser in en Excel-kalkyl i en BEFINTLIG kalkyl (t.ex. en som skapats från
+// mallen): inlästa belopp läggs på de poster/intäktsrader som känns igen på
+// namnet, resten hamnar under "Oplacerade kostnader". Bostäder, antal och BOA
+// fylls bara i om de saknas.
+function nyaProjektMergeImport(data, imported){
+  imported = migrateNyaProjektData(imported || {});
+  const importedPoster = [];
+  imported.kostnadsgrupper.forEach(g => g.poster.forEach(p => importedPoster.push({ ...p, ursprungGrupp: g.grupp || '' })));
+  const allPosts = [];
+  data.kostnadsgrupper.filter(g => !g.oplacerade).forEach(g => g.poster.forEach(p => allPosts.push(p)));
+  const used = new Set();
+  const findMatch = (name) => {
+    const n = nyaProjektNormName(name);
+    if(!n) return null;
+    let hit = allPosts.find(p => !used.has(p) && nyaProjektNormName(p.namn) === n);
+    if(hit) return hit;
+    hit = allPosts.find(p => {
+      if(used.has(p)) return false;
+      const t = nyaProjektNormName(p.namn);
+      return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t));
+    });
+    return hit || null;
+  };
+  let placed = 0;
+  const unplaced = [];
+  importedPoster.forEach(ip => {
+    const hit = findMatch(ip.namn);
+    if(hit){
+      used.add(hit);
+      hit.belopp = ip.belopp != null ? ip.belopp : hit.belopp;
+      if(ip.perBostad != null){ hit.perBostad = ip.perBostad; hit.perBostadAntal = ip.perBostadAntal; }
+      placed++;
+    } else if((ip.namn || '').trim() || ip.belopp != null){
+      unplaced.push({ id: uid(), namn: ip.namn || '', belopp: ip.belopp != null ? ip.belopp : null, underkategori: null, ursprungGrupp: ip.ursprungGrupp });
+    }
+  });
+  if(unplaced.length){
+    let opl = data.kostnadsgrupper.find(g => g.oplacerade);
+    if(!opl){
+      opl = { id: uid(), grupp: 'Oplacerade kostnader', underkategorier: [], poster: [], oplacerade: true };
+      data.kostnadsgrupper.push(opl);
+    }
+    opl.poster.push(...unplaced);
+  }
+  // Intäkter: matcha på namn, annars ny rad.
+  const usedInt = new Set();
+  imported.intakter.filter(r => (r.namn || '').trim() || r.belopp != null).forEach(r => {
+    const n = nyaProjektNormName(r.namn);
+    const hit = data.intakter.find(x => !usedInt.has(x) && (nyaProjektNormName(x.namn) === n || (n.length >= 5 && (nyaProjektNormName(x.namn).includes(n) || n.includes(nyaProjektNormName(x.namn))))));
+    if(hit){ usedInt.add(hit); hit.belopp = r.belopp; }
+    else data.intakter.push({ id: uid(), namn: r.namn || '', belopp: r.belopp });
+  });
+  // Finansiering: matcha på namn, annars ny rad.
+  imported.finansiering.filter(f => (f.namn || '').trim() || f.belopp != null).forEach(f => {
+    const n = nyaProjektNormName(f.namn);
+    const hit = data.finansiering.find(x => nyaProjektNormName(x.namn) === n);
+    if(hit){ if(f.belopp != null) hit.belopp = f.belopp; if(f.period && !hit.period) hit.period = f.period; }
+    else data.finansiering.push({ id: uid(), namn: f.namn || '', belopp: f.belopp, period: f.period || '', part: '' });
+  });
+  if(!data.bostader.length && imported.bostader.length) data.bostader = imported.bostader;
+  if(data.antalBostader == null && imported.antalBostader != null) data.antalBostader = imported.antalBostader;
+  if(data.boaTotal == null && imported.boaTotal != null) data.boaTotal = imported.boaTotal;
+  nyaProjektSyncBostader(data);
+  return { placed, unplaced: unplaced.length };
+}
+document.getElementById('nyaProjektImportHereBtn').onclick = () => {
+  document.getElementById('nyaProjektImportHereInput').click();
+};
+document.getElementById('nyaProjektImportHereInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate){ e.target.value = ''; return; }
+  const btn = document.getElementById('nyaProjektImportHereBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Läser kalkylen…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kalkyl', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.projektnamn) throw new Error('Kunde inte tolka kalkylen.');
+    if(Array.isArray(data.finansieringsforslag)){
+      data.finansiering = data.finansieringsforslag;
+      delete data.finansieringsforslag;
+    }
+    const res = nyaProjektMergeImport(candidate.data, data);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektDetail();
+    renderNyaProjektList();
+    alert('Kalkylen "' + data.projektnamn + '" är inläst i ' + candidate.name + '.\n\n' + res.placed + ' poster fick belopp på befintliga poster.' + (res.unplaced ? '\n' + res.unplaced + ' poster kändes inte igen och ligger under "Oplacerade kostnader" längst ner - placera dem med "Flytta till".' : '\nAlla poster kändes igen.'));
+  }catch(err){
+    alert('Kunde inte läsa in kalkylen: ' + (err.message || err));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+    e.target.value = '';
+  }
+});
+function nyaProjektApplyMall(data, mall){
+  data = migrateNyaProjektData(data || {});
+  const importedPoster = [];
+  data.kostnadsgrupper.forEach(g => g.poster.forEach(p => importedPoster.push({ ...p, ursprungGrupp: g.grupp || '' })));
+
+  const groups = mall.kostnadsgrupper.map(mg => {
+    const uks = (mg.underkategorier || []).map(n => ({ id: uid(), namn: n }));
+    return {
+      id: uid(),
+      grupp: mg.grupp,
+      underkategorier: uks,
+      underkategorierInit: true,
+      poster: (mg.poster || []).map(mp => {
+        const uk = uks.find(u => u.namn === mp.underkategori);
+        return { id: uid(), namn: mp.namn, belopp: null, underkategori: uk ? uk.id : null };
+      })
+    };
+  });
+  const allTemplatePosts = [];
+  groups.forEach(g => g.poster.forEach(p => allTemplatePosts.push(p)));
+  const findMatch = (name) => {
+    const n = nyaProjektNormName(name);
+    if(!n) return null;
+    let hit = allTemplatePosts.find(p => p.belopp == null && nyaProjektNormName(p.namn) === n);
+    if(hit) return hit;
+    hit = allTemplatePosts.find(p => {
+      if(p.belopp != null) return false;
+      const t = nyaProjektNormName(p.namn);
+      return Math.min(t.length, n.length) >= 5 && (t.includes(n) || n.includes(t));
+    });
+    return hit || null;
+  };
+  const unplaced = [];
+  importedPoster.forEach(ip => {
+    const hit = findMatch(ip.namn);
+    if(hit){
+      hit.belopp = ip.belopp != null ? ip.belopp : null;
+      if(ip.perBostad != null){ hit.perBostad = ip.perBostad; hit.perBostadAntal = ip.perBostadAntal; }
+    } else if((ip.namn || '').trim() || ip.belopp != null){
+      unplaced.push({ id: uid(), namn: ip.namn || '', belopp: ip.belopp != null ? ip.belopp : null, underkategori: null, ursprungGrupp: ip.ursprungGrupp });
+    }
+  });
+  if(unplaced.length){
+    groups.push({ id: uid(), grupp: 'Oplacerade kostnader', underkategorier: [], poster: unplaced, oplacerade: true });
+  }
+  data.kostnadsgrupper = groups;
+
+  // Intäkter: mallens rader först (fyllda med inlästa belopp om namnet matchar),
+  // därefter eventuella inlästa rader som inte finns i mallen.
+  const importedIntakter = data.intakter.slice();
+  const intakter = (mall.intakter || []).map(namn => {
+    const n = nyaProjektNormName(namn);
+    const idx = importedIntakter.findIndex(r => nyaProjektNormName(r.namn) === n || (n.length >= 5 && nyaProjektNormName(r.namn).includes(n)));
+    const src = idx > -1 ? importedIntakter.splice(idx, 1)[0] : null;
+    return { id: uid(), namn, belopp: src ? src.belopp : null };
+  });
+  importedIntakter.filter(r => (r.namn || '').trim() || r.belopp != null).forEach(r => intakter.push({ id: uid(), namn: r.namn || '', belopp: r.belopp }));
+  data.intakter = intakter;
+
+  // Finansieringsplan: mallens poster läggs till om de saknas.
+  (mall.finansiering || []).forEach(namn => {
+    if(!data.finansiering.some(f => nyaProjektNormName(f.namn) === nyaProjektNormName(namn))){
+      data.finansiering.push({ id: uid(), namn, belopp: null, period: '', part: '' });
+    }
+  });
+  nyaProjektApplyStandardbelopp(data);
+  return data;
+}
+// Standardbelopp som alltid förifylls när en kalkyl skapas från mallen.
+// Fasta belopp eller belopp per bostad (× antal enheter). Inläst belopp från
+// Excel har företräde - standardbeloppet sätts bara där posten är tom.
+// Saknas posten i mallen läggs den till i angiven grupp/underkategori.
+const NYA_PROJEKT_STANDARDBELOPP = [
+  { namn: 'Renderingar', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Säljbroschyr', belopp: 75000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Försäljningsansvarig', perBostad: 40000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Marknadsföring', perBostad: 20000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Hemsida projekt', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Försäljning' },
+  { namn: 'Ekonomisk plan', belopp: 300000, grupp: 'Byggherrekostnader', uk: 'Ekonomi' },
+  { namn: 'Kassa BRF', belopp: 50000, grupp: 'Byggherrekostnader', uk: 'Ekonomi' },
+  { namn: 'Styrelse - Bolevo', belopp: 150000, grupp: 'Byggherrekostnader', uk: 'Ekonomi', alias: ['Styrelse Bolevo'] },
+  { namn: 'Kontrollansvarig', perBostad: 4000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Slutstädning', perBostad: 6500, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Slutbesiktning', perBostad: 5000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Eftermarknad', perBostad: 25000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Projektledning', perBostad: 50000, grupp: 'Byggherrekostnader', uk: 'Byggrelaterad' },
+  { namn: 'Geogrund', belopp: 75000, grupp: 'Byggherrekostnader', uk: 'Övriga kostnader' }
+];
+function nyaProjektApplyStandardbelopp(data){
+  const antal = data.antalBostader != null && data.antalBostader > 0 ? data.antalBostader : null;
+  const allPosts = [];
+  data.kostnadsgrupper.filter(g => !g.oplacerade).forEach(g => g.poster.forEach(p => allPosts.push(p)));
+  NYA_PROJEKT_STANDARDBELOPP.forEach(std => {
+    const names = [std.namn].concat(std.alias || []).map(nyaProjektNormName);
+    let post = allPosts.find(p => names.includes(nyaProjektNormName(p.namn)));
+    if(!post){
+      // Lös matchning (t.ex. "Slutstädning bostäder") - bara om träffen är entydig.
+      const loose = allPosts.filter(p => { const t = nyaProjektNormName(p.namn); return names.some(n => t.includes(n) || (n.length >= 6 && n.includes(t) && t.length >= 5)); });
+      if(loose.length === 1) post = loose[0];
+    }
+    if(!post){
+      let group = data.kostnadsgrupper.find(g => !g.oplacerade && nyaProjektNormName(g.grupp) === nyaProjektNormName(std.grupp));
+      if(!group) group = data.kostnadsgrupper.find(g => !g.oplacerade) || null;
+      if(!group){
+        group = { id: uid(), grupp: std.grupp, underkategorier: [], poster: [] };
+        data.kostnadsgrupper.push(group);
+      }
+      if(!Array.isArray(group.underkategorier)) group.underkategorier = [];
+      let uk = group.underkategorier.find(u => nyaProjektNormName(u.namn) === nyaProjektNormName(std.uk));
+      if(!uk && group.underkategorier.length){
+        uk = { id: uid(), namn: std.uk };
+        group.underkategorier.push(uk);
+      }
+      post = { id: uid(), namn: std.namn, belopp: null, underkategori: uk ? uk.id : null };
+      group.poster.push(post);
+      allPosts.push(post);
+    }
+    if(post.belopp != null) return; // inläst/ifyllt belopp har företräde
+    if(std.perBostad != null){
+      post.perBostad = std.perBostad;
+      post.perBostadAntal = antal;
+      post.belopp = antal ? std.perBostad * antal : null;
+    } else {
+      post.belopp = std.belopp;
+    }
+  });
+}
+async function createNyaProjektFromData(name, data){
+  const row = {
+    id: uid(),
+    share_id: uid() + uid() + uid(),
+    name,
+    data: nyaProjektApplyMall(data, nyaProjektGetMall()),
+    is_public: false,
+    status: 'candidate',
+    created_by: myPersonId,
+    created_by_name: myName
+  };
+  const saved = await DB.insertNyaProjekt(row);
+  nyaProjektList.unshift(saved);
+  renderNyaProjektList();
+  return saved;
+}
+document.getElementById('nyaProjektNewFromMallBtn').onclick = async () => {
+  const name = prompt('Namn på den nya kalkylen:');
+  if(!name || !name.trim()) return;
+  const antalRaw = prompt('Antal bostäder/enheter (används för standardbelopp per enhet, t.ex. kontrollansvarig 4 000 kr × antal). Lämna tomt om du inte vet än:', '');
+  const antal = antalRaw && !isNaN(parseInt(antalRaw, 10)) ? parseInt(antalRaw, 10) : null;
+  try{
+    const saved = await createNyaProjektFromData(name.trim(), antal ? { antalBostader: antal } : {});
+    openNyaProjektDetail(saved.id);
+  }catch(e){
+    showDebugError('Kunde inte skapa kalkylen', e);
+  }
+};
+document.getElementById('nyaProjektSaveMallBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const mall = nyaProjektMallFromCandidate(candidate);
+  const nPoster = mall.kostnadsgrupper.reduce((s, g) => s + g.poster.length, 0);
+  if(!confirm('Spara strukturen i "' + candidate.name + '" som mall för nya kalkyler?\n\n' + mall.kostnadsgrupper.length + ' kostnadsgrupper med ' + nPoster + ' poster, ' + mall.intakter.length + ' intäktsrader och ' + mall.finansiering.length + ' finansieringsposter. Inga belopp följer med.')) return;
+  try{
+    await DB.setPersonalData(NYA_PROJEKT_MALL_KEY, JSON.stringify(mall));
+    nyaProjektMall = mall;
+    renderNyaProjektMallInfo();
+    alert('Mallen är sparad. Nya kalkyler och Excel-inläsningar utgår nu från "' + candidate.name + '".');
+  }catch(e){
+    showDebugError('Kunde inte spara mallen', e);
+  }
+};
+
+function renderNyaProjektList(){
+  const tbody = document.getElementById('ekonomiNyaProjektBody');
+  const empty = document.getElementById('ekonomiNyaProjektEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = nyaProjektList.length ? 'none' : 'block';
+  nyaProjektList.forEach(candidate => {
+    const d = candidate.data || {};
+    const { antal } = nyaProjektBostaderCounts(d);
+    const { totalKostnader, resultat, marginal } = nyaProjektTotals(d);
+    const tr = document.createElement('tr');
+    tr.onclick = () => openNyaProjektDetail(candidate.id);
+    const statusLabel = (candidate.status === 'promoted' ? 'Omvandlat till projekt' : 'Kandidat') + (candidate.is_public ? ' · Delad' : '');
+    tr.innerHTML =
+      '<td style="text-align:left;">' + escapeHtml(candidate.name) + '</td>' +
+      '<td style="text-align:left;">' + statusLabel + '</td>' +
+      '<td>' + nyaProjektFormatValue('int', antal) + '</td>' +
+      '<td>' + (totalKostnader ? nyaProjektFormatValue('kr', resultat) : '—') + '</td>' +
+      '<td>' + (totalKostnader ? nyaProjektFormatValue('pct', marginal) : '—') + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function closeNyaProjektDetail(){
+  currentNyaProjektId = null;
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('ekonomiNyaProjektListView').style.display = 'block';
+}
+document.getElementById('backToNyaProjektListBtn').onclick = closeNyaProjektDetail;
+
+function openNyaProjektDetail(id){
+  currentNyaProjektId = id;
+  document.getElementById('ekonomiNyaProjektListView').style.display = 'none';
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'block';
+  renderNyaProjektDetail();
+}
+
+function buildNyaProjektEditableCard(candidate, key, label, type){
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.style.cursor = 'pointer';
+  const value = candidate.data[key];
+  title.textContent = nyaProjektFormatValue(type, value);
+  title.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    const current = candidate.data[key];
+    input.value = current != null ? (type === 'pct' ? current * 100 : current) : '';
+    input.style.cssText = "width:100%; box-sizing:border-box; font-size:20px; font-family:'Fraunces',serif; font-weight:700; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px;";
+    title.replaceWith(input);
+    input.focus(); input.select();
+    const save = async () => {
+      const raw = input.value.trim();
+      const num = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      candidate.data[key] = (num === null || isNaN(num)) ? null : (type === 'pct' ? num / 100 : num);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = label;
+  card.appendChild(title);
+  card.appendChild(sub);
+  return card;
+}
+
+// Föreningslånet är en vanlig intäktsrad (namn "Föreningslån") i data.intakter -
+// nyckeltalsrutan läser och skriver samma rad, så beloppet finns bara på ett ställe.
+function nyaProjektForeningslanRow(data){
+  return (data.intakter || []).find(r => /f[öo]renings?\s*l[åa]n/i.test(r.namn || '')) || null;
+}
+function nyaProjektSetForeningslan(data, value){
+  let row = nyaProjektForeningslanRow(data);
+  if(!row){
+    if(value == null) return;
+    row = { id: uid(), namn: 'Föreningslån', belopp: null };
+    const rows = data.intakter;
+    let idx = -1;
+    rows.forEach((r, i) => { if(/insats/i.test(r.namn || '')) idx = i; });
+    if(idx >= 0) rows.splice(idx + 1, 0, row); else rows.push(row);
+  }
+  row.belopp = value;
+}
+function buildNyaProjektForeningslanCard(candidate, boa){
+  const data = candidate.data;
+  const row = nyaProjektForeningslanRow(data);
+  const value = row ? row.belopp : null;
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.style.cursor = 'pointer';
+  title.title = 'Klicka för att fylla i föreningslånet';
+  title.textContent = nyaProjektFormatValue('kr', value);
+  title.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    input.value = value != null ? value : '';
+    input.style.cssText = "width:100%; box-sizing:border-box; font-size:20px; font-family:'Fraunces',serif; font-weight:700; border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px;";
+    title.replaceWith(input);
+    input.focus(); input.select();
+    nyaProjektWireInlineInput(input, async () => {
+      const raw = input.value.trim();
+      const num = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSetForeningslan(data, (num === null || isNaN(num)) ? null : num);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    });
+  };
+  card.appendChild(title);
+  const perKvm = nyaProjektPerKvm(value, boa);
+  if(perKvm){
+    const kvmLine = document.createElement('div');
+    kvmLine.style.cssText = "font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;";
+    kvmLine.textContent = perKvm;
+    card.appendChild(kvmLine);
+  }
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = 'Föreningslån';
+  card.appendChild(sub);
+  return card;
+}
+// Bygger bara nyckeltalsrutorna - anropas även efter att en enskild rad
+// ändrats så att Intäkter/Kostnad/Resultat följer med utan full omritning.
+function renderNyaProjektNyckeltal(candidate){
+  const data = candidate.data;
+  const { boa } = nyaProjektBostaderCounts(data);
+  const { totalIntakter, totalKostnader, resultat, marginal } = nyaProjektTotals(data);
+  const grid = document.getElementById('nyaProjektNyckeltalGrid');
+  grid.innerHTML = '';
+  grid.appendChild(buildNyaProjektBostaderCard(candidate));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'boaTotal', 'BOA totalt (m²)', 'int'));
+  grid.appendChild(buildNyaProjektComputedCard('Intäkter', totalIntakter || null, 'kr', nyaProjektPerKvm(totalIntakter, boa)));
+  grid.appendChild(buildNyaProjektForeningslanCard(candidate, boa));
+  grid.appendChild(buildNyaProjektComputedCard('Kostnad', totalKostnader || null, 'kr', nyaProjektPerKvm(totalKostnader, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Resultat', (totalIntakter || totalKostnader) ? resultat : null, 'kr', nyaProjektPerKvm(resultat, boa)));
+  grid.appendChild(buildNyaProjektComputedCard('Projektmarginal', marginal, 'pct', null));
+  grid.appendChild(buildNyaProjektEditableCard(candidate, 'avkastningEgetKapital', 'Avkastning eget kapital', 'pct'));
+}
+function buildNyaProjektComputedCard(label, value, type, perKvmText){
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.textContent = nyaProjektFormatValue(type, value);
+  card.appendChild(title);
+  if(perKvmText){
+    const kvmLine = document.createElement('div');
+    kvmLine.style.cssText = "font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;";
+    kvmLine.textContent = perKvmText;
+    card.appendChild(kvmLine);
+  }
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = label;
+  card.appendChild(sub);
+  return card;
+}
+
+function buildNyaProjektBostaderCard(candidate){
+  const { antal } = nyaProjektBostaderCounts(candidate.data);
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  const title = document.createElement('div');
+  title.className = 'home-card-title';
+  title.textContent = nyaProjektFormatValue('int', antal);
+  // Hela rutan är klickbar (inte bara siffran) så man inte behöver pricka rätt.
+  card.style.cursor = 'pointer';
+  card.title = 'Öppna listan över bostäder';
+  card.onclick = () => openNyaProjektBostaderModal(candidate.id);
+  const sub = document.createElement('div');
+  sub.className = 'home-card-sub';
+  sub.textContent = 'Bostäder (klicka för lista) →';
+  card.appendChild(title);
+  card.appendChild(sub);
+  return card;
+}
+
+// Inline-redigering i tabellcellerna: samma typsnitt/storlek som texten runt
+// omkring, och cellen återgår till vanlig text DIREKT när man är klar (Enter,
+// ändring eller klick utanför) - sparningen mot databasen sker sedan i
+// bakgrunden, så att fältet aldrig "fastnar" som ett vitt inmatningsfält.
+const NYA_PROJEKT_INLINE_INPUT_CSS = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font:inherit;';
+function nyaProjektWireInlineInput(input, commit){
+  let done = false;
+  const finish = async () => {
+    if(done) return;
+    done = true;
+    try{
+      await commit();
+    }catch(e){
+      showDebugError('Kunde inte spara', e);
+    }
+    renderNyaProjektDetail();
+  };
+  input.__commit = finish;
+  input.addEventListener('blur', finish);
+  input.addEventListener('change', finish);
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); finish(); }
+    if(e.key === 'Escape'){ done = true; renderNyaProjektDetail(); }
+  });
+}
+
+// Knappar (ta bort, lägg till) får inte "stjäla" fokus från ett öppet
+// inmatningsfält - då ritas tabellen om av blur-sparningen innan klicket
+// hinner landa och knappen verkar död. Ett ev. pågående fält sparas istället
+// först, sedan körs knappens egen åtgärd.
+function nyaProjektActionButton(btn, action){
+  btn.addEventListener('mousedown', e => e.preventDefault());
+  btn.style.padding = '4px 8px';
+  btn.style.fontSize = '14px';
+  btn.onclick = async () => {
+    const active = document.activeElement;
+    if(active && typeof active.__commit === 'function') await active.__commit();
+    await action();
+  };
+}
+
+// Bygger en rad-tabell (namn/belopp, båda redigerbara, ta bort-knapp) som
+// återanvänds för Intäkter och för posterna inuti varje kostnadsgrupp.
+// Popup för ett kostnadsbelopp: antingen skrivs totalen in direkt, eller så
+// anges belopp per bostad × antal bostäder (t.ex. VA-anslutning 50 000 kr × 22)
+// och totalen räknas ut. Uppdelningen sparas på raden (perBostad/perBostadAntal)
+// så den syns under beloppet och kan justeras nästa gång.
+let nyaProjektBeloppModalCtx = null;
+// opts.onSave(result) används av Budget-fliken: då sparas inte via kalkylen
+// utan anroparen får {belopp, perBostad, perBostadAntal} och sparar själv.
+function openNyaProjektBeloppModal(candidate, row, antalBostader, opts){
+  nyaProjektBeloppModalCtx = { candidate, row, onSave: opts && opts.onSave };
+  const per = document.getElementById('nyaProjektBeloppPerBostad');
+  const antal = document.getElementById('nyaProjektBeloppAntal');
+  const total = document.getElementById('nyaProjektBeloppTotal');
+  document.getElementById('nyaProjektBeloppModalTitle').textContent = row.namn || 'Belopp';
+  per.value = row.perBostad != null ? row.perBostad : '';
+  antal.value = row.perBostadAntal != null ? row.perBostadAntal : (antalBostader != null ? antalBostader : '');
+  total.value = row.belopp != null ? row.belopp : '';
+  nyaProjektBeloppModalUpdateFormel();
+  document.getElementById('nyaProjektBeloppModalOverlay').classList.add('open');
+  setTimeout(() => { per.focus(); per.select(); }, 50);
+}
+function nyaProjektBeloppModalNum(id){
+  const raw = document.getElementById(id).value.trim();
+  if(raw === '') return null;
+  const n = parseFloat(raw.replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+function nyaProjektBeloppModalUpdateFormel(){
+  const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+  const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+  const el = document.getElementById('nyaProjektBeloppFormel');
+  if(per != null && antal != null){
+    el.textContent = formatKrFull(per) + ' × ' + antal.toLocaleString('sv-SE') + ' = ' + formatKrFull(per * antal);
+  } else {
+    el.textContent = per != null ? 'Ange antal bostäder för att räkna ut totalen.' : '';
+  }
+}
+function closeNyaProjektBeloppModal(){
+  document.getElementById('nyaProjektBeloppModalOverlay').classList.remove('open');
+  nyaProjektBeloppModalCtx = null;
+}
+['nyaProjektBeloppPerBostad', 'nyaProjektBeloppAntal'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+    const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+    if(per != null && antal != null){
+      document.getElementById('nyaProjektBeloppTotal').value = Math.round(per * antal * 100) / 100;
+    }
+    nyaProjektBeloppModalUpdateFormel();
+  });
+});
+document.getElementById('nyaProjektBeloppTotal').addEventListener('input', () => {
+  // Skrivs totalen in för hand gäller den - uppdelningen per bostad släpps.
+  document.getElementById('nyaProjektBeloppPerBostad').value = '';
+  nyaProjektBeloppModalUpdateFormel();
+});
+['nyaProjektBeloppPerBostad', 'nyaProjektBeloppAntal', 'nyaProjektBeloppTotal'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('nyaProjektBeloppModalSave').click(); }
+    if(e.key === 'Escape'){ closeNyaProjektBeloppModal(); }
+  });
+});
+document.getElementById('nyaProjektBeloppModalCancel').onclick = closeNyaProjektBeloppModal;
+document.getElementById('nyaProjektBeloppModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'nyaProjektBeloppModalOverlay') closeNyaProjektBeloppModal();
+});
+document.getElementById('nyaProjektBeloppModalSave').onclick = async () => {
+  const ctx = nyaProjektBeloppModalCtx;
+  if(!ctx) return;
+  const per = nyaProjektBeloppModalNum('nyaProjektBeloppPerBostad');
+  const antal = nyaProjektBeloppModalNum('nyaProjektBeloppAntal');
+  const total = nyaProjektBeloppModalNum('nyaProjektBeloppTotal');
+  const { candidate, row } = ctx;
+  closeNyaProjektBeloppModal();
+  if(ctx.onSave){
+    const result = (per != null && antal != null)
+      ? { belopp: Math.round(per * antal * 100) / 100, perBostad: per, perBostadAntal: antal }
+      : { belopp: total, perBostad: null, perBostadAntal: null };
+    await ctx.onSave(result);
+    return;
+  }
+  if(per != null && antal != null){
+    row.perBostad = per;
+    row.perBostadAntal = antal;
+    row.belopp = Math.round(per * antal * 100) / 100;
+  } else {
+    delete row.perBostad;
+    delete row.perBostadAntal;
+    row.belopp = total;
+  }
+  try{
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+// Popup för en intäktspost: antal enheter × kvm per enhet × kr per kvm = total,
+// eller totalen direkt. Uppdelningen sparas på raden (enheter/kvmPerEnhet/krPerKvm).
+let nyaProjektIntaktModalCtx = null;
+function nyaProjektIntaktNum(id){
+  const raw = document.getElementById(id).value.trim();
+  if(raw === '') return null;
+  const n = parseFloat(raw.replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+function nyaProjektIntaktModalUpdate(writeTotal){
+  const e = nyaProjektIntaktNum('nyaProjektIntaktEnheter');
+  const k = nyaProjektIntaktNum('nyaProjektIntaktKvm');
+  const p = nyaProjektIntaktNum('nyaProjektIntaktKrKvm');
+  const el = document.getElementById('nyaProjektIntaktFormel');
+  if(e != null && k != null && p != null){
+    const total = Math.round(e * k * p);
+    el.textContent = e.toLocaleString('sv-SE') + ' × ' + k.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(p) + '/kvm = ' + formatKrFull(total) + ' (' + (e * k).toLocaleString('sv-SE') + ' kvm totalt)';
+    if(writeTotal) document.getElementById('nyaProjektIntaktTotal').value = total;
+  } else {
+    el.textContent = (e != null || k != null || p != null) ? 'Fyll i alla tre för att räkna ut totalen.' : '';
+  }
+}
+function openNyaProjektIntaktModal(candidate, row, antalBostader, boa){
+  nyaProjektIntaktModalCtx = { candidate, row };
+  document.getElementById('nyaProjektIntaktModalTitle').textContent = row.namn || 'Intäkt';
+  const has = row.enheter != null && row.kvmPerEnhet != null && row.krPerKvm != null;
+  document.getElementById('nyaProjektIntaktEnheter').value = has ? row.enheter : (antalBostader != null ? antalBostader : '');
+  document.getElementById('nyaProjektIntaktKvm').value = has ? row.kvmPerEnhet : (antalBostader && boa ? Math.round(boa / antalBostader * 10) / 10 : '');
+  document.getElementById('nyaProjektIntaktKrKvm').value = has ? row.krPerKvm : '';
+  document.getElementById('nyaProjektIntaktTotal').value = row.belopp != null ? row.belopp : '';
+  nyaProjektIntaktModalUpdate(false);
+  document.getElementById('nyaProjektIntaktModalOverlay').classList.add('open');
+  setTimeout(() => { const el = document.getElementById(has ? 'nyaProjektIntaktKrKvm' : 'nyaProjektIntaktEnheter'); el.focus(); el.select(); }, 50);
+}
+function closeNyaProjektIntaktModal(){
+  document.getElementById('nyaProjektIntaktModalOverlay').classList.remove('open');
+  nyaProjektIntaktModalCtx = null;
+}
+['nyaProjektIntaktEnheter', 'nyaProjektIntaktKvm', 'nyaProjektIntaktKrKvm'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => nyaProjektIntaktModalUpdate(true));
+});
+document.getElementById('nyaProjektIntaktTotal').addEventListener('input', () => {
+  // Skrivs totalen in för hand gäller den - uppdelningen släpps.
+  document.getElementById('nyaProjektIntaktKrKvm').value = '';
+  nyaProjektIntaktModalUpdate(false);
+});
+['nyaProjektIntaktEnheter', 'nyaProjektIntaktKvm', 'nyaProjektIntaktKrKvm', 'nyaProjektIntaktTotal'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('nyaProjektIntaktModalSave').click(); }
+    if(e.key === 'Escape'){ closeNyaProjektIntaktModal(); }
+  });
+});
+document.getElementById('nyaProjektIntaktModalCancel').onclick = closeNyaProjektIntaktModal;
+document.getElementById('nyaProjektIntaktModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'nyaProjektIntaktModalOverlay') closeNyaProjektIntaktModal();
+});
+document.getElementById('nyaProjektIntaktModalSave').onclick = async () => {
+  const ctx = nyaProjektIntaktModalCtx;
+  if(!ctx) return;
+  const { candidate, row } = ctx;
+  const e = nyaProjektIntaktNum('nyaProjektIntaktEnheter');
+  const k = nyaProjektIntaktNum('nyaProjektIntaktKvm');
+  const p = nyaProjektIntaktNum('nyaProjektIntaktKrKvm');
+  const total = nyaProjektIntaktNum('nyaProjektIntaktTotal');
+  if(e != null && k != null && p != null){
+    row.enheter = e; row.kvmPerEnhet = k; row.krPerKvm = p;
+    row.belopp = Math.round(e * k * p);
+  } else {
+    // Enheter/kvm får ligga kvar som underlag för kr/kvm även när totalen skrivs direkt.
+    if(e != null && k != null){ row.enheter = e; row.kvmPerEnhet = k; } else { delete row.enheter; delete row.kvmPerEnhet; }
+    delete row.krPerKvm;
+    row.belopp = total;
+  }
+  closeNyaProjektIntaktModal();
+  try{
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  }catch(err){
+    showDebugError('Kunde inte spara', err);
+  }
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+function renderNyaProjektRowList(tbody, rows, candidate, opts){
+  tbody.innerHTML = '';
+  // opts.filter: visa bara en delmängd (t.ex. en underkategori) men flytta/ta
+  // bort i hela källistan så ordningen mellan posterna bevaras.
+  const visible = opts && opts.filter ? rows.filter(opts.filter) : rows;
+  visible.forEach(row => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.style.textAlign = 'left';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'editable';
+    nameSpan.style.cursor = 'pointer';
+    nameSpan.textContent = row.namn || 'Namnlös post';
+    if(row.ursprungGrupp && opts && opts.moveGroup && opts.moveGroup.oplacerade){
+      const src = document.createElement('span');
+      src.style.cssText = 'font-size:11px; color:var(--ink-soft); margin-left:8px;';
+      src.textContent = '(låg under "' + row.ursprungGrupp + '" i filen)';
+      nameSpan.appendChild(src);
+    }
+    nameSpan.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = row.namn || '';
+      input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
+      nameTd.innerHTML = '';
+      nameTd.appendChild(input);
+      input.focus(); input.select();
+      nyaProjektWireInlineInput(input, async () => {
+        row.namn = input.value.trim();
+        nameSpan.textContent = row.namn || 'Namnlös post';
+        nameTd.innerHTML = '';
+        nameTd.appendChild(nameSpan);
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        nyaProjektRefreshTidsaxel(candidate);
+      });
+    };
+    nameTd.appendChild(nameSpan);
+    tr.appendChild(nameTd);
+
+    if(opts && opts.part){
+      // Vilken part som finansierar posten (t.ex. bank, Solvinkeln, investerare).
+      const partTd = document.createElement('td');
+      partTd.style.textAlign = 'left';
+      const partSpan = document.createElement('span');
+      partSpan.className = 'editable';
+      partSpan.style.cursor = 'pointer';
+      partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
+      partSpan.textContent = row.part || 'Ange part';
+      const showPartSpan = () => {
+        partSpan.textContent = row.part || 'Ange part';
+        partSpan.style.color = row.part ? '' : 'var(--ink-soft)';
+        partTd.innerHTML = '';
+        partTd.appendChild(partSpan);
+      };
+      const savePart = async (value) => {
+        row.part = (value || '').trim();
+        showPartSpan();
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        nyaProjektRefreshTidsaxel(candidate);
+      };
+      // Fritextfält för "Fyll i själv" - Enter/blur sparar, Escape avbryter.
+      const showPartInput = (initial) => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Skriv finansiärens namn';
+        input.value = initial || '';
+        input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
+        partTd.innerHTML = '';
+        partTd.appendChild(input);
+        input.focus(); input.select();
+        nyaProjektWireInlineInput(input, async () => { await savePart(input.value); });
+      };
+      partSpan.onclick = () => {
+        // Rullista med de vanliga finansiärerna, eller "Fyll i själv" för fritext.
+        const sel = document.createElement('select');
+        sel.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' cursor:pointer;';
+        const FRITEXT = '__fritext__';
+        const opts_ = [{ v: '', t: '— Välj finansiär —' }]
+          .concat(NYA_PROJEKT_FINANSIARER.map(n => ({ v: n, t: n })))
+          .concat([{ v: FRITEXT, t: 'Fyll i själv…' }]);
+        opts_.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.v;
+          opt.textContent = o.t;
+          sel.appendChild(opt);
+        });
+        const isPreset = NYA_PROJEKT_FINANSIARER.includes(row.part);
+        sel.value = row.part ? (isPreset ? row.part : FRITEXT) : '';
+        if(row.part && !isPreset){
+          // Eget värde: visa det som ett extra val så det syns vad som gäller nu.
+          const cur = document.createElement('option');
+          cur.value = row.part;
+          cur.textContent = row.part + ' (nuvarande)';
+          sel.insertBefore(cur, sel.lastElementChild);
+          sel.value = row.part;
+        }
+        partTd.innerHTML = '';
+        partTd.appendChild(sel);
+        sel.focus();
+        let done = false;
+        sel.addEventListener('change', async () => {
+          done = true;
+          if(sel.value === FRITEXT){ showPartInput(isPreset ? '' : row.part); return; }
+          await savePart(sel.value);
+        });
+        sel.addEventListener('blur', () => { if(!done) showPartSpan(); });
+        sel.addEventListener('keydown', e => { if(e.key === 'Escape'){ done = true; showPartSpan(); } });
+      };
+      partTd.appendChild(partSpan);
+      tr.appendChild(partTd);
+    }
+
+    const amountTd = document.createElement('td');
+    const amountSpan = document.createElement('span');
+    amountSpan.className = 'editable';
+    amountSpan.style.cursor = 'pointer';
+    amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+    if(opts && opts.intaktModal && row.enheter != null && row.kvmPerEnhet != null && row.krPerKvm != null && row.belopp != null){
+      // Visar hur intäkten är uppbyggd: enheter × kvm × kr/kvm.
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-soft);";
+      spec.textContent = row.enheter.toLocaleString('sv-SE') + ' × ' + row.kvmPerEnhet.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(row.krPerKvm) + '/kvm';
+      amountSpan.appendChild(spec);
+    }
+    if(opts && opts.beloppModal && row.perBostad != null && row.belopp != null){
+      // Visar hur beloppet är uppbyggt när det specificerats per bostad.
+      const spec = document.createElement('div');
+      spec.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-soft);";
+      spec.textContent = formatKrFull(row.perBostad) + ' × ' + (row.perBostadAntal != null ? row.perBostadAntal : '?');
+      amountSpan.appendChild(spec);
+    }
+    amountSpan.onclick = () => {
+      if(opts && opts.beloppModal){
+        openNyaProjektBeloppModal(candidate, row, opts.antal);
+        return;
+      }
+      if(opts && opts.intaktModal){
+        openNyaProjektIntaktModal(candidate, row, opts.antal, opts.boa);
+        return;
+      }
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = row.belopp != null ? row.belopp : '';
+      input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' text-align:right;';
+      amountTd.innerHTML = '';
+      amountTd.appendChild(input);
+      input.focus(); input.select();
+      nyaProjektWireInlineInput(input, async () => {
+        const raw = input.value.trim();
+        row.belopp = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+        amountSpan.textContent = row.belopp != null ? formatKrFull(row.belopp) : '—';
+        amountTd.innerHTML = '';
+        amountTd.appendChild(amountSpan);
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        if(document.getElementById('nyaProjektNyckeltalGrid')) renderNyaProjektNyckeltal(candidate);
+        nyaProjektRefreshTidsaxel(candidate);
+        renderNyaProjektList();
+      });
+    };
+    amountTd.appendChild(amountSpan);
+    tr.appendChild(amountTd);
+
+    if(opts && opts.perKvm){
+      const kvmTd = document.createElement('td');
+      kvmTd.style.fontFamily = "'JetBrains Mono', monospace";
+      kvmTd.style.fontSize = '11px';
+      kvmTd.style.color = 'var(--ink-soft)';
+      // Intäktspost med egna enheter/kvm: kr/kvm räknas på postens egna kvm,
+      // inte på hela projektets BOA (typerna kan skilja sig åt).
+      const egnaKvm = (row.enheter != null && row.kvmPerEnhet != null) ? row.enheter * row.kvmPerEnhet : null;
+      kvmTd.textContent = nyaProjektPerKvm(row.belopp, egnaKvm || opts.boaTotal) || '—';
+      if(egnaKvm) kvmTd.title = 'Beräknat på postens egna ' + egnaKvm.toLocaleString('sv-SE') + ' kvm';
+      tr.appendChild(kvmTd);
+    }
+
+    if(opts && opts.period){
+      const periodTd = document.createElement('td');
+      const periodSpan = document.createElement('span');
+      periodSpan.className = 'editable';
+      periodSpan.style.cursor = 'pointer';
+      // Visar den tolkade månaden ("Oktober 2026"); går texten inte att tolka
+      // visas den som den skrevs med en varning, så den hamnar rätt på tidsaxeln.
+      const setPeriodText = () => {
+        if(!row.period){ periodSpan.textContent = '—'; periodSpan.title = ''; return; }
+        const p = nyaProjektParsePeriod(row.period);
+        periodSpan.textContent = p ? nyaProjektPeriodLabel(row.period) : row.period + ' ⚠';
+        periodSpan.title = p ? 'Skrivet som: ' + row.period : 'Kunde inte tolkas som en månad - skriv t.ex. "Oktober 2026" eller "2026-10"';
+      };
+      setPeriodText();
+      periodSpan.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'T.ex. Oktober 2026';
+        input.value = row.period || '';
+        input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS;
+        periodTd.innerHTML = '';
+        periodTd.appendChild(input);
+        input.focus(); input.select();
+        nyaProjektWireInlineInput(input, async () => {
+          row.period = input.value.trim();
+          setPeriodText();
+          periodTd.innerHTML = '';
+          periodTd.appendChild(periodSpan);
+          nyaProjektSortByPeriod(rows);
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          nyaProjektRefreshTidsaxel(candidate);
+        });
+      };
+      periodTd.appendChild(periodSpan);
+      tr.appendChild(periodTd);
+    }
+
+    const delTd = document.createElement('td');
+    delTd.style.whiteSpace = 'nowrap';
+    delTd.style.textAlign = 'right';
+    if(opts && opts.moveGroup && Array.isArray(opts.moveTargets)){
+      // "Flytta till": alla grupper och underkategorier i kalkylen. Byte av
+      // underkategori inom gruppen och flytt till en annan grupp går via samma lista.
+      const sel = document.createElement('select');
+      sel.title = 'Flytta till grupp / underkategori';
+      sel.style.cssText = 'font-size:11.5px; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; margin-right:6px; color:var(--ink-soft); background:#fff; max-width:170px;';
+      const curVal = opts.moveGroup.id + '|' + (row.underkategori || '');
+      opts.moveTargets.forEach(g => {
+        const uks = g.underkategorier || [];
+        const og = document.createElement('optgroup');
+        og.label = g.grupp || 'Namnlös grupp';
+        const mk = (ukId, label) => {
+          const o = document.createElement('option');
+          o.value = g.id + '|' + (ukId || '');
+          o.textContent = label;
+          og.appendChild(o);
+        };
+        if(!uks.length) mk(null, g.grupp || 'Namnlös grupp');
+        else {
+          uks.forEach(uk => mk(uk.id, uk.namn));
+          mk(null, 'Ej kategoriserad');
+        }
+        sel.appendChild(og);
+      });
+      sel.value = curVal;
+      if(sel.value !== curVal){
+        const o = document.createElement('option');
+        o.value = curVal;
+        o.textContent = 'Flytta till…';
+        sel.insertBefore(o, sel.firstChild);
+        sel.value = curVal;
+      }
+      sel.addEventListener('mousedown', e => e.stopPropagation());
+      sel.addEventListener('change', async () => {
+        const [gid, ukId] = sel.value.split('|');
+        const target = opts.moveTargets.find(g => g.id === gid);
+        if(!target) return;
+        if(target !== opts.moveGroup){
+          const i = opts.moveGroup.poster.indexOf(row);
+          if(i > -1) opts.moveGroup.poster.splice(i, 1);
+          target.poster.push(row);
+          delete row.ursprungGrupp;
+          // Tom "Oplacerade kostnader"-grupp städas bort automatiskt.
+          if(opts.moveGroup.oplacerade && !opts.moveGroup.poster.length){
+            candidate.data.kostnadsgrupper = candidate.data.kostnadsgrupper.filter(g => g !== opts.moveGroup);
+          }
+        }
+        row.underkategori = ukId || null;
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+        renderNyaProjektList();
+      });
+      delTd.appendChild(sel);
+    }
+    // Flytta posten upp/ner i listan - ordningen sparas med kalkylen. Med
+    // filter byts plats med närmaste synliga granne i källistan.
+    const vIdx = visible.indexOf(row);
+    const moveBtn = (label, title, delta, disabled) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.title = title;
+      btn.disabled = disabled;
+      btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 4px;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+      nyaProjektActionButton(btn, async () => {
+        const vi = visible.indexOf(row);
+        const other = visible[vi + delta];
+        if(!other) return;
+        const i = rows.indexOf(row), j = rows.indexOf(other);
+        if(i < 0 || j < 0) return;
+        rows[i] = other;
+        rows[j] = row;
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      });
+      return btn;
+    };
+    delTd.appendChild(moveBtn('↑', 'Flytta upp', -1, vIdx <= 0));
+    delTd.appendChild(moveBtn('↓', 'Flytta ner', 1, vIdx >= visible.length - 1));
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 4px; margin-left:6px;';
+    nyaProjektActionButton(delBtn, async () => {
+      const idx = rows.indexOf(row);
+      if(idx > -1) rows.splice(idx, 1);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    });
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function renderNyaProjektDetail(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate){ closeNyaProjektDetail(); return; }
+  candidate.data = migrateNyaProjektData(candidate.data);
+  const data = candidate.data;
+  const { antal, boa } = nyaProjektBostaderCounts(data);
+  const { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal } = nyaProjektTotals(data);
+
+  const titleEl = document.getElementById('nyaProjektDetailTitle');
+  titleEl.textContent = candidate.name;
+  titleEl.style.cursor = 'pointer';
+  titleEl.title = 'Klicka för att byta namn';
+  titleEl.onclick = () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = candidate.name || '';
+    input.style.cssText = "font-family:'Fraunces',serif; font-size:inherit; font-weight:inherit; width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:2px 6px;";
+    titleEl.replaceWith(input);
+    input.focus(); input.select();
+    nyaProjektWireInlineInput(input, async () => {
+      const name = input.value.trim();
+      if(name) candidate.name = name;
+      titleEl.textContent = candidate.name;
+      input.replaceWith(titleEl);
+      await DB.updateNyaProjekt(candidate.id, { name: candidate.name });
+      renderNyaProjektList();
+    });
+  };
+  document.getElementById('nyaProjektDetailStatus').textContent =
+    candidate.status === 'promoted' ? '✓ Omvandlat till projekt' : 'Kandidat under utvärdering';
+  document.getElementById('nyaProjektPromoteBtn').style.display = candidate.status === 'promoted' ? 'none' : 'inline-block';
+
+  renderNyaProjektNyckeltal(candidate);
+
+  renderNyaProjektRowList(document.getElementById('nyaProjektIntakterBody'), data.intakter, candidate, { perKvm: true, boaTotal: boa, intaktModal: true, antal, boa });
+
+  const groupsEl = document.getElementById('nyaProjektKostnadsgrupper');
+  groupsEl.innerHTML = '';
+  if(!data.kostnadsgrupper.length){
+    groupsEl.innerHTML = '<p class="eko-sub">Inga kostnader inlästa än.</p>';
+  } else {
+    data.kostnadsgrupper.forEach(group => {
+      const room = document.createElement('div');
+      room.className = 'material-room';
+
+      const header = document.createElement('div');
+      header.className = 'material-room-header';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'editable';
+      nameSpan.style.cssText = "cursor:pointer; font-family:'Fraunces',serif; font-weight:700; font-size:17px; flex:1;";
+      const groupTotal = nyaProjektGroupTotal(group);
+      nameSpan.textContent = group.grupp + ' · ' + formatKrFull(groupTotal) + (nyaProjektPerKvm(groupTotal, boa) ? ' · ' + nyaProjektPerKvm(groupTotal, boa) : '');
+      nameSpan.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = group.grupp || '';
+        input.style.cssText = 'flex:1; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px; font:inherit;';
+        nameSpan.replaceWith(input);
+        input.focus(); input.select();
+        nyaProjektWireInlineInput(input, async () => {
+          group.grupp = input.value.trim() || 'Namnlös grupp';
+          input.replaceWith(nameSpan);
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        });
+      };
+      header.appendChild(nameSpan);
+      const delGroupBtn = document.createElement('button');
+      delGroupBtn.type = 'button';
+      delGroupBtn.textContent = '✕';
+      delGroupBtn.title = 'Ta bort gruppen';
+      nyaProjektActionButton(delGroupBtn, async () => {
+        if(!confirm('Ta bort gruppen "' + (group.grupp || 'Namnlös grupp') + '" med alla poster?')) return;
+        data.kostnadsgrupper = data.kostnadsgrupper.filter(g => g.id !== group.id);
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+        renderNyaProjektList();
+      });
+      // Flytta hela gruppen upp/ner bland kostnadsgrupperna.
+      const gIdx = data.kostnadsgrupper.indexOf(group);
+      const moveGroupBtn = (label, title, delta, disabled) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.title = title;
+        btn.disabled = disabled;
+        btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+        nyaProjektActionButton(btn, async () => {
+          const list = data.kostnadsgrupper;
+          const i = list.indexOf(group);
+          const j = i + delta;
+          if(i < 0 || j < 0 || j >= list.length) return;
+          list.splice(i, 1);
+          list.splice(j, 0, group);
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          renderNyaProjektDetail();
+        });
+        return btn;
+      };
+      header.appendChild(moveGroupBtn('↑', 'Flytta gruppen upp', -1, gIdx <= 0));
+      header.appendChild(moveGroupBtn('↓', 'Flytta gruppen ner', 1, gIdx >= data.kostnadsgrupper.length - 1));
+      header.appendChild(delGroupBtn);
+      room.appendChild(header);
+
+      const table = document.createElement('table');
+      table.style.width = '100%';
+      room.appendChild(table);
+      const rowOpts = { perKvm: true, boaTotal: boa, beloppModal: true, antal, moveGroup: group, moveTargets: data.kostnadsgrupper };
+      const uks = group.underkategorier || [];
+      if(group.oplacerade){
+        room.style.border = '2px dashed var(--blue)';
+        const note = document.createElement('p');
+        note.className = 'eko-sub';
+        note.style.margin = '0 0 8px';
+        note.textContent = 'Poster från inläsningen som inte kändes igen i mallen. Välj rätt grupp/underkategori i rullistan "Flytta till" på varje rad - gruppen försvinner när den är tom.';
+        room.appendChild(note);
+      }
+
+      const addPostBtn = (ukId) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'add-inline-btn';
+        btn.style.marginTop = '8px';
+        btn.textContent = '+ Lägg till post';
+        nyaProjektActionButton(btn, async () => {
+          group.poster.push({ id: uid(), namn: '', belopp: null, underkategori: ukId || null });
+          await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+          renderNyaProjektDetail();
+        });
+        return btn;
+      };
+
+      if(!uks.length){
+        const tbody = document.createElement('tbody');
+        table.appendChild(tbody);
+        renderNyaProjektRowList(tbody, group.poster, candidate, rowOpts);
+        room.appendChild(addPostBtn(null));
+      } else {
+        // En sektion per underkategori med rubrik, delsumma och egna poster,
+        // följt av eventuella okategoriserade poster.
+        const sections = uks.map(uk => ({ uk, filter: p => p.underkategori === uk.id }));
+        sections.push({ uk: null, filter: p => !p.underkategori });
+        sections.forEach(sec => {
+          const rows = group.poster.filter(sec.filter);
+          if(!sec.uk && !rows.length) return;
+          const subTotal = rows.reduce((s, p) => s + (p.belopp || 0), 0);
+          const headBody = document.createElement('tbody');
+          const headTr = document.createElement('tr');
+          headTr.className = 'nya-projekt-uk-head';
+          const headTd = document.createElement('td');
+          headTd.colSpan = 4;
+          headTd.style.cssText = 'text-align:left; padding:14px 0 4px; border-bottom:1px solid var(--line-soft);';
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'display:flex; align-items:center; gap:6px;';
+          const ukName = document.createElement('span');
+          ukName.style.cssText = 'font-weight:700; font-size:13.5px;' + (sec.uk ? ' cursor:pointer;' : ' color:var(--ink-soft);');
+          ukName.textContent = sec.uk ? sec.uk.namn : 'Ej kategoriserade';
+          if(sec.uk){
+            ukName.title = 'Klicka för att byta namn';
+            ukName.onclick = () => {
+              const input = document.createElement('input');
+              input.type = 'text';
+              input.value = sec.uk.namn || '';
+              input.style.cssText = NYA_PROJEKT_INLINE_INPUT_CSS + ' max-width:260px;';
+              ukName.replaceWith(input);
+              input.focus(); input.select();
+              nyaProjektWireInlineInput(input, async () => {
+                sec.uk.namn = input.value.trim() || 'Namnlös underkategori';
+                input.replaceWith(ukName);
+                await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+              });
+            };
+          }
+          wrap.appendChild(ukName);
+          const sum = document.createElement('span');
+          sum.style.cssText = "font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink-soft); flex:1;";
+          sum.textContent = '· ' + formatKrFull(subTotal) + (nyaProjektPerKvm(subTotal, boa) ? ' · ' + nyaProjektPerKvm(subTotal, boa) : '') + ' · ' + rows.length + ' post' + (rows.length === 1 ? '' : 'er');
+          wrap.appendChild(sum);
+          if(sec.uk){
+            const ui = uks.indexOf(sec.uk);
+            const mv = (label, title, delta, disabled) => {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.textContent = label;
+              btn.title = title;
+              btn.disabled = disabled;
+              btn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;' + (disabled ? ' opacity:0.25; cursor:default;' : '');
+              nyaProjektActionButton(btn, async () => {
+                const i = uks.indexOf(sec.uk), j = i + delta;
+                if(i < 0 || j < 0 || j >= uks.length) return;
+                uks.splice(i, 1);
+                uks.splice(j, 0, sec.uk);
+                await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+                renderNyaProjektDetail();
+              });
+              return btn;
+            };
+            wrap.appendChild(mv('↑', 'Flytta underkategorin upp', -1, ui <= 0));
+            wrap.appendChild(mv('↓', 'Flytta underkategorin ner', 1, ui >= uks.length - 1));
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = '✕';
+            del.title = 'Ta bort underkategorin (posterna blir okategoriserade)';
+            del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+            nyaProjektActionButton(del, async () => {
+              if(rows.length && !confirm('Ta bort underkategorin "' + sec.uk.namn + '"? De ' + rows.length + ' posterna ligger kvar som okategoriserade.')) return;
+              group.underkategorier = uks.filter(u => u.id !== sec.uk.id);
+              group.poster.forEach(p => { if(p.underkategori === sec.uk.id) p.underkategori = null; });
+              await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+              renderNyaProjektDetail();
+            });
+            wrap.appendChild(del);
+          }
+          headTd.appendChild(wrap);
+          headTr.appendChild(headTd);
+          headBody.appendChild(headTr);
+          table.appendChild(headBody);
+
+          const tbody = document.createElement('tbody');
+          table.appendChild(tbody);
+          renderNyaProjektRowList(tbody, group.poster, candidate, { ...rowOpts, filter: sec.filter });
+          const addTr = document.createElement('tr');
+          const addTd = document.createElement('td');
+          addTd.colSpan = 4;
+          addTd.style.cssText = 'text-align:left; padding:0 0 4px; border:none;';
+          const addBtn = addPostBtn(sec.uk ? sec.uk.id : null);
+          addBtn.style.marginTop = '4px';
+          addBtn.style.fontSize = '12px';
+          addTd.appendChild(addBtn);
+          addTr.appendChild(addTd);
+          tbody.appendChild(addTr);
+        });
+      }
+
+      const addUkBtn = document.createElement('button');
+      addUkBtn.type = 'button';
+      addUkBtn.className = 'add-inline-btn';
+      addUkBtn.style.cssText = 'margin-top:8px; margin-left:8px; opacity:0.8;';
+      addUkBtn.textContent = '+ Lägg till underkategori';
+      nyaProjektActionButton(addUkBtn, async () => {
+        const namn = prompt('Namn på underkategorin:');
+        if(!namn || !namn.trim()) return;
+        group.underkategorier.push({ id: uid(), namn: namn.trim() });
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektDetail();
+      });
+      room.appendChild(addUkBtn);
+
+      groupsEl.appendChild(room);
+    });
+  }
+
+  document.getElementById('nyaProjektLikviditetsbehovText').textContent =
+    'Likviditetsbehov (= total kostnad): ' + formatKrFull(totalKostnader) +
+    ' · Finansierat: ' + formatKrFull(totalFinansiering) +
+    ' · Kvar att finansiera: ' + formatKrFull(totalKostnader - totalFinansiering);
+  // Finansieringsplan och händelser ligger alltid i datumordning; rader utan
+  // tolkbart datum hamnar sist och kan flyttas med pilarna.
+  nyaProjektSortByPeriod(data.finansiering);
+  nyaProjektSortByPeriod(data.handelser);
+  renderNyaProjektRowList(document.getElementById('nyaProjektFinansieringBody'), data.finansiering, candidate, { period: true, part: true });
+  renderNyaProjektRowList(document.getElementById('nyaProjektHandelserBody'), data.handelser, candidate, { period: true });
+  document.getElementById('nyaProjektTidsaxelPreview').innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
+
+  const infoInput = document.getElementById('nyaProjektAllmanInfoInput');
+  infoInput.value = data.allmanInfo || '';
+  document.getElementById('nyaProjektMarknadslageInput').value = data.marknadslage || '';
+  document.getElementById('nyaProjektRiskerInput').value = data.risker || '';
+  renderNyaProjektKarta(candidate);
+
+  const bildWrap = document.getElementById('nyaProjektBildPreviewWrap');
+  if(data.bild && data.bild.base64){
+    bildWrap.style.display = 'block';
+    document.getElementById('nyaProjektBildPreview').src = 'data:' + data.bild.mimetype + ';base64,' + data.bild.base64;
+    // Äldre, stora bilder minskas automatiskt en gång när kalkylen öppnas.
+    if(nyaProjektBildBytes(data.bild) > NYA_PROJEKT_BILD_MAL_BYTES * 2 && !data.bild.__minskas){
+      data.bild.__minskas = true;
+      const before = nyaProjektBildBytes(data.bild);
+      nyaProjektCompressImage('data:' + data.bild.mimetype + ';base64,' + data.bild.base64).then(async packed => {
+        const c = nyaProjektList.find(x => x.id === candidate.id);
+        if(!c || !c.data.bild) return;
+        c.data.bild = { mimetype: packed.mimetype, base64: packed.base64, namn: (c.data.bild.namn || 'bild').replace(/\.[^.]+$/, '') + '.jpg' };
+        await DB.updateNyaProjekt(c.id, { data: c.data });
+        const statusEl = document.getElementById('nyaProjektBildStatus');
+        if(statusEl && currentNyaProjektId === c.id){
+          statusEl.textContent = 'Bilden minskades automatiskt: ' + formatKB(before) + ' → ' + formatKB(packed.bytes) + '.';
+          statusEl.className = 'contract-upload-status ok';
+          document.getElementById('nyaProjektBildPreview').src = 'data:' + packed.mimetype + ';base64,' + packed.base64;
+        }
+      }).catch(() => { delete data.bild.__minskas; });
+    }
+  } else {
+    bildWrap.style.display = 'none';
+  }
+
+  renderNyaProjektBilagorList(candidate);
+
+  const shareBox = document.getElementById('nyaProjektShareBox');
+  shareBox.style.display = candidate.is_public ? 'block' : 'none';
+  document.getElementById('nyaProjektShareBtn').style.display = candidate.is_public ? 'none' : 'inline-block';
+  if(candidate.is_public){
+    document.getElementById('nyaProjektShareLinkInput').value = location.origin + location.pathname + '?propa=' + candidate.share_id;
+  }
+}
+
+function renderNyaProjektBilagorList(candidate){
+  const wrap = document.getElementById('nyaProjektBilagorList');
+  wrap.innerHTML = '';
+  const rows = candidate.data.bilagor || [];
+  if(!rows.length){
+    wrap.innerHTML = '<p class="eko-sub">Inga bilagor uppladdade än.</p>';
+    return;
+  }
+  rows.forEach(b => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line-soft);';
+    const link = document.createElement('a');
+    if(b.url){
+      // Länkbilaga (t.ex. Google Drive) - öppnas i ny flik, tar ingen plats i databasen.
+      link.href = b.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = '🔗 ' + b.namn;
+    } else {
+      link.href = 'data:' + b.mimetype + ';base64,' + b.base64;
+      link.download = b.namn;
+      link.textContent = '📎 ' + b.namn;
+      const size = document.createElement('span');
+      size.style.cssText = 'font-size:11px; color:var(--ink-soft); margin-left:8px;';
+      size.textContent = b.base64 ? Math.round(b.base64.length * 0.75 / 1024) + ' kB i databasen' : '';
+      link.appendChild(size);
+    }
+    link.style.flex = '1';
+    row.appendChild(link);
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.onclick = async () => {
+      candidate.data.bilagor = candidate.data.bilagor.filter(x => x.id !== b.id);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBilagorList(candidate);
+    };
+    row.appendChild(delBtn);
+    wrap.appendChild(row);
+  });
+}
+
+const NYA_PROJEKT_FILE_MAX_BYTES = 4 * 1024 * 1024;
+// Bilagor lagras i kalkylens databasrad - stora filer gjorde raden flera MB och
+// databasen hängde sig. Större dokument delas som Drive-länkar i stället.
+const NYA_PROJEKT_BILAGA_MAX_BYTES = 1 * 1024 * 1024;
+
+// Länkbilaga: namn + URL (t.ex. Google Drive), sparas som {id, namn, url}.
+document.getElementById('nyaProjektBilagaLankBtn').onclick = () => {
+  const form = document.getElementById('nyaProjektBilagaLankForm');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if(form.style.display === 'block') document.getElementById('nyaProjektBilagaLankNamn').focus();
+};
+document.getElementById('nyaProjektBilagaLankCancelBtn').onclick = () => {
+  document.getElementById('nyaProjektBilagaLankForm').style.display = 'none';
+};
+async function nyaProjektSaveBilagaLank(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const statusEl = document.getElementById('nyaProjektBilagaStatus');
+  const namnEl = document.getElementById('nyaProjektBilagaLankNamn');
+  const urlEl = document.getElementById('nyaProjektBilagaLankUrl');
+  let url = urlEl.value.trim();
+  const namn = namnEl.value.trim() || url;
+  if(!url){ statusEl.textContent = 'Klistra in en länk.'; statusEl.className = 'contract-upload-status err'; urlEl.focus(); return; }
+  if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  try{ new URL(url); }catch(e){ statusEl.textContent = 'Länken ser inte giltig ut.'; statusEl.className = 'contract-upload-status err'; return; }
+  candidate.data.bilagor.push({ id: uid(), namn, url, uppladdadAt: new Date().toISOString() });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  namnEl.value = ''; urlEl.value = '';
+  document.getElementById('nyaProjektBilagaLankForm').style.display = 'none';
+  statusEl.textContent = 'Länken är tillagd.';
+  statusEl.className = 'contract-upload-status ok';
+  renderNyaProjektBilagorList(candidate);
+}
+document.getElementById('nyaProjektBilagaLankSaveBtn').onclick = nyaProjektSaveBilagaLank;
+['nyaProjektBilagaLankNamn', 'nyaProjektBilagaLankUrl'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); nyaProjektSaveBilagaLank(); } });
+});
+
+// Fritextfälten (allmän information, marknadsläge, risker) sparas en kort
+// stund efter att man slutat skriva.
+const nyaProjektTextSaveTimers = {};
+[
+  { inputId: 'nyaProjektAllmanInfoInput', key: 'allmanInfo' },
+  { inputId: 'nyaProjektMarknadslageInput', key: 'marknadslage' },
+  { inputId: 'nyaProjektRiskerInput', key: 'risker' }
+].forEach(({ inputId, key }) => {
+  document.getElementById(inputId).addEventListener('input', (e) => {
+    const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+    if(!candidate) return;
+    candidate.data[key] = e.target.value;
+    clearTimeout(nyaProjektTextSaveTimers[key]);
+    nyaProjektTextSaveTimers[key] = setTimeout(() => {
+      DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    }, 600);
+  });
+});
+
+document.getElementById('nyaProjektBildUploadBtn').onclick = () => {
+  document.getElementById('nyaProjektBildFileInput').click();
+};
+// Bilden kan komma från filväljaren, dras och släppas på rutan, eller
+// klistras in (Ctrl+V) - alla vägar går via samma funktion.
+// Bilder minskas i webbläsaren innan de sparas: max 1600 px på längsta sidan,
+// JPEG med sänkt kvalitet tills de ryms under ~350 kB. Propån visar dem i
+// max ~800 px bredd, så inget syns på skärmen men databasraden hålls liten.
+const NYA_PROJEKT_BILD_MAX_SIDA = 1600;
+const NYA_PROJEKT_BILD_MAL_BYTES = 350 * 1024;
+const NYA_PROJEKT_BILD_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+function nyaProjektLoadImage(src){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Kunde inte läsa bilden'));
+    img.src = src;
+  });
+}
+async function nyaProjektCompressImage(src){
+  const img = await nyaProjektLoadImage(src);
+  const scale = Math.min(1, NYA_PROJEKT_BILD_MAX_SIDA / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  let quality = 0.85;
+  let dataUrl = canvas.toDataURL('image/jpeg', quality);
+  // Sänk kvaliteten stegvis tills bilden ryms under målstorleken.
+  while(dataUrl.length * 0.75 > NYA_PROJEKT_BILD_MAL_BYTES && quality > 0.5){
+    quality -= 0.1;
+    dataUrl = canvas.toDataURL('image/jpeg', quality);
+  }
+  return { mimetype: 'image/jpeg', base64: dataUrl.split(',')[1], width: w, height: h, bytes: Math.round(dataUrl.length * 0.75) };
+}
+function nyaProjektBildBytes(bild){
+  return bild && bild.base64 ? Math.round(bild.base64.length * 0.75) : 0;
+}
+function formatKB(bytes){
+  return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' MB' : Math.round(bytes / 1024) + ' kB';
+}
+async function nyaProjektHandleBildFile(file){
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const statusEl = document.getElementById('nyaProjektBildStatus');
+  if(!/^image\//.test(file.type || '')){
+    statusEl.textContent = 'Välj en bildfil (JPG, PNG m.m.).';
+    statusEl.className = 'contract-upload-status err';
+    return;
+  }
+  if(file.size > NYA_PROJEKT_BILD_UPLOAD_MAX_BYTES){
+    statusEl.textContent = 'Bilden är för stor (max 25 MB).';
+    statusEl.className = 'contract-upload-status err';
+    return;
+  }
+  statusEl.textContent = 'Minskar och laddar upp…';
+  statusEl.className = 'contract-upload-status';
+  try{
+    const original = await fileToBase64(file);
+    const packed = await nyaProjektCompressImage('data:' + (file.type || 'image/jpeg') + ';base64,' + original);
+    candidate.data.bild = { mimetype: packed.mimetype, base64: packed.base64, namn: (file.name || 'bild').replace(/\.[^.]+$/, '') + '.jpg' };
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    statusEl.textContent = 'Bilden sparad: ' + formatKB(file.size) + ' → ' + formatKB(packed.bytes) + ' (' + packed.width + '×' + packed.height + ' px).';
+    statusEl.className = 'contract-upload-status ok';
+    renderNyaProjektDetail();
+  }catch(err){
+    statusEl.textContent = 'Kunde inte ladda upp bilden: ' + (err && err.message ? err.message : err);
+    statusEl.className = 'contract-upload-status err';
+  }
+}
+document.getElementById('nyaProjektBildFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  await nyaProjektHandleBildFile(file);
+});
+(function wireNyaProjektBildDrop(){
+  const zone = document.getElementById('nyaProjektBildDropZone');
+  if(!zone) return;
+  const baseBorder = zone.style.border;
+  ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault();
+    zone.style.border = '2px dashed var(--blue)';
+    zone.style.background = 'var(--blue-soft)';
+  }));
+  ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault();
+    zone.style.border = baseBorder;
+    zone.style.background = '';
+  }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    nyaProjektHandleBildFile(file);
+  });
+  zone.addEventListener('paste', e => {
+    const items = e.clipboardData ? [...e.clipboardData.items] : [];
+    const img = items.find(i => /^image\//.test(i.type));
+    if(img){ e.preventDefault(); nyaProjektHandleBildFile(img.getAsFile()); }
+  });
+})();
+document.getElementById('nyaProjektBildRemoveBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.bild = null;
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+
+document.getElementById('nyaProjektBilagaUploadBtn').onclick = () => {
+  document.getElementById('nyaProjektBilagaFileInput').click();
+};
+document.getElementById('nyaProjektBilagaFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  const statusEl = document.getElementById('nyaProjektBilagaStatus');
+  if(file.size > NYA_PROJEKT_BILAGA_MAX_BYTES){
+    statusEl.textContent = 'Filen är för stor (max 1 MB). Lägg den på Drive och lägg till en länk i stället.';
+    statusEl.className = 'contract-upload-status err';
+    e.target.value = '';
+    return;
+  }
+  try{
+    const base64 = await fileToBase64(file);
+    candidate.data.bilagor.push({ id: uid(), namn: file.name, mimetype: file.type || 'application/octet-stream', base64, uppladdadAt: new Date().toISOString() });
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    statusEl.textContent = '';
+    renderNyaProjektBilagorList(candidate);
+  }catch(err){
+    statusEl.textContent = 'Kunde inte ladda upp filen.';
+    statusEl.className = 'contract-upload-status err';
+  } finally {
+    e.target.value = '';
+  }
+});
+
+document.getElementById('nyaProjektAddIntaktBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.intakter.push({ id: uid(), namn: '', belopp: null });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddGruppBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.kostnadsgrupper.push({ id: uid(), grupp: 'Ny grupp', poster: [] });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddHandelseBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.handelser.push({ id: uid(), namn: '', belopp: null, period: '' });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektAddFinansieringBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.data.finansiering.push({ id: uid(), namn: '', belopp: null, period: '' });
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektDetail();
+};
+
+// ---------- Bostäder (per kandidat) - prisdifferentiera mellan enskilda bostäder ----------
+let currentNyaProjektBostaderId = null;
+async function openNyaProjektBostaderModal(candidateId){
+  currentNyaProjektBostaderId = candidateId;
+  const candidate = nyaProjektList.find(c => c.id === candidateId);
+  // Finns inga bostäder listade men kalkylen anger ett antal: skapa en tom rad
+  // per bostad så att listan bara behöver fyllas i, inte byggas upp för hand.
+  if(candidate && !candidate.data.bostader.length && candidate.data.antalBostader > 0){
+    for(let i = 1; i <= candidate.data.antalBostader; i++){
+      candidate.data.bostader.push({ id: uid(), namn: 'Lgh ' + i, kvm: null, pris: null });
+    }
+    try{
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    }catch(e){
+      showDebugError('Kunde inte spara bostäder', e);
+    }
+  }
+  setNyaProjektBostaderExcelStatus('');
+  renderNyaProjektBostaderModal();
+  document.getElementById('ekonomiNyaProjektDetailView').style.display = 'none';
+  document.getElementById('nyaProjektBostaderView').style.display = 'block';
+  window.scrollTo(0, 0);
+}
+function closeNyaProjektBostaderModal(){
+  document.getElementById('nyaProjektBostaderView').style.display = 'none';
+  currentNyaProjektBostaderId = null;
+  if(currentNyaProjektId){
+    document.getElementById('ekonomiNyaProjektDetailView').style.display = 'block';
+    renderNyaProjektDetail();
+  }
+  renderNyaProjektList();
+}
+document.getElementById('nyaProjektBostaderCloseBtn').onclick = closeNyaProjektBostaderModal;
+
+function setNyaProjektBostaderExcelStatus(msg, kind){
+  const el = document.getElementById('nyaProjektBostaderExcelStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+// Läser en bostadslista ur ett kalkylblad utan AI: letar upp rubrikraden
+// (namn/lgh, kvm/BOA, pris) och tar varje rad under den som en bostad.
+// Saknas rubriker tas de tre första ifyllda kolumnerna som namn, kvm, pris.
+function xlsxToBostader(wb){
+  const isName = h => /namn|l[äa]g(enhet|h)|bostad|\bnr\b|nummer|objekt|beteckning/i.test(h);
+  const isKvm = h => /kvm|boa|m2|m²|yta|area|storlek/i.test(h);
+  const isPris = h => /pris|kr|belopp|insats/i.test(h);
+  const num = v => {
+    if(v == null || v === '') return null;
+    if(typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/\s|kr|m²|m2/gi, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  };
+  let best = [];
+  wb.SheetNames.forEach(name => {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null, raw: true });
+    let hdrIdx = -1, cName = -1, cKvm = -1, cPris = -1;
+    for(let r = 0; r < Math.min(grid.length, 40); r++){
+      const row = grid[r] || [];
+      let n = -1, k = -1, p = -1;
+      row.forEach((cell, c) => {
+        const h = cell == null ? '' : String(cell);
+        if(!h) return;
+        if(n < 0 && isName(h)) n = c;
+        else if(k < 0 && isKvm(h)) k = c;
+        else if(p < 0 && isPris(h)) p = c;
+      });
+      if(k >= 0 && p >= 0){ hdrIdx = r; cName = n; cKvm = k; cPris = p; break; }
+    }
+    let rows = [];
+    if(hdrIdx >= 0){
+      for(let r = hdrIdx + 1; r < grid.length; r++){
+        const row = grid[r] || [];
+        const kvm = num(row[cKvm]);
+        const pris = num(row[cPris]);
+        const namn = cName >= 0 && row[cName] != null ? String(row[cName]).trim() : '';
+        if(kvm == null && pris == null) continue;
+        if(/^(summa|totalt|total|snitt|medel)/i.test(namn)) continue;
+        rows.push({ namn, kvm, pris });
+      }
+    } else {
+      for(let r = 0; r < grid.length; r++){
+        const cells = (grid[r] || []).filter(v => v != null && v !== '');
+        if(cells.length < 2) continue;
+        const kvm = num(cells[cells.length - 2]);
+        const pris = num(cells[cells.length - 1]);
+        if(kvm == null || pris == null) continue;
+        const namn = cells.length > 2 ? String(cells[0]).trim() : '';
+        if(/^(summa|totalt|total|snitt|medel)/i.test(namn)) continue;
+        rows.push({ namn, kvm, pris });
+      }
+    }
+    if(rows.length > best.length) best = rows;
+  });
+  return best.map((b, i) => ({ id: uid(), namn: b.namn || ('Lgh ' + (i + 1)), kvm: b.kvm, pris: b.pris }));
+}
+document.getElementById('nyaProjektBostaderExcelBtn').onclick = () => {
+  document.getElementById('nyaProjektBostaderExcelInput').click();
+};
+document.getElementById('nyaProjektBostaderExcelInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate){ e.target.value = ''; return; }
+  const btn = document.getElementById('nyaProjektBostaderExcelBtn');
+  btn.disabled = true;
+  setNyaProjektBostaderExcelStatus('Läser filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const rows = xlsxToBostader(wb);
+    if(!rows.length) throw new Error('Hittade inga bostäder i filen (behöver kolumner för kvm och pris).');
+    const existing = candidate.data.bostader;
+    const hasContent = existing.some(b => b.kvm != null || b.pris != null);
+    if(hasContent && !confirm('Ersätt de ' + existing.length + ' bostäder som redan är ifyllda med ' + rows.length + ' bostäder från filen?')){
+      setNyaProjektBostaderExcelStatus('Avbrutet - inget ändrades.');
+      return;
+    }
+    candidate.data.bostader = rows;
+    nyaProjektSyncBostader(candidate.data);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektBostaderModal();
+    renderNyaProjektList();
+    setNyaProjektBostaderExcelStatus(rows.length + ' bostäder inlästa från ' + file.name + '.', 'ok');
+  }catch(err){
+    setNyaProjektBostaderExcelStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+// Summan av bostadslistan är källan till nyckeltalet "BOA totalt" och till
+// intäktsraden "Insatser": skrivs över varje gång en bostad ändras, läggs till
+// eller tas bort, så att kalkylen alltid följer listan.
+function nyaProjektSyncBostader(data){
+  const rows = data.bostader || [];
+  const kvmRows = rows.filter(r => r.kvm != null);
+  const prisRows = rows.filter(r => r.pris != null);
+  if(rows.length) data.antalBostader = rows.length;
+  // Poster med standardbelopp per bostad som väntat på ett antal räknas ut nu.
+  if(data.antalBostader){
+    (data.kostnadsgrupper || []).forEach(g => (g.poster || []).forEach(p => {
+      if(p.perBostad != null && p.belopp == null){
+        p.perBostadAntal = data.antalBostader;
+        p.belopp = Math.round(p.perBostad * data.antalBostader * 100) / 100;
+      }
+    }));
+  }
+  if(kvmRows.length) data.boaTotal = Math.round(kvmRows.reduce((s, r) => s + r.kvm, 0) * 100) / 100;
+  if(prisRows.length){
+    if(!Array.isArray(data.intakter)) data.intakter = [];
+    let row = data.intakter.find(r => /insats/i.test(r.namn || ''));
+    if(!row){
+      row = { id: uid(), namn: 'Insatser', belopp: null };
+      data.intakter.unshift(row);
+    }
+    row.belopp = prisRows.reduce((s, r) => s + r.pris, 0);
+  }
+}
+function renderNyaProjektBostaderModal(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate) return;
+  const rows = candidate.data.bostader;
+  const totalPris = rows.reduce((s, r) => s + (r.pris || 0), 0);
+  const totalKvm = rows.reduce((s, r) => s + (r.kvm || 0), 0);
+  document.getElementById('nyaProjektBostaderTitle').textContent = 'Bostäder · ' + candidate.name;
+  document.getElementById('nyaProjektBostaderModalSub').textContent =
+    rows.length + ' bostäder · ' + totalKvm.toLocaleString('sv-SE') + ' m² · ' + formatKrFull(totalPris) + ' totalt' +
+    (totalKvm ? ' · ' + formatKrPerKvm(totalPris, totalKvm) : '');
+  const foot = document.getElementById('nyaProjektBostaderFoot');
+  foot.innerHTML = rows.length
+    ? '<tr class="eko-row-resultat"><td style="text-align:left;">Summa <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">→ BOA totalt och Insatser i kalkylen</span></td><td>' + totalKvm.toLocaleString('sv-SE') + ' m²</td><td>' + formatKrFull(totalPris) + '</td><td></td></tr>'
+    : '';
+
+  const tbody = document.getElementById('nyaProjektBostaderBody');
+  tbody.innerHTML = '';
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.style.textAlign = 'left';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = row.namn || '';
+    nameInput.placeholder = 'T.ex. Lgh 1';
+    nameInput.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    nameInput.addEventListener('change', async () => {
+      row.namn = nameInput.value.trim();
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    });
+    nameTd.appendChild(nameInput);
+    tr.appendChild(nameTd);
+
+    const kvmTd = document.createElement('td');
+    const kvmInput = document.createElement('input');
+    kvmInput.type = 'number';
+    kvmInput.value = row.kvm != null ? row.kvm : '';
+    kvmInput.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    kvmInput.addEventListener('change', async () => {
+      const raw = kvmInput.value.trim();
+      row.kvm = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSyncBostader(candidate.data);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+    });
+    kvmTd.appendChild(kvmInput);
+    tr.appendChild(kvmTd);
+
+    const prisTd = document.createElement('td');
+    const prisInput = document.createElement('input');
+    prisInput.type = 'number';
+    prisInput.value = row.pris != null ? row.pris : '';
+    prisInput.style.cssText = 'width:100%; box-sizing:border-box; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:4px 6px;';
+    prisInput.addEventListener('change', async () => {
+      const raw = prisInput.value.trim();
+      row.pris = raw === '' ? null : parseFloat(raw.replace(',', '.'));
+      nyaProjektSyncBostader(candidate.data);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+    });
+    prisTd.appendChild(prisInput);
+    tr.appendChild(prisTd);
+
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
+    delBtn.onclick = async () => {
+      candidate.data.bostader = candidate.data.bostader.filter(b => b.id !== row.id);
+      nyaProjektSyncBostader(candidate.data);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektBostaderModal();
+      renderNyaProjektDetail();
+      renderNyaProjektList();
+    };
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+
+    tbody.appendChild(tr);
+  });
+}
+document.getElementById('nyaProjektAddBostadBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektBostaderId);
+  if(!candidate) return;
+  candidate.data.bostader.push({ id: uid(), namn: '', kvm: null, pris: null });
+  nyaProjektSyncBostader(candidate.data);
+  await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+  renderNyaProjektBostaderModal();
+  renderNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+// Kalkyl -> befintligt projekt: kalkylens poster läggs in i projektets budget. Poster som
+// saknas läggs till, tomma belopp fylls i, och där projektet redan har ett annat belopp
+// frågas det om det ska skrivas över. Samma för budgeterad intäkt och föreningslån.
+async function ekonomiKalkylMergeIntoProjekt(candidate, pid){
+  const d = migrateNyaProjektData(candidate.data);
+  const detail = ekonomiBudgetDetail(pid);
+  const st = ekonomiBudgetStruktur(pid);
+  const norm = s => nyaProjektNormName(String(s || ''));
+  const posts = []; st.kostnadsgrupper.forEach(g => g.poster.forEach(p => posts.push({ p, g })));
+  let added = 0, filled = 0, replaced = 0, kept = 0;
+  (d.kostnadsgrupper || []).filter(g => !g.oplacerade).forEach(kg => {
+    let g = st.kostnadsgrupper.find(x => norm(x.grupp) === norm(kg.grupp));
+    if(!g){ g = { id: uid(), grupp: kg.grupp, underkategorier: [], poster: [] }; st.kostnadsgrupper.push(g); }
+    (kg.poster || []).forEach(kp => {
+      if(!(kp.namn || '').trim() || /^mark - /i.test(kp.namn)) return;
+      const val = kp.belopp != null ? kp.belopp : null;
+      const hit = posts.find(x => norm(x.p.namn) === norm(kp.namn));
+      if(!hit){
+        const np = { id: uid(), namn: kp.namn.trim(), budget: val, underkategori: null };
+        if(kp.perBostad != null){ np.perBostad = kp.perBostad; np.perBostadAntal = kp.perBostadAntal; }
+        g.poster.push(np); posts.push({ p: np, g }); added++; return;
+      }
+      if(val == null || val === 0) return;
+      if(!hit.p.budget){ hit.p.budget = val; filled++; return; }
+      if(Math.abs(hit.p.budget - val) < 0.5){ kept++; return; }
+      if(confirm('Posten "' + hit.p.namn + '" har redan budget ' + formatKrFull(hit.p.budget) + ' i projektet. Skriva över med kalkylens ' + formatKrFull(val) + '?')){ hit.p.budget = val; replaced++; } else kept++;
+    });
+  });
+  const tot = nyaProjektTotals(d);
+  const flRow = nyaProjektForeningslanRow(d);
+  const fl = flRow && flRow.belopp ? parseFloat(flRow.belopp) || 0 : 0;
+  const askSet = (label, cur, val, set) => {
+    if(!val) return;
+    if(!cur){ set(val); filled++; return; }
+    if(Math.abs(cur - val) < 0.5) return;
+    if(confirm(label + ' är ' + formatKrFull(cur) + ' i projektet. Skriva över med kalkylens ' + formatKrFull(val) + '?')){ set(val); replaced++; } else kept++;
+  };
+  askSet('Budgeterad intäkt', detail.budgetIntakt, tot.totalIntakter, v => { detail.budgetIntakt = v; });
+  askSet('Föreningslån', detail.foreningslan, fl, v => { detail.foreningslan = v; });
+  await saveEkonomiBudgetDetalj();
+  return { added, filled, replaced, kept };
+}
+document.getElementById('nyaProjektPromoteBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate || candidate.status === 'promoted') return;
+  // Popup: nytt projekt (välj namn) eller lägg in kalkylen i ett befintligt projekt.
+  const p = ekoPopup({ title: 'Gör till projekt', sub: 'Skapa ett nytt projekt i Projektöversikten med valfritt namn, eller koppla kalkylen till ett projekt som redan finns.', maxWidth: 520 });
+  const mk = (tag, css) => { const el = document.createElement(tag); if(css) el.style.cssText = css; return el; };
+  const opt1 = mk('label', 'display:flex; gap:8px; align-items:center; font-weight:600; margin:4px 0 6px; cursor:pointer;');
+  const r1 = mk('input'); r1.type = 'radio'; r1.name = 'nyaPromoteMode'; r1.value = 'new'; r1.checked = true;
+  opt1.appendChild(r1); opt1.appendChild(document.createTextNode('Nytt projekt'));
+  const nameInp = mk('input', 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:6px; padding:8px 10px; font-size:14px; margin-bottom:14px;');
+  nameInp.type = 'text'; nameInp.value = candidate.name || ''; nameInp.placeholder = 'Projektnamn, t.ex. Brf Skogslunden';
+  const opt2 = mk('label', 'display:flex; gap:8px; align-items:center; font-weight:600; margin:4px 0 6px; cursor:pointer;');
+  const r2 = mk('input'); r2.type = 'radio'; r2.name = 'nyaPromoteMode'; r2.value = 'existing';
+  opt2.appendChild(r2); opt2.appendChild(document.createTextNode('Lägg in i befintligt projekt'));
+  const sel = mk('select'); sel.className = 'eko-inline-select'; sel.style.width = '100%';
+  sel.innerHTML = '<option value="">– Välj projekt –</option>' + ekonomiSortedProjects().map(x => '<option value="' + escapeHtml(x.id) + '">' + escapeHtml(x.name) + (nyaProjektList.some(c => c.promoted_project_id === x.id) ? ' (har redan en kalkyl)' : '') + '</option>').join('');
+  sel.disabled = true;
+  const sync = () => { nameInp.disabled = !r1.checked; sel.disabled = !r2.checked; };
+  r1.onchange = sync; r2.onchange = sync;
+  sel.onfocus = () => { r2.checked = true; sync(); };
+  nameInp.onfocus = () => { r1.checked = true; sync(); };
+  const note = mk('p', 'font-size:12px; color:var(--ink-soft); margin:8px 0 0;');
+  note.textContent = 'Kopplar du kalkylen till ett befintligt projekt används kalkylen som underlag för budgeterad intäkt och föreningslån där. Projektets befintliga budgetposter behålls.';
+  p.body.appendChild(opt1); p.body.appendChild(nameInp); p.body.appendChild(opt2); p.body.appendChild(sel); p.body.appendChild(note);
+  const go = async () => {
+    let pid, name;
+    if(r1.checked){
+      name = nameInp.value.trim();
+      if(!name){ showToast('Ange ett projektnamn.'); return; }
+      if(projects.some(x => x.name.toLowerCase() === name.toLowerCase())){ showToast('Det finns redan ett projekt med det namnet - välj "Lägg in i befintligt projekt" i stället.'); return; }
+      const newProject = { id: slugId(name), name, status: 'Kommande' };
+      projects.push(newProject);
+      await persistProjects();
+      pid = newProject.id;
+    } else {
+      pid = sel.value;
+      if(!pid){ showToast('Välj ett projekt.'); return; }
+      name = (projects.find(x => x.id === pid) || {}).name || pid;
+    }
+    candidate.status = 'promoted';
+    candidate.promoted_project_id = pid;
+    try{
+      await DB.updateNyaProjekt(candidate.id, { status: 'promoted', promoted_project_id: pid });
+    }catch(e){
+      showDebugError('Kunde inte spara att projektet omvandlats', e);
+    }
+    p.close();
+    if(r1.checked) showToast('Skapat som projekt: ' + name);
+    else {
+      try{ const r = await ekonomiKalkylMergeIntoProjekt(candidate, pid); showToast('Kalkylen inlagd i ' + name + ': ' + r.added + ' nya poster, ' + r.filled + ' ifyllda, ' + r.replaced + ' ersatta, ' + r.kept + ' behållna.'); }
+      catch(e){ showDebugError('Kunde inte lägga in kalkylen i projektet', e); }
+    }
+    renderNyaProjektDetail();
+    renderNyaProjektList();
+  };
+  const btn = mk('button', 'background:var(--blue); color:#fff; margin-right:8px;');
+  btn.type = 'button'; btn.textContent = 'Gör till projekt'; btn.onclick = go;
+  p.actions.insertBefore(btn, p.actions.firstChild);
+  setTimeout(() => { nameInp.focus(); nameInp.select(); }, 0);
+};
+
+document.getElementById('nyaProjektShareBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.is_public = true;
+  await DB.updateNyaProjekt(candidate.id, { is_public: true });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektUnshareBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  candidate.is_public = false;
+  await DB.updateNyaProjekt(candidate.id, { is_public: false });
+  renderNyaProjektDetail();
+};
+document.getElementById('nyaProjektCopyLinkBtn').onclick = () => {
+  const input = document.getElementById('nyaProjektShareLinkInput');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => showToast('Länk kopierad')).catch(() => {});
+};
+document.getElementById('nyaProjektDeleteBtn').onclick = async () => {
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  if(!candidate) return;
+  await DB.deleteNyaProjekt(candidate.id);
+  nyaProjektList = nyaProjektList.filter(c => c.id !== candidate.id);
+  closeNyaProjektDetail();
+  renderNyaProjektList();
+};
+
+function xlsxWorkbookToGridText(wb){
+  const parts = [];
+  wb.SheetNames.forEach(name => {
+    const sheet = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+    parts.push('=== Blad: ' + name + ' ===');
+    rows.forEach((row, i) => {
+      const hasContent = row.some(c => c !== undefined && c !== null && String(c).trim() !== '');
+      if(!hasContent) return;
+      const cells = row.map(c => c === undefined || c === null ? '' : String(c)).join('\t');
+      parts.push((i + 1) + ' | ' + cells);
+    });
+  });
+  return parts.join('\n');
+}
+
+function setNyaProjektUploadStatus(msg, kind){
+  const el = document.getElementById('nyaProjektUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('nyaProjektUploadBtn').onclick = () => {
+  document.getElementById('nyaProjektFileInput').click();
+};
+document.getElementById('nyaProjektFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const btn = document.getElementById('nyaProjektUploadBtn');
+  btn.disabled = true;
+  setNyaProjektUploadStatus('Läser kalkylen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kalkyl', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.projektnamn) throw new Error('Kunde inte tolka kalkylen.');
+    if(Array.isArray(data.finansieringsforslag)){
+      data.finansiering = data.finansieringsforslag;
+      delete data.finansieringsforslag;
+    }
+    const saved = await createNyaProjektFromData(data.projektnamn, data);
+    const opl = saved.data.kostnadsgrupper.find(g => g.oplacerade);
+    setNyaProjektUploadStatus('Kalkylen inläst: ' + data.projektnamn + (opl ? ' · ' + opl.poster.length + ' poster kunde inte placeras i mallen - de ligger under "Oplacerade kostnader" längst ner.' : ' · alla poster placerade enligt mallen.'), 'ok');
+    openNyaProjektDetail(saved.id);
+  }catch(err){
+    setNyaProjektUploadStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+// ---------- Publik investeringspropå (oinloggad, delbar länk) ----------
+function buildPropaEkonomiHtml(candidate){
+  const d = candidate.data;
+  const { antal, boa } = nyaProjektBostaderCounts(d);
+  const { totalIntakter, totalKostnader, totalFinansiering, resultat, marginal } = nyaProjektTotals(d);
+  const foreningslanRow = nyaProjektForeningslanRow(d);
+  const foreningslan = foreningslanRow ? foreningslanRow.belopp : null;
+  const kr = v => v != null ? formatKrFull(v) : '—';
+  // Fördelningen per intäktspost skickas med rutan och visas i en popup vid klick.
+  const intakterRows = (d.intakter || []).filter(r => r.namn || r.belopp != null).map(r => ({
+    namn: r.namn || 'Intäkt',
+    belopp: r.belopp,
+    perKvm: nyaProjektPerKvm(r.belopp, (r.enheter != null && r.kvmPerEnhet != null) ? r.enheter * r.kvmPerEnhet : boa) || '',
+    spec: (r.enheter != null && r.kvmPerEnhet != null && r.krPerKvm != null) ? r.enheter.toLocaleString('sv-SE') + ' × ' + r.kvmPerEnhet.toLocaleString('sv-SE') + ' kvm × ' + formatKrFull(r.krPerKvm) + '/kvm' : ''
+  }));
+  const intakterAttr = escapeHtml(JSON.stringify({ total: totalIntakter, totalPerKvm: nyaProjektPerKvm(totalIntakter, boa) || '', rows: intakterRows })).replace(/"/g, '&quot;');
+  const pct = v => v != null ? (v * 100).toLocaleString('sv-SE', { maximumFractionDigits: 1 }) + ' %' : '—';
+  const perKvmLine = v => {
+    const t = nyaProjektPerKvm(v, boa);
+    return t ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px;">' + t + '</div>' : '';
+  };
+
+  // Kostnadsfördelningen är kompakt (en rad per grupp) - klick på gruppen
+  // fäller ut alla poster, grupperade per underkategori med delsummor.
+  const groupRows = (d.kostnadsgrupper || []).map(g => {
+    const total = nyaProjektGroupTotal(g);
+    const gid = escapeHtml(g.id);
+    const posts = (g.poster || []).filter(p => p.namn || p.belopp != null);
+    let html = '<tr class="propa-group-row" data-propa-group="' + gid + '" style="cursor:pointer;" title="Klicka för att visa posterna">' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft);"><span class="propa-group-chevron" style="display:inline-block; width:14px; color:var(--ink-soft); transition:transform 0.15s;">▸</span>' + escapeHtml(g.grupp) +
+      '<span style="font-size:11px; color:var(--ink-soft); margin-left:8px;">' + posts.length + ' post' + (posts.length === 1 ? '' : 'er') + '</span></td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(total) + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; color:var(--ink-soft);">' + (nyaProjektPerKvm(total, boa) || '—') + '</td></tr>';
+    const postRow = p => '<tr class="propa-group-detail" data-propa-group="' + gid + '" style="display:none;">' +
+      '<td style="padding:4px 0 4px 34px; border-bottom:1px solid var(--line-soft); font-size:12.5px;">' + escapeHtml(p.namn || 'Namnlös post') +
+      (p.perBostad != null ? '<span style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); margin-left:8px;">' + kr(p.perBostad) + ' × ' + (p.perBostadAntal != null ? p.perBostadAntal : '?') + '</span>' : '') + '</td>' +
+      '<td style="padding:4px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12.5px;">' + kr(p.belopp) + '</td>' +
+      '<td style="padding:4px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12px; color:var(--ink-soft);">' + (nyaProjektPerKvm(p.belopp, boa) || '—') + '</td></tr>';
+    const uks = (g.underkategorier || []).map(uk => ({ namn: uk.namn, rows: posts.filter(p => p.underkategori === uk.id) }));
+    const rest = posts.filter(p => !p.underkategori);
+    if(uks.length){
+      if(rest.length) uks.push({ namn: 'Övrigt', rows: rest });
+      uks.filter(uk => uk.rows.length).forEach(uk => {
+        const sub = uk.rows.reduce((s, p) => s + (p.belopp || 0), 0);
+        html += '<tr class="propa-group-detail" data-propa-group="' + gid + '" style="display:none;">' +
+          '<td style="padding:6px 0 4px 18px; border-bottom:1px solid var(--line-soft); font-size:12.5px; font-weight:600;">' + escapeHtml(uk.namn) + '</td>' +
+          '<td style="padding:6px 0 4px; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12.5px; font-weight:600;">' + kr(sub) + '</td>' +
+          '<td style="padding:6px 0 4px; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace; font-size:12px; color:var(--ink-soft);">' + (nyaProjektPerKvm(sub, boa) || '—') + '</td></tr>';
+        html += uk.rows.map(postRow).join('');
+      });
+    } else {
+      html += posts.map(postRow).join('');
+    }
+    return html;
+  }).join('');
+
+  const finRows = (d.finansiering || []).filter(f => f.namn || f.belopp != null).map(f => {
+    return '<tr><td style="padding:8px 0; border-bottom:1px solid var(--line-soft);">' + escapeHtml(f.namn || '') + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); color:var(--ink-soft);">' + escapeHtml(f.part || '—') + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(f.belopp) + '</td>' +
+      '<td style="padding:8px 0; border-bottom:1px solid var(--line-soft); text-align:right; color:var(--ink-soft);">' + escapeHtml(f.period ? nyaProjektPeriodLabel(f.period) : '—') + '</td></tr>';
+  }).join('');
+  const finHead = '<thead><tr>' +
+    '<th style="text-align:left; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Post</th>' +
+    '<th style="text-align:left; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Finansieras av</th>' +
+    '<th style="text-align:right; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">Belopp</th>' +
+    '<th style="text-align:right; padding:0 0 6px; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; color:var(--ink-soft); border-bottom:1px solid var(--line-soft);">När</th>' +
+    '</tr></thead>';
+
+  return '<div class="home-grid" style="margin-bottom:36px;">' +
+      '<div class="home-card"><div class="home-card-title">' + (antal != null ? antal : '—') + '</div><div class="home-card-sub">Bostäder</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + (boa != null ? boa.toLocaleString('sv-SE') + ' m²' : '—') + '</div><div class="home-card-sub">BOA totalt</div></div>' +
+      // Intäkter: som en vanlig nyckeltalsruta - klick öppnar en popup med fördelningen per intäktspost.
+      '<div class="home-card propa-intakter-card" data-intakter="' + intakterAttr + '" style="cursor:pointer;" title="Klicka för fördelning per intäktspost"><div class="home-card-title">' + kr(totalIntakter) + '</div>' + perKvmLine(totalIntakter) + '<div class="home-card-sub">Intäkter <span style="font-size:10px; color:var(--ink-soft);">(klicka för fördelning)</span></div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(totalKostnader) + '</div>' + perKvmLine(totalKostnader) + '<div class="home-card-sub">Kostnad</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + kr(resultat) + '</div>' + perKvmLine(resultat) + '<div class="home-card-sub">Resultat</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + pct(marginal) + '</div><div class="home-card-sub">Projektmarginal</div></div>' +
+      '<div class="home-card"><div class="home-card-title">' + pct(d.avkastningEgetKapital) + '</div><div class="home-card-sub">Avkastning eget kapital</div></div>' +
+    '</div>' +
+    (groupRows ?
+      '<h3 style="font-family:\'Fraunces\',serif; margin-bottom:12px;">Kostnadsfördelning</h3>' +
+      '<table style="width:100%; border-collapse:collapse; margin-bottom:40px;"><tbody>' + groupRows + '</tbody></table>'
+      : '') +
+    (finRows ?
+      '<h3 style="font-family:\'Fraunces\',serif; margin-bottom:12px;">Finansieringsplan</h3>' +
+      '<p class="eko-sub" style="margin:0 0 12px;">Kvar att finansiera: ' + kr(totalKostnader - totalFinansiering) + '</p>' +
+      '<table style="width:100%; border-collapse:collapse;">' + finHead + '<tbody>' + finRows + '</tbody></table>'
+      : '');
+}
+
+function buildPropaInfoHtml(candidate){
+  const d = candidate.data;
+  const bildHtml = (d.bild && d.bild.base64)
+    ? '<img src="data:' + d.bild.mimetype + ';base64,' + d.bild.base64 + '" style="width:100%; border-radius:10px; margin-bottom:24px; display:block;">'
+    : '';
+  const textHtml = d.allmanInfo
+    ? '<div style="white-space:pre-wrap; line-height:1.6; font-size:15px;">' + escapeHtml(d.allmanInfo) + '</div>'
+    : '<p class="eko-sub">Ingen allmän information tillagd än.</p>';
+  return bildHtml + textHtml;
+}
+// ---- Karta (Leaflet + OpenStreetMap) ----
+// Punkter sparas som {id, lat, lng, namn, beskrivning} i data.kartpunkter.
+// Kalkylsidan har en redigerbar karta (klick = ny punkt, dra = flytta,
+// adressökning via OpenStreetMaps Nominatim); propån visar samma punkter.
+const NYA_PROJEKT_KARTA_START = { center: [59.33, 18.07], zoom: 9 };
+function nyaProjektKartaTiles(map){
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
+  }).addTo(map);
+}
+function nyaProjektKartaPopup(p, idx){
+  return '<div style="font-family:Inter,sans-serif; font-size:13px; min-width:140px;"><b>' + escapeHtml(p.namn || ('Punkt ' + (idx + 1))) + '</b>' +
+    (p.beskrivning ? '<div style="margin-top:4px; white-space:pre-wrap; color:#555;">' + escapeHtml(p.beskrivning) + '</div>' : '') + '</div>';
+}
+function nyaProjektKartaFit(map, points){
+  if(!points.length){ map.setView(NYA_PROJEKT_KARTA_START.center, NYA_PROJEKT_KARTA_START.zoom); return; }
+  if(points.length === 1){ map.setView([points[0].lat, points[0].lng], 14); return; }
+  map.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [30, 30], maxZoom: 15 });
+}
+let nyaProjektKartaMap = null;
+let nyaProjektKartaLayer = null;
+let nyaProjektKartaCandidateId = null;
+function nyaProjektKartaEnsure(){
+  if(nyaProjektKartaMap) return nyaProjektKartaMap;
+  if(typeof L === 'undefined') return null;
+  const el = document.getElementById('nyaProjektKartaMap');
+  if(!el) return null;
+  nyaProjektKartaMap = L.map(el).setView(NYA_PROJEKT_KARTA_START.center, NYA_PROJEKT_KARTA_START.zoom);
+  nyaProjektKartaTiles(nyaProjektKartaMap);
+  nyaProjektKartaLayer = L.layerGroup().addTo(nyaProjektKartaMap);
+  nyaProjektKartaMap.on('click', async e => {
+    const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+    if(!candidate) return;
+    const p = { id: uid(), lat: +e.latlng.lat.toFixed(6), lng: +e.latlng.lng.toFixed(6), namn: candidate.data.kartpunkter.length ? '' : 'Projektet', beskrivning: '' };
+    candidate.data.kartpunkter.push(p);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektKarta(candidate, { keepView: true, focusId: p.id });
+  });
+  return nyaProjektKartaMap;
+}
+function setNyaProjektKartaStatus(msg, kind){
+  const el = document.getElementById('nyaProjektKartaStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+function renderNyaProjektKarta(candidate, opts){
+  const map = nyaProjektKartaEnsure();
+  const points = candidate.data.kartpunkter;
+  const listEl = document.getElementById('nyaProjektKartaPunkter');
+  if(!map){
+    listEl.innerHTML = '<p class="eko-sub">Kartan kunde inte laddas (kartbiblioteket saknas eller blockeras).</p>';
+    return;
+  }
+  const switched = nyaProjektKartaCandidateId !== candidate.id;
+  nyaProjektKartaCandidateId = candidate.id;
+  nyaProjektKartaLayer.clearLayers();
+  points.forEach((p, idx) => {
+    const m = L.marker([p.lat, p.lng], { draggable: true, title: p.namn || '' }).addTo(nyaProjektKartaLayer);
+    m.bindPopup(nyaProjektKartaPopup(p, idx));
+    m.on('dragend', async () => {
+      const ll = m.getLatLng();
+      p.lat = +ll.lat.toFixed(6);
+      p.lng = +ll.lng.toFixed(6);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektKarta(candidate, { keepView: true });
+    });
+  });
+  if(switched || !(opts && opts.keepView)) nyaProjektKartaFit(map, points);
+  setTimeout(() => map.invalidateSize(), 60);
+
+  // Lista med punkterna: namn och beskrivning redigeras direkt, ✕ tar bort.
+  listEl.innerHTML = '';
+  if(!points.length){
+    listEl.innerHTML = '<p class="eko-sub">Inga punkter än - sök en adress eller klicka i kartan.</p>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.width = '100%';
+  table.innerHTML = '<colgroup><col style="width:30%;"><col><col style="width:110px;"></colgroup>' +
+    '<thead><tr><th style="text-align:left;">Punkt</th><th style="text-align:left;">Beskrivning</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  points.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const mkCell = (key, placeholder) => {
+      const td = document.createElement('td');
+      td.style.textAlign = 'left';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = p[key] || '';
+      input.placeholder = placeholder;
+      input.className = 'eko-inline-input';
+      input.style.textAlign = 'left';
+      input.addEventListener('change', async () => {
+        p[key] = input.value.trim();
+        await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+        renderNyaProjektKarta(candidate, { keepView: true });
+      });
+      if(opts && opts.focusId === p.id && key === 'namn') setTimeout(() => { input.focus(); input.select(); }, 80);
+      td.appendChild(input);
+      return td;
+    };
+    tr.appendChild(mkCell('namn', 'T.ex. Projektet, Pendeltåg, Skola'));
+    tr.appendChild(mkCell('beskrivning', 'Valfri text, t.ex. "8 min promenad"'));
+    const actTd = document.createElement('td');
+    actTd.style.whiteSpace = 'nowrap';
+    actTd.style.textAlign = 'right';
+    const showBtn = document.createElement('button');
+    showBtn.type = 'button';
+    showBtn.textContent = '◎';
+    showBtn.title = 'Visa på kartan';
+    showBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 6px;';
+    showBtn.onclick = () => {
+      map.setView([p.lat, p.lng], Math.max(map.getZoom(), 14));
+      nyaProjektKartaLayer.eachLayer(l => { if(l.getLatLng && l.getLatLng().lat === p.lat && l.getLatLng().lng === p.lng) l.openPopup(); });
+    };
+    actTd.appendChild(showBtn);
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Ta bort punkten';
+    delBtn.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer; padding:2px 6px;';
+    delBtn.onclick = async () => {
+      candidate.data.kartpunkter = candidate.data.kartpunkter.filter(x => x.id !== p.id);
+      await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+      renderNyaProjektKarta(candidate, { keepView: true });
+    };
+    actTd.appendChild(delBtn);
+    tr.appendChild(actTd);
+    tbody.appendChild(tr);
+  });
+  listEl.appendChild(table);
+}
+// Adressökning via Nominatim (OpenStreetMap) - gratis, ingen nyckel.
+async function nyaProjektKartaSok(){
+  const candidate = nyaProjektList.find(c => c.id === currentNyaProjektId);
+  const q = document.getElementById('nyaProjektKartaSokInput').value.trim();
+  if(!candidate || !q) return;
+  const btn = document.getElementById('nyaProjektKartaSokBtn');
+  btn.disabled = true;
+  setNyaProjektKartaStatus('Söker…');
+  try{
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=se&q=' + encodeURIComponent(q), {
+      headers: { 'Accept': 'application/json', 'Accept-Language': 'sv' }
+    });
+    if(!res.ok) throw new Error('Söktjänsten svarade ' + res.status);
+    const hits = await res.json();
+    if(!hits.length){ setNyaProjektKartaStatus('Hittade ingen plats för "' + q + '".', 'err'); return; }
+    const h = hits[0];
+    const p = { id: uid(), lat: +parseFloat(h.lat).toFixed(6), lng: +parseFloat(h.lon).toFixed(6), namn: candidate.data.kartpunkter.length ? q : 'Projektet', beskrivning: (h.display_name || '').split(',').slice(0, 3).join(',').trim() };
+    candidate.data.kartpunkter.push(p);
+    await DB.updateNyaProjekt(candidate.id, { data: candidate.data });
+    renderNyaProjektKarta(candidate, { focusId: p.id });
+    setNyaProjektKartaStatus('Punkt satt: ' + (h.display_name || q).split(',').slice(0, 2).join(','), 'ok');
+    document.getElementById('nyaProjektKartaSokInput').value = '';
+  }catch(err){
+    setNyaProjektKartaStatus('Sökningen misslyckades: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('nyaProjektKartaSokBtn').onclick = nyaProjektKartaSok;
+document.getElementById('nyaProjektKartaSokInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); nyaProjektKartaSok(); }
+});
+
+function buildPropaKartaHtml(candidate){
+  const points = candidate.data.kartpunkter || [];
+  if(!points.length) return '<p class="eko-sub">Ingen karta inlagd än.</p>';
+  const list = points.map((p, idx) =>
+    '<div style="display:flex; gap:10px; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line-soft);">' +
+      '<span style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft); min-width:22px;">' + (idx + 1) + '</span>' +
+      '<span style="font-weight:600;">' + escapeHtml(p.namn || ('Punkt ' + (idx + 1))) + '</span>' +
+      (p.beskrivning ? '<span style="color:var(--ink-soft); font-size:13px;">' + escapeHtml(p.beskrivning) + '</span>' : '') +
+    '</div>'
+  ).join('');
+  const punkterAttr = escapeHtml(JSON.stringify(points.map(p => ({ lat: p.lat, lng: p.lng, namn: p.namn, beskrivning: p.beskrivning })))).replace(/"/g, '&quot;');
+  return '<div class="propa-karta" data-punkter="' + punkterAttr + '" ' +
+    'style="height:440px; border-radius:10px; border:1px solid var(--line-soft); margin-bottom:16px; background:#eef0ec;"></div>' +
+    '<div>' + list + '</div>';
+}
+// Skapar Leaflet-kartan i propån första gången fliken visas (kartan måste
+// vara synlig för att få rätt storlek).
+function wirePropaKarta(root){
+  const el = root.querySelector('.propa-karta');
+  if(!el || el.__map || typeof L === 'undefined') return;
+  let points = [];
+  try{ points = JSON.parse(el.getAttribute('data-punkter') || '[]'); }catch(e){ points = []; }
+  const map = L.map(el, { scrollWheelZoom: false });
+  nyaProjektKartaTiles(map);
+  points.forEach((p, idx) => {
+    L.marker([p.lat, p.lng], { title: p.namn || '' }).addTo(map).bindPopup(nyaProjektKartaPopup(p, idx));
+  });
+  nyaProjektKartaFit(map, points);
+  el.__map = map;
+  setTimeout(() => map.invalidateSize(), 60);
+}
+function buildPropaTextHtml(text, emptyMsg){
+  return text
+    ? '<div style="white-space:pre-wrap; line-height:1.6; font-size:15px;">' + escapeHtml(text) + '</div>'
+    : '<p class="eko-sub">' + emptyMsg + '</p>';
+}
+
+function buildPropaBilagorHtml(candidate){
+  const rows = candidate.data.bilagor || [];
+  if(!rows.length) return '<p class="eko-sub">Inga bilagor tillagda än.</p>';
+  return '<div>' + rows.map(b =>
+    '<div style="padding:10px 0; border-bottom:1px solid var(--line-soft);">' +
+      (b.url
+        ? '<a href="' + escapeHtml(b.url).replace(/"/g, '&quot;') + '" target="_blank" rel="noopener" style="font-size:14px;">🔗 ' + escapeHtml(b.namn) + '</a><span style="font-size:11px; color:var(--ink-soft); margin-left:8px;">öppnas i ny flik</span>'
+        : '<a href="data:' + b.mimetype + ';base64,' + b.base64 + '" download="' + escapeHtml(b.namn) + '" style="font-size:14px;">📎 ' + escapeHtml(b.namn) + '</a>') +
+    '</div>'
+  ).join('') + '</div>';
+}
+
+// Tidsaxel: kapitalbehov (finansieringsplanens poster med period) och
+// händelser slås ihop och sorteras per månad. "När" skrivs fritt - tolkas
+// som "Oktober 2026", "okt 2026", "2026-10", "10/2026", "Q4 2026" eller "2026".
+const NYA_PROJEKT_MANADER = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december'];
+function nyaProjektParsePeriod(str){
+  if(!str) return null;
+  const s = String(str).trim().toLowerCase().replace(/\s+/g, ' ');
+  let m = s.match(/^(\d{4})[-\/.](\d{1,2})/);
+  if(m && +m[2] >= 1 && +m[2] <= 12) return { y: +m[1], m: +m[2] };
+  m = s.match(/^(\d{1,2})[\/.-](\d{4})$/);
+  if(m && +m[1] >= 1 && +m[1] <= 12) return { y: +m[2], m: +m[1] };
+  m = s.match(/^(?:q|kv)\s*([1-4])\s*[-\/ ]?\s*(\d{4})$/);
+  if(m) return { y: +m[2], m: (+m[1] - 1) * 3 + 1, quarter: +m[1] };
+  m = s.match(/^([a-zåäö]+)\.?\s*(\d{4})$/) || s.match(/^(\d{4})\s+([a-zåäö]+)\.?$/);
+  if(m){
+    const word = isNaN(+m[1]) ? m[1] : m[2];
+    const year = isNaN(+m[1]) ? m[2] : m[1];
+    const idx = NYA_PROJEKT_MANADER.findIndex(n => n.startsWith(word.slice(0, 3)));
+    if(idx >= 0) return { y: +year, m: idx + 1 };
+  }
+  m = s.match(/^(\d{4})$/);
+  if(m) return { y: +m[1], m: 1, yearOnly: true };
+  return null;
+}
+function nyaProjektPeriodKey(p){
+  return p ? p.y * 12 + (p.m - 1) : Number.POSITIVE_INFINITY;
+}
+function nyaProjektPeriodLabel(str){
+  const p = nyaProjektParsePeriod(str);
+  if(!p) return str || 'Ej tidsatt';
+  if(p.yearOnly) return String(p.y);
+  if(p.quarter) return 'Kvartal ' + p.quarter + ' ' + p.y;
+  const namn = NYA_PROJEKT_MANADER[p.m - 1];
+  return namn.charAt(0).toUpperCase() + namn.slice(1) + ' ' + p.y;
+}
+function nyaProjektTimelineItems(data){
+  const items = [];
+  (data.finansiering || []).filter(f => f.namn || f.belopp != null).forEach(f => {
+    items.push({ typ: 'kapital', namn: f.namn || 'Namnlös post', part: f.part || '', belopp: f.belopp, period: f.period || '' });
+  });
+  (data.handelser || []).filter(h => h.namn || h.belopp != null).forEach(h => {
+    items.push({ typ: 'handelse', namn: h.namn || 'Namnlös händelse', belopp: h.belopp, period: h.period || '' });
+  });
+  items.forEach((it, i) => { it.p = nyaProjektParsePeriod(it.period); it.key = nyaProjektPeriodKey(it.p); it.i = i; });
+  items.sort((a, b) => (a.key - b.key) || (a.typ === b.typ ? a.i - b.i : (a.typ === 'kapital' ? -1 : 1)));
+  return items;
+}
+// Stabil sortering på tolkat datum - rader med samma månad eller utan datum
+// behåller sin inbördes ordning.
+// Vanliga finansiärer i finansieringsplanens "Finansieras av" - utöver
+// dessa kan man alltid skriva ett eget namn via "Fyll i själv".
+const NYA_PROJEKT_FINANSIARER = [
+  'Derome Husproduktion AB',
+  'Borohus AB',
+  'NBE Gruppen',
+  'Sparbanken i Enköping',
+  'Triol Kapital AB',
+  'Kameo'
+];
+function nyaProjektSortByPeriod(rows){
+  if(!Array.isArray(rows) || rows.length < 2) return;
+  const keyed = rows.map((r, i) => ({ r, i, k: nyaProjektPeriodKey(nyaProjektParsePeriod(r.period)) }));
+  keyed.sort((a, b) => (a.k - b.k) || (a.i - b.i));
+  keyed.forEach((x, i) => { rows[i] = x.r; });
+}
+function nyaProjektRefreshTidsaxel(candidate){
+  const el = document.getElementById('nyaProjektTidsaxelPreview');
+  if(el && candidate && candidate.id === currentNyaProjektId) el.innerHTML = buildPropaTidsplanHtml(candidate, { compact: true });
+}
+function buildPropaTidsplanHtml(candidate, opts){
+  const d = candidate.data;
+  const compact = !!(opts && opts.compact);
+  const items = nyaProjektTimelineItems(d);
+  const kr = v => v != null ? formatKrFull(v) : '';
+  if(!items.length){
+    return compact ? '' : '<p class="eko-sub">Ingen tidsplan inlagd än.</p>';
+  }
+  // Gruppera per period (samma etikett = samma grupp), i tidsordning.
+  const groups = [];
+  items.forEach(it => {
+    const label = it.p ? nyaProjektPeriodLabel(it.period) : 'Ej tidsatt';
+    let g = groups.find(x => x.label === label && x.key === it.key);
+    if(!g){ g = { label, key: it.key, items: [] }; groups.push(g); }
+    g.items.push(it);
+  });
+  let ack = 0;
+  const totalKapital = items.filter(it => it.typ === 'kapital').reduce((s, it) => s + (it.belopp || 0), 0);
+  let html = '<div style="position:relative; padding-left:22px; border-left:2px solid var(--line-soft); margin:' + (compact ? '8px 0 0 8px' : '4px 0 0 8px') + ';">';
+  groups.forEach(g => {
+    const kapital = g.items.filter(it => it.typ === 'kapital').reduce((s, it) => s + (it.belopp || 0), 0);
+    ack += kapital;
+    html += '<div style="position:relative; margin-bottom:' + (compact ? '16px' : '24px') + ';">' +
+      '<div style="position:absolute; left:-30px; top:3px; width:14px; height:14px; border-radius:50%; background:' + (kapital ? 'var(--ink)' : '#fff') + '; border:2px solid var(--ink);"></div>' +
+      '<div style="font-family:\'Fraunces\',serif; font-weight:700; font-size:' + (compact ? '14px' : '17px') + '; margin-bottom:6px;">' + escapeHtml(g.label) +
+      '</div>';
+    g.items.forEach(it => {
+      const isKap = it.typ === 'kapital';
+      html += '<div style="display:flex; align-items:baseline; gap:10px; padding:' + (compact ? '3px 0' : '5px 0') + '; font-size:' + (compact ? '12.5px' : '14px') + ';">' +
+        '<span style="display:inline-block; min-width:' + (compact ? '84px' : '96px') + '; font-family:\'JetBrains Mono\',monospace; font-size:10.5px; letter-spacing:0.5px; text-transform:uppercase; padding:2px 7px; border-radius:4px; text-align:center; ' +
+          (isKap ? 'background:var(--ink); color:#fff;' : 'background:var(--blue-soft); color:var(--blue); border:1px solid var(--blue);') + '">' + (isKap ? 'Kapital' : 'Händelse') + '</span>' +
+        '<span style="flex:1;">' + escapeHtml(it.namn) + (it.part ? '<span style="color:var(--ink-soft);"> · ' + escapeHtml(it.part) + '</span>' : '') + '</span>' +
+        (it.belopp != null ? '<span style="font-family:\'JetBrains Mono\',monospace; white-space:nowrap;">' + kr(it.belopp) + '</span>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function buildPropaHtml(candidate){
+  candidate.data = migrateNyaProjektData(candidate.data);
+  const tabs = [
+    { key: 'ekonomi', label: 'Ekonomi', html: buildPropaEkonomiHtml(candidate) },
+    { key: 'tidsplan', label: 'Tidsplan', html: buildPropaTidsplanHtml(candidate) },
+    { key: 'info', label: 'Allmän information', html: buildPropaInfoHtml(candidate) },
+    { key: 'marknad', label: 'Marknadsläge', html: buildPropaTextHtml(candidate.data.marknadslage, 'Inget marknadsläge beskrivet än.') },
+    { key: 'risker', label: 'Risker', html: buildPropaTextHtml(candidate.data.risker, 'Inga risker beskrivna än.') },
+    { key: 'karta', label: 'Karta', html: buildPropaKartaHtml(candidate) },
+    { key: 'bilagor', label: 'Bilagor', html: buildPropaBilagorHtml(candidate) }
+  ];
+  const tabBar = tabs.map((t, i) =>
+    '<button class="propa-tab-btn' + (i === 0 ? ' active' : '') + '" data-propa-tab="' + t.key + '" ' +
+    'style="border:none; background:none; padding:10px 18px; font-family:\'JetBrains Mono\',monospace; font-size:12px; letter-spacing:0.5px; ' +
+    'text-transform:uppercase; cursor:pointer; border-bottom:2px solid ' + (i === 0 ? 'var(--ink)' : 'transparent') + '; color:' + (i === 0 ? 'var(--ink)' : 'var(--ink-soft)') + ';">' +
+    t.label + '</button>'
+  ).join('');
+  const panels = tabs.map((t, i) =>
+    '<div class="propa-tab-panel" data-propa-panel="' + t.key + '" style="' + (i === 0 ? '' : 'display:none;') + '">' + t.html + '</div>'
+  ).join('');
+
+  return '<div style="max-width:820px; margin:0 auto; padding:56px 24px 80px;">' +
+    '<div style="text-align:center; margin-bottom:32px;">' +
+      '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; letter-spacing:1.5px; color:var(--ink-soft); text-transform:uppercase;">Solvinkeln Fastigheter · Investeringspropå</div>' +
+      '<h1 style="font-family:\'Fraunces\',serif; font-size:34px; margin:10px 0 0;">' + escapeHtml(candidate.name) + '</h1>' +
+    '</div>' +
+    '<div style="display:flex; justify-content:center; gap:4px; border-bottom:1px solid var(--line-soft); margin-bottom:32px;">' + tabBar + '</div>' +
+    panels +
+    '<p style="text-align:center; font-size:11px; color:var(--ink-soft); margin-top:40px;">Solvinkeln Fastigheter AB · uppdaterad ' + new Date(candidate.updated_at || candidate.created_at).toLocaleDateString('sv-SE') + '</p>' +
+  '</div>';
+}
+
+function showPublicPropaOnly(){
+  [...document.body.children].forEach(el => {
+    if(el.id !== 'publicPropaView') el.style.display = 'none';
+  });
+  const root = document.getElementById('publicPropaView');
+  root.style.display = 'block';
+  return root;
+}
+
+// Popup i propån med fördelningen per intäktspost (byggs vid klick, stängs
+// med knappen, Escape eller klick utanför).
+function showPropaIntakterPopup(info){
+  const old = document.getElementById('propaIntakterPopup');
+  if(old) old.remove();
+  const kr = v => v != null ? formatKrFull(v) : '—';
+  const overlay = document.createElement('div');
+  overlay.id = 'propaIntakterPopup';
+  overlay.className = 'modal-overlay open';
+  const rowsHtml = (info.rows || []).map(r =>
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid var(--line-soft);">' +
+      '<div><div style="font-weight:600;">' + escapeHtml(r.namn) + '</div>' + (r.spec ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft);">' + escapeHtml(r.spec) + '</div>' : '') + '</div>' +
+      '<div style="text-align:right; white-space:nowrap;"><div style="font-family:\'JetBrains Mono\',monospace;">' + kr(r.belopp) + '</div>' + (r.perKvm ? '<div style="font-family:\'JetBrains Mono\',monospace; font-size:11px; color:var(--ink-soft);">' + escapeHtml(r.perKvm) + '</div>' : '') + '</div>' +
+    '</div>'
+  ).join('');
+  overlay.innerHTML = '<div class="modal-box" style="max-width:480px;">' +
+    '<h3>Intäkter</h3>' +
+    '<p class="modal-sub">Fördelning per intäktspost.</p>' +
+    (rowsHtml || '<p class="eko-sub">Inga intäktsposter inlagda.</p>') +
+    '<div style="display:flex; justify-content:space-between; gap:16px; padding:10px 0 0; font-weight:700;"><span>Totalt</span><span style="text-align:right; font-family:\'JetBrains Mono\',monospace;">' + kr(info.total) + (info.totalPerKvm ? '<div style="font-weight:400; font-size:11px; color:var(--ink-soft);">' + escapeHtml(info.totalPerKvm) + '</div>' : '') + '</span></div>' +
+    '<div class="modal-actions" style="margin-top:14px;"><button type="button" id="propaIntakterPopupClose" style="background:var(--ink); color:#fff;">Stäng</button></div>' +
+  '</div>';
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+  document.getElementById('propaIntakterPopupClose').onclick = close;
+}
+function wirePropaTabs(root){
+  root.querySelectorAll('.propa-intakter-card').forEach(card => {
+    card.onclick = () => {
+      let info = { rows: [] };
+      try{ info = JSON.parse(card.getAttribute('data-intakter') || '{}'); }catch(e){}
+      showPropaIntakterPopup(info);
+    };
+  });
+  // Kostnadsgrupper i propån: klick på gruppraden fäller ut/ihop posterna.
+  root.querySelectorAll('.propa-group-row').forEach(rowEl => {
+    rowEl.onclick = () => {
+      const gid = rowEl.getAttribute('data-propa-group');
+      const details = root.querySelectorAll('.propa-group-detail[data-propa-group="' + gid + '"]');
+      const open = details.length && details[0].style.display === 'none';
+      details.forEach(d => { d.style.display = open ? '' : 'none'; });
+      const chev = rowEl.querySelector('.propa-group-chevron');
+      if(chev) chev.style.transform = open ? 'rotate(90deg)' : '';
+    };
+  });
+  const buttons = root.querySelectorAll('.propa-tab-btn');
+  buttons.forEach(btn => {
+    btn.onclick = () => {
+      const key = btn.getAttribute('data-propa-tab');
+      buttons.forEach(b => {
+        const active = b === btn;
+        b.classList.toggle('active', active);
+        b.style.borderBottomColor = active ? 'var(--ink)' : 'transparent';
+        b.style.color = active ? 'var(--ink)' : 'var(--ink-soft)';
+      });
+      root.querySelectorAll('.propa-tab-panel').forEach(p => {
+        p.style.display = p.getAttribute('data-propa-panel') === key ? '' : 'none';
+      });
+      if(key === 'karta') wirePropaKarta(root);
+    };
+  });
+}
+
+async function renderPublicNyaProjektView(shareId){
+  const root = showPublicPropaOnly();
+  root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Läser in…</div>';
+  try{
+    const candidate = await DB.getPublicNyaProjekt(shareId);
+    if(!candidate){
+      root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Den här länken är inte längre giltig.</div>';
+      return;
+    }
+    document.title = candidate.name + ' · Investeringspropå';
+    root.innerHTML = buildPropaHtml(candidate);
+    wirePropaTabs(root);
+  }catch(e){
+    root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Kunde inte läsa in sidan.</div>';
+  }
+}
+
+function updateEkonomiProjektVinstPreview(){
+  const meta = {
+    agarandel: parseFloat(document.getElementById('ekonomiProjektAgarandelInput').value) || 0,
+    forvantadVinst: parseFloat(document.getElementById('ekonomiProjektVinstInput').value) || 0,
+    forvantadEntreprenadsvinst: parseFloat(document.getElementById('ekonomiProjektEntreprenadsvinstInput').value) || 0
+  };
+  document.getElementById('ekonomiProjektVinstSolvinkelnPreview').textContent = formatMSEK(ekonomiVinstSolvinkeln(meta));
+}
+
+function openEkonomiProjektModal(p){
+  currentEkonomiProjektId = p.id;
+  const meta = companyEkonomiData.meta[p.id] || {};
+  document.getElementById('ekonomiProjektModalSub').textContent = p.name;
+  document.getElementById('ekonomiProjektOrtInput').value = p.ort || '';
+  document.getElementById('ekonomiProjektJvInput').value = meta.jvPartner || '';
+  document.getElementById('ekonomiProjektAgarandelInput').value = meta.agarandel || '';
+  document.getElementById('ekonomiProjektStatusInput').value = p.status || 'Pågående';
+  document.getElementById('ekonomiProjektVinstInput').value = meta.forvantadVinst || '';
+  document.getElementById('ekonomiProjektEntreprenadsvinstInput').value = meta.forvantadEntreprenadsvinst || '';
+  updateEkonomiProjektVinstPreview();
+  document.getElementById('ekonomiProjektModalOverlay').classList.add('open');
+}
+
+async function saveEkonomiProjektModal(){
+  if(!currentEkonomiProjektId) return;
+  const meta = {
+    jvPartner: document.getElementById('ekonomiProjektJvInput').value,
+    agarandel: parseFloat(document.getElementById('ekonomiProjektAgarandelInput').value) || 0,
+    forvantadVinst: parseFloat(document.getElementById('ekonomiProjektVinstInput').value) || 0,
+    forvantadEntreprenadsvinst: parseFloat(document.getElementById('ekonomiProjektEntreprenadsvinstInput').value) || 0
+  };
+  companyEkonomiData.meta[currentEkonomiProjektId] = meta;
+  // Status och Ort styr vad som visas i den DELADE Projektöversikten/Byggmöten
+  // (alla fem ser den) - sparas därför på det delade projektobjektet, inte i
+  // Mikaels privata ekonomi-projekt-meta.
+  const status = document.getElementById('ekonomiProjektStatusInput').value;
+  const ort = document.getElementById('ekonomiProjektOrtInput').value.trim();
+  const project = projects.find(p => p.id === currentEkonomiProjektId);
+  if(project){ project.status = status; project.ort = ort; }
+  document.getElementById('ekonomiProjektModalOverlay').classList.remove('open');
+  try{
+    await Promise.all([
+      DB.setPersonalData(EKONOMI_KEYS.meta, JSON.stringify(companyEkonomiData.meta)),
+      persistProjects()
+    ]);
+    renderEkonomiProjekt();
+  }catch(e){
+    showDebugError('Kunde inte spara projektinfo', e);
+  }
+}
+
+function renderEkonomiNumberTab(tabKey){
+  const cfg = EKONOMI_TAB_CONFIG[tabKey];
+  const tbody = document.getElementById(cfg.tbodyId);
+  tbody.innerHTML = '';
+  const totals = {};
+  cfg.fields.forEach(f => { totals[f.key] = 0; });
+  let totalComputed = 0;
+
+  const doljNoll = tabKey === 'lan' && !!uiPrefs.lanDoljNoll;
+  const lanBox = document.getElementById('ekoLanDoljNoll');
+  if(lanBox) lanBox.checked = !!uiPrefs.lanDoljNoll;
+  const lanList = tabKey === 'lan' ? ekonomiFilteredProjects(buildStatusFilterBar(document.getElementById('ekoLanFilters'), 'lanStatus', () => renderEkonomiNumberTab('lan'))) : projects;
+  lanList.forEach(p => {
+    const rec = (companyEkonomiData[cfg.key] && companyEkonomiData[cfg.key][p.id]) || {};
+    // Lån: dölj projekt där alla belopp (inkl. fastighetsvärde) är 0 kr om valet är ikryssat.
+    if(doljNoll && cfg.fields.every(f => !(f.computed ? ekonomiMarkKostnader(p.id).summa : (f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0))))) return;
+    const row = document.createElement('tr');
+    row.onclick = () => {
+      if(tabKey === 'lan') openEkonomiProjektLan(p);
+      else if(tabKey === 'likviditet') openEkonomiProjektLikviditet(p);
+      else openEkonomiNumberModal(tabKey, p);
+    };
+    if(tabKey === 'lan') row.className = 'home-list-row';
+    let html = '<td class="home-list-name">' + escapeHtml(p.name) + '</td>';
+    cfg.fields.forEach(f => {
+      // Fastighetsvärde räknas från Mark; lån med detaljuppgifter visar aktuellt saldo.
+      const v = f.computed ? ekonomiMarkKostnader(p.id).summa : (tabKey === 'lan' && f.dated ? ekonomiLanSaldo(p.id, f.key) : (rec[f.key] || 0));
+      totals[f.key] += v;
+      html += '<td>' + formatMSEK(v) + '</td>';
+    });
+    if(cfg.computed){
+      const c = cfg.computed.calc(rec);
+      totalComputed += c;
+      html += '<td class="' + (c < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(c) + '</td>';
+    }
+    row.innerHTML = html;
+    tbody.appendChild(row);
+  });
+
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'eko-row-resultat';
+  let totalHtml = '<td>Totalt</td>';
+  cfg.fields.forEach(f => { totalHtml += '<td>' + formatMSEK(totals[f.key]) + '</td>'; });
+  if(cfg.computed){
+    totalHtml += '<td class="' + (totalComputed < 0 ? 'eko-diff-negative' : 'eko-diff-positive') + '">' + formatMSEK(totalComputed) + '</td>';
+  }
+  totalRow.innerHTML = totalHtml;
+  tbody.appendChild(totalRow);
+}
+
+function openEkonomiNumberModal(tabKey, project){
+  const cfg = EKONOMI_TAB_CONFIG[tabKey];
+  ekonomiNumberModalCtx = { tabKey, projectId: project.id };
+  document.getElementById('ekonomiNumberModalTitle').textContent = project.name;
+  document.getElementById('ekonomiNumberModalSub').textContent = '';
+  const rec = (companyEkonomiData[cfg.key] && companyEkonomiData[cfg.key][project.id]) || {};
+  const container = document.getElementById('ekonomiNumberModalFields');
+  container.innerHTML = '';
+  cfg.fields.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'ekonomi-field-row';
+    const label = document.createElement('label');
+    label.textContent = f.label;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.id = 'ekoNumField_' + f.key;
+    input.value = rec[f.key] || '';
+    row.appendChild(label);
+    row.appendChild(input);
+    container.appendChild(row);
+  });
+  document.getElementById('ekonomiNumberModalOverlay').classList.add('open');
+}
+
+async function saveEkonomiNumberModal(){
+  if(!ekonomiNumberModalCtx) return;
+  const { tabKey, projectId } = ekonomiNumberModalCtx;
+  const cfg = EKONOMI_TAB_CONFIG[tabKey];
+  const rec = {};
+  cfg.fields.forEach(f => {
+    const input = document.getElementById('ekoNumField_' + f.key);
+    rec[f.key] = parseFloat(input.value) || 0;
+  });
+  if(!companyEkonomiData[cfg.key]) companyEkonomiData[cfg.key] = {};
+  companyEkonomiData[cfg.key][projectId] = rec;
+  document.getElementById('ekonomiNumberModalOverlay').classList.remove('open');
+  try{
+    await DB.setPersonalData(EKONOMI_KEYS[cfg.key], JSON.stringify(companyEkonomiData[cfg.key]));
+    renderEkonomiNumberTab(tabKey);
+  }catch(e){
+    showDebugError('Kunde inte spara', e);
+  }
+}
+
+liggarenPopulateSelects();
+
+document.getElementById('liggarenNewBtn').onclick = () => {
+  liggarenResetForm();
+  document.getElementById('liggarenForm').style.display = 'block';
+  document.getElementById('liggarenTitleInput').focus();
+};
+document.getElementById('liggarenCancelBtn').onclick = () => {
+  document.getElementById('liggarenForm').style.display = 'none';
+};
+document.getElementById('liggarenSaveBtn').onclick = liggarenSaveTask;
+document.getElementById('liggarenTitleInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') liggarenSaveTask();
+});
+document.getElementById('liggarenNotifyCheck').addEventListener('change', e => {
+  document.getElementById('liggarenNotifyFields').style.display = e.target.checked ? 'block' : 'none';
+});
+document.getElementById('liggarenRecurringCheck').addEventListener('change', e => {
+  document.getElementById('liggarenRecurringFields').style.display = e.target.checked ? 'block' : 'none';
+  document.getElementById('liggarenDeadlineInput').disabled = e.target.checked;
+  if(e.target.checked) document.getElementById('liggarenDeadlineInput').value = '';
+});
+document.getElementById('liggarenNotifyAddressSelect').addEventListener('change', e => {
+  document.getElementById('liggarenNotifyCustomInput').style.display = e.target.value === 'other' ? 'block' : 'none';
+});
+document.getElementById('liggarenProjectFilter').addEventListener('change', e => {
+  liggarenProjectFilterVal = e.target.value;
+  renderArenden();
+});
+document.getElementById('liggarenSortSelect').addEventListener('change', e => {
+  liggarenSortBy = e.target.value;
+  renderArenden();
+});
+document.getElementById('liggarenClearAllBtn').onclick = liggarenClearAll;
+
+document.getElementById('addPaminnelseBtn').onclick = () => {
+  const dateInput = document.getElementById('newPaminnelseDate');
+  const noteInput = document.getElementById('newPaminnelseNote');
+  const date = dateInput.value;
+  const note = noteInput.value.trim();
+  if(!date && !note) return;
+  paminnelser.push({ id: 'p' + Date.now() + Math.random().toString(36).slice(2,7), date, note });
+  dateInput.value = '';
+  noteInput.value = '';
+  persistPaminnelser();
+  renderPaminnelser();
+};
+
+document.getElementById('goToProjektoversiktCard').onclick = openHome;
+document.getElementById('goToPersonalBtn').onclick = openPersonal;
+document.getElementById('goToEkonomiCard').onclick = openCompanyEkonomi;
+document.getElementById('goToEkonomiBtn').onclick = openCompanyEkonomi;
+document.getElementById('backToPersonalFromEkonomiBtn').onclick = openPersonal;
+document.getElementById('ekoKpiAktivaProjektCard').onclick = openHome;
+document.querySelectorAll('#ekonomiSubTabsBar .ekonomi-sub-tab').forEach(btn => {
+  btn.onclick = () => setEkonomiSubView(btn.dataset.ekonomiView);
+});
+document.getElementById('ekonomiProjektModalCancel').onclick = () => document.getElementById('ekonomiProjektModalOverlay').classList.remove('open');
+document.getElementById('ekonomiProjektModalSave').onclick = saveEkonomiProjektModal;
+document.getElementById('ekonomiNumberModalCancel').onclick = () => document.getElementById('ekonomiNumberModalOverlay').classList.remove('open');
+document.getElementById('ekonomiNumberModalSave').onclick = saveEkonomiNumberModal;
+['ekonomiProjektAgarandelInput', 'ekonomiProjektVinstInput', 'ekonomiProjektEntreprenadsvinstInput'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateEkonomiProjektVinstPreview);
+});
+document.getElementById('ekonomiAddProjectBtn').onclick = async () => {
+  const input = document.getElementById('ekonomiNewProjectInput');
+  const name = input.value.trim();
+  if(await addProject(name)){
+    input.value = '';
+    renderEkonomiProjekt();
+  }
+};
+document.getElementById('ekonomiNewProjectInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('ekonomiAddProjectBtn').click();
+});
+
+document.getElementById('backToEkonomiBudgetListBtn').onclick = closeEkonomiProjektBudget;
+// Läser in kalkylens belopp (och struktur) i budgeten igen för ett projekt som
+// omvandlats från en kalkyl. Manuellt satta budgetbelopp skrivs över.
+document.getElementById('ekonomiBudgetFromKalkylBtn').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  const cand = nyaProjektList.find(c => c.promoted_project_id === pid);
+  if(!cand) return;
+  if(!confirm('Hämta budgeten från kalkylen "' + cand.name + '"?\n\nBudgetstrukturen och beloppen ersätts med kalkylens. Reskontrarader behåller sin kategori (matchas på postens namn).')) return;
+  const detail = ekonomiBudgetDetail(pid);
+  delete detail.kategorier;
+  detail.struktur = ekonomiBudgetBuildStruktur(pid);
+  try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+  renderEkonomiProjektBudget();
+};
+document.getElementById('ekoBudgetForeningslanCard').onclick = openEkonomiForeningslanModal;
+// Budgeterad intäkt: eget värde per projekt. Förifylls från kalkylens intäkter
+// (inkl. föreningslån) när projektet omvandlats från en kalkyl.
+document.getElementById('ekoBudgetIntaktBudgetCard').onclick = async () => {
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  const detail = ekonomiBudgetDetail(pid);
+  const current = ekonomiBudgetIntakt(pid);
+  const raw = prompt('Budgeterad intäkt (kr), inklusive föreningslån:', current != null ? String(Math.round(current)) : '');
+  if(raw === null) return;
+  const n = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'));
+  detail.budgetIntakt = raw.trim() === '' || isNaN(n) ? null : n;
+  try{ await saveEkonomiBudgetDetalj(); }catch(e){ showDebugError('Kunde inte spara', e); }
+  renderEkonomiProjektBudget();
+};
+document.getElementById('ekoForeningslanModalCancel').onclick = () => {
+  document.getElementById('ekonomiForeningslanModalOverlay').classList.remove('open');
+};
+document.getElementById('ekoForeningslanModalSave').onclick = saveEkonomiForeningslanModal;
+document.getElementById('ekoForeningslanTotalInput').addEventListener('input', (e) => {
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  if(!kvm) return;
+  const total = parseFloat(e.target.value) || 0;
+  document.getElementById('ekoForeningslanPerKvmInput').value = Math.round(total / kvm) || '';
+});
+document.getElementById('ekoForeningslanPerKvmInput').addEventListener('input', (e) => {
+  const kvm = ekonomiBudgetAreaRevenue.kvm;
+  if(!kvm) return;
+  const perKvm = parseFloat(e.target.value) || 0;
+  document.getElementById('ekoForeningslanTotalInput').value = Math.round(perKvm * kvm) || '';
+});
+
+document.getElementById('reskontraUploadBtn').onclick = () => {
+  document.getElementById('reskontraFileInput').click();
+};
+document.getElementById('reskontraFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiBudgetProjectId;
+  if(!pid) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setReskontraStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('reskontraUploadBtn');
+  btn.disabled = true;
+  setReskontraStatus('Läser reskontran…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-reskontra', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const invoices = (data && data.invoices) || [];
+    const existing = companyEkonomiData.reskontra[pid] || [];
+    const existingByLopnr = new Map(existing.map(l => [String(l.lopnr), l]));
+    // Redan inlästa rader får bara sin betalstatus (saldo) uppdaterad - det är
+    // så avstämningen i likviditetsprognosen ser att en faktura blivit betald.
+    let uppdaterade = 0, blevBetalda = 0;
+    invoices.forEach(inv => {
+      const l = inv.lopnr && existingByLopnr.get(String(inv.lopnr));
+      if(!l || inv.saldo == null) return;
+      const varObetald = ekonomiLineObetald(l);
+      l.saldo = inv.saldo;
+      uppdaterade++;
+      if(varObetald && !ekonomiLineObetald(l)) blevBetalda++;
+    });
+    const ignorerade = invoices.filter(inv => ekonomiLevIgnorerad(inv.leverantor)).length;
+    const fresh = invoices.filter(inv => inv.lopnr && !existingByLopnr.has(String(inv.lopnr)) && !ekonomiLevIgnorerad(inv.leverantor));
+    const newLines = fresh.map(inv => ({
+      lopnr: inv.lopnr,
+      leverantor: inv.leverantor || '',
+      fakturadatum: inv.fakturadatum || '',
+      forfallodatum: inv.forfallodatum || '',
+      belopp: inv.belopp || 0,
+      saldo: inv.saldo != null ? inv.saldo : null,
+      kategori: null,
+      justeratBelopp: null,
+      uppladdadAv: myName,
+      uppladdadAt: new Date().toISOString()
+    }));
+    companyEkonomiData.reskontra[pid] = existing.concat(newLines);
+    await DB.setPersonalData(EKONOMI_KEYS.reskontra, JSON.stringify(companyEkonomiData.reskontra));
+    const obetaldaNya = newLines.filter(ekonomiLineObetald).length;
+    setReskontraStatus(newLines.length + ' nya rader inlästa' + (obetaldaNya ? ' (' + obetaldaNya + ' obetalda)' : '') + ', ' + (invoices.length - newLines.length - ignorerade) + ' fanns redan' + (ignorerade ? ', ' + ignorerade + ' från Skatteverket hoppades över' : '') + (uppdaterade ? ' - betalstatus uppdaterad på ' + uppdaterade + (blevBetalda ? ', ' + blevBetalda + ' har blivit betalda' : '') : '') + '.', 'ok');
+    renderEkonomiProjektBudget();
+  }catch(err){
+    setReskontraStatus('Kunde inte läsa reskontran: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+document.getElementById('backToEkonomiMarkListBtn').onclick = closeEkonomiProjektMark;
+document.getElementById('ekonomiAddFastighetBtn').onclick = addEkonomiMarkFastighet;
+document.getElementById('kopebrevUploadBtn').onclick = () => {
+  document.getElementById('kopebrevFileInput').click();
+};
+document.getElementById('kopebrevFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setKopebrevUploadStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('kopebrevUploadBtn');
+  btn.disabled = true;
+  setKopebrevUploadStatus('Läser köpebrevet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kopebrev', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
+    companyEkonomiData.mark[pid].push({
+      id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
+      fastighetsbeteckning: data.fastighetsbeteckning || '',
+      ort: data.ort || '',
+      forvarvspris: data.forvarvspris || 0,
+      aktiekop: data.aktiekop || 0,
+      vattenanslutning: data.vattenanslutning || 0,
+      gatukostnad: data.gatukostnad || 0
+    });
+    await persistEkonomiMark();
+    setKopebrevUploadStatus('Köpebrevet inläst - ny fastighet tillagd.', 'ok');
+    renderEkonomiProjektMark();
+  }catch(err){
+    setKopebrevUploadStatus('Kunde inte läsa köpebrevet: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+function setMarkExcelStatus(msg, kind){
+  const el = document.getElementById('markExcelUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('markExcelUploadBtn').onclick = () => {
+  document.getElementById('markExcelFileInput').click();
+};
+document.getElementById('markExcelFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  const btn = document.getElementById('markExcelUploadBtn');
+  btn.disabled = true;
+  setMarkExcelStatus('Läser listan…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const gridText = xlsxWorkbookToGridText(wb);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-mark-fastigheter', { body: { gridText, filename: file.name } });
+    if(error) throw error;
+    const list = (data && data.fastigheter) || [];
+    if(!list.length) throw new Error('Hittade inga fastigheter i filen.');
+    if(!companyEkonomiData.mark[pid]) companyEkonomiData.mark[pid] = [];
+    list.forEach(f => {
+      companyEkonomiData.mark[pid].push({
+        id: 'f' + Date.now() + Math.random().toString(36).slice(2, 7),
+        fastighetsbeteckning: f.fastighetsbeteckning || '',
+        ort: f.ort || '',
+        forvarvspris: f.forvarvspris || 0,
+        aktiekop: f.aktiekop || 0,
+        vattenanslutning: f.vattenanslutning || 0,
+        gatukostnad: f.gatukostnad || 0,
+        fakturor: []
+      });
+    });
+    await persistEkonomiMark();
+    setMarkExcelStatus(list.length + ' fastigheter inlästa.', 'ok');
+    renderEkonomiProjektMark();
+  }catch(err){
+    setMarkExcelStatus('Kunde inte läsa listan: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+// Fakturor (gatukostnad/vattenanslutning): en PDF kan innehålla flera fakturor.
+// Varje faktura visas i tur och ordning för bekräftelse med vald fastighet
+// (förifylld om beteckningen på fakturan matchar) och läggs sedan både på
+// fastighetens belopp och i dess fakturalista så att den går att spåra och ta
+// bort igen. Fakturor vars fakturanummer redan finns i projektet hoppas över.
+let markPendingQueue = [];
+let markPendingFaktura = null;
+function setMarkFakturaStatus(msg, kind){
+  const el = document.getElementById('markFakturaUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+function normalizeBeteckning(s){
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function normalizeFakturanummer(s){
+  return String(s || '').toLowerCase().replace(/\s+/g, '').trim();
+}
+function markKnownFakturanummer(pid){
+  const set = new Set();
+  (companyEkonomiData.mark[pid] || []).forEach(f => (f.fakturor || []).forEach(fk => {
+    const n = normalizeFakturanummer(fk.fakturanummer);
+    if(n) set.add(n);
+  }));
+  return set;
+}
+function showMarkFakturaPending(){
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const box = document.getElementById('markFakturaPendingBox');
+  const data = markPendingQueue.shift();
+  markPendingFaktura = data || null;
+  if(!data){ box.style.display = 'none'; return; }
+  const sel = document.getElementById('markFakturaPendingSelect');
+  sel.innerHTML = fastigheter.map(f => '<option value="' + escapeHtml(f.id) + '">' + escapeHtml(f.fastighetsbeteckning || 'Namnlös fastighet') + '</option>').join('');
+  const wanted = normalizeBeteckning(data.fastighetsbeteckning);
+  const match = wanted ? fastigheter.find(f => normalizeBeteckning(f.fastighetsbeteckning) === wanted) : null;
+  if(match) sel.value = match.id;
+  document.getElementById('markFakturaPendingTyp').value = data.typ === 'vattenanslutning' ? 'vattenanslutning' : 'gatukostnad';
+  document.getElementById('markFakturaPendingText').textContent =
+    (data.queuePos ? data.queuePos + ' av ' + data.queueTotal + ': ' : '') +
+    formatKrFull(data.belopp || 0) + (data.momsDebiterad === false ? ' (utan moms)' : ' inkl. moms') +
+    (data.fakturanummer ? ' · faktura ' + data.fakturanummer : '') +
+    (data.fakturadatum ? ' · ' + data.fakturadatum : '') +
+    (data.leverantor ? ' · ' + data.leverantor : '') +
+    (data.fastighetsbeteckning ? ' · fastighet enligt fakturan: ' + data.fastighetsbeteckning : ' · ingen fastighet angiven på fakturan') +
+    (match ? '' : ' - välj fastighet:');
+  document.getElementById('markFakturaPendingCancelBtn').textContent = markPendingQueue.length ? 'Hoppa över' : 'Avbryt';
+  box.style.display = 'block';
+}
+document.getElementById('markFakturaPendingCancelBtn').onclick = () => {
+  showMarkFakturaPending();
+};
+document.getElementById('markFakturaPendingAddBtn').onclick = async () => {
+  const data = markPendingFaktura;
+  if(!data) return;
+  const pid = currentEkonomiMarkProjectId;
+  const fastigheter = companyEkonomiData.mark[pid] || [];
+  const fast = fastigheter.find(f => f.id === document.getElementById('markFakturaPendingSelect').value);
+  if(!fast){ setMarkFakturaStatus('Välj en fastighet först.', 'err'); return; }
+  const nr = normalizeFakturanummer(data.fakturanummer);
+  if(nr && markKnownFakturanummer(pid).has(nr)){
+    setMarkFakturaStatus('Faktura ' + data.fakturanummer + ' finns redan - hoppade över.', 'err');
+    showMarkFakturaPending();
+    return;
+  }
+  const typ = document.getElementById('markFakturaPendingTyp').value;
+  if(!Array.isArray(fast.fakturor)) fast.fakturor = [];
+  fast.fakturor.push({
+    id: 'k' + Date.now() + Math.random().toString(36).slice(2, 7),
+    typ,
+    belopp: data.belopp || 0,
+    leverantor: data.leverantor || '',
+    fakturanummer: data.fakturanummer || '',
+    fakturadatum: data.fakturadatum || '',
+    momsDebiterad: data.momsDebiterad,
+    filnamn: data.filnamn || '',
+    uppladdadAt: new Date().toISOString()
+  });
+  fast[typ] = (fast[typ] || 0) + (data.belopp || 0);
+  await persistEkonomiMark();
+  setMarkFakturaStatus('Faktura' + (data.fakturanummer ? ' ' + data.fakturanummer : '') + ' tillagd på ' + (fast.fastighetsbeteckning || 'fastigheten') + '.', 'ok');
+  renderEkonomiProjektMark();
+  showMarkFakturaPending();
+};
+document.getElementById('markFakturaUploadBtn').onclick = () => {
+  document.getElementById('markFakturaFileInput').click();
+};
+document.getElementById('markFakturaFileInput').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  if(!files.length) return;
+  const pid = currentEkonomiMarkProjectId;
+  if(!pid) return;
+  if(!(companyEkonomiData.mark[pid] || []).length){
+    setMarkFakturaStatus('Lägg till minst en fastighet först.', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('markFakturaUploadBtn');
+  btn.disabled = true;
+  const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+  const known = markKnownFakturanummer(pid);
+  const seen = new Set();
+  const fresh = [];
+  let hittade = 0, dubbletter = 0;
+  const problem = [];
+  try{
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    for(let i = 0; i < files.length; i++){
+      const file = files[i];
+      setMarkFakturaStatus('Läser ' + (files.length > 1 ? 'fil ' + (i + 1) + ' av ' + files.length + ': ' : '') + file.name + '…');
+      if(file.size > CONTRACT_MAX_BYTES){ problem.push(file.name + ' (för stor, max 8 MB)'); continue; }
+      try{
+        const pdfBase64 = await fileToBase64(file);
+        const { data, error } = await sb.functions.invoke('extract-mark-faktura', { body: { pdfBase64, filename: file.name } });
+        if(error) throw error;
+        const all = (data && Array.isArray(data.fakturor)) ? data.fakturor : (data && data.belopp != null ? [data] : []);
+        const valid = all.filter(f => f && f.belopp != null);
+        if(!valid.length){ problem.push(file.name + ' (ingen faktura hittad)'); continue; }
+        valid.forEach(f => {
+          hittade++;
+          const nr = normalizeFakturanummer(f.fakturanummer);
+          if(nr && (known.has(nr) || seen.has(nr))){ dubbletter++; return; }
+          if(nr) seen.add(nr);
+          fresh.push({ ...f, filnamn: file.name });
+        });
+      }catch(err){
+        problem.push(file.name + ' (' + (err.message || err) + ')');
+      }
+    }
+    markPendingQueue = fresh.map((f, i) => ({ ...f, queuePos: fresh.length > 1 ? i + 1 : 0, queueTotal: fresh.length }));
+    let msg = hittade + ' faktur' + (hittade === 1 ? 'a' : 'or') + ' hittad' + (hittade === 1 ? '' : 'e') +
+      (files.length > 1 ? ' i ' + files.length + ' filer' : '') +
+      (dubbletter ? ', ' + dubbletter + ' redan inläst' + (dubbletter === 1 ? '' : 'a') + ' (hoppas över)' : '') +
+      (fresh.length ? ' - bekräfta nedan.' : '.');
+    if(problem.length) msg += ' Kunde inte läsa: ' + problem.join('; ');
+    setMarkFakturaStatus(msg, fresh.length ? '' : 'err');
+    showMarkFakturaPending();
+  }catch(err){
+    setMarkFakturaStatus('Kunde inte läsa fakturorna: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+document.getElementById('backToEkonomiLanListBtn').onclick = closeEkonomiProjektLan;
+document.getElementById('applyBrItemsBtn').onclick = applyBrItemsToLan;
+document.getElementById('brUploadBtn').onclick = () => {
+  document.getElementById('brFileInput').click();
+};
+document.getElementById('brFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const pid = currentEkonomiLanProjectId;
+  if(!pid) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setBrUploadStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('brUploadBtn');
+  btn.disabled = true;
+  setBrUploadStatus('Läser balansräkningen…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-br', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const rows = (data && data.rows) || [];
+    companyEkonomiData.brItems[pid] = rows.map(r => ({ konto: r.konto || '', belopp: r.belopp || 0, kategori: null }));
+    await DB.setPersonalData(EKONOMI_KEYS.brItems, JSON.stringify(companyEkonomiData.brItems));
+    setBrUploadStatus(rows.length + ' rader inlästa. Rikta varje post mot rätt fält nedan.', 'ok');
+    renderBrItemsTable();
+  }catch(err){
+    setBrUploadStatus('Kunde inte läsa balansräkningen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+document.getElementById('backToEkonomiLikviditetListBtn').onclick = closeEkonomiProjektLikviditet;
+document.getElementById('ekoLikviditetIngaendeInput').addEventListener('change', (e) => {
+  saveEkonomiLikviditetIngaende(parseFloat(e.target.value) || 0);
+});
+
+function openProject(p){
+  activeProjectId = p.id;
+  projectSubView = 'checklista';
+  entreprenadSubView = 'tidsplan';
+  loaded = false;
+  showScreen('project');
+  document.getElementById('projectHeaderName').textContent = p.name;
+  setProjectSubView('checklista');
+  loadApartments(false);
+}
+
+function setProjectSubView(view){
+  projectSubView = view;
+  document.querySelectorAll('.sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.view === view));
+  document.getElementById('checklistaSubview').style.display = view === 'checklista' ? 'block' : 'none';
+  document.getElementById('medlemsinfoSubview').style.display = view === 'medlemsinfo' ? 'block' : 'none';
+  document.getElementById('inflyttningsinfoSubview').style.display = view === 'inflyttningsinfo' ? 'block' : 'none';
+  document.getElementById('intressenterSubview').style.display = view === 'intressenter' ? 'block' : 'none';
+  document.getElementById('entreprenadSubview').style.display = view === 'entreprenad' ? 'block' : 'none';
+  if(view === 'medlemsinfo') renderMedlemsinfo();
+  if(view === 'inflyttningsinfo') renderInflyttningsinfo();
+  if(view === 'intressenter') loadInterests().then(renderIntressenterTab);
+  if(view === 'entreprenad') setEntreprenadSubView(entreprenadSubView || 'tidsplan');
+}
+
+function setEntreprenadSubView(view){
+  entreprenadSubView = view;
+  document.querySelectorAll('.entreprenad-sub-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.entreprenadView === view));
+  document.getElementById('tidsplanSubview').style.display = view === 'tidsplan' ? 'block' : 'none';
+  document.getElementById('byggmoteListSubview').style.display = view === 'byggmoten' ? 'block' : 'none';
+  document.getElementById('byggmoteFormSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollListSubview').style.display = view === 'besiktningsprotokoll' ? 'block' : 'none';
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'none';
+  document.getElementById('materialSubview').style.display = view === 'material' ? 'block' : 'none';
+  if(view === 'tidsplan') loadTidsplan(activeProjectId);
+  if(view === 'byggmoten') loadByggmoten(activeProjectId);
+  if(view === 'besiktningsprotokoll') renderBesiktningsprotokollList();
+  if(view === 'material') loadMaterial(activeProjectId);
+}
+
+// ---------- Besiktningsprotokoll (per lägenhet, uppladdning + AI-inläsning av felförteckning) ----------
+let currentBesiktningsprotokollAptId = null;
+
+function kundinfoText(apt){
+  const names = [apt.sald.buyer1.name, apt.sald.buyer2.name].filter(Boolean);
+  return names.length ? names.join(' & ') : '—';
+}
+
+// Samma uppslag som köparcellerna i Medlemsinformation (namn/telefon/mejl) -
+// visas i besiktningsprotokollets detaljvy istället för bara namnet.
+function kundinfoHtml(apt){
+  if(!apt.sald.done) return '<span style="color:var(--ink-soft); font-size:12.5px;">Ej sålt</span>';
+  const parts = [buyerSummaryHtml(apt.sald.buyer1)];
+  const buyer2 = apt.sald.buyer2;
+  if(buyer2 && (buyer2.name || buyer2.phone || buyer2.email)) parts.push(buyerSummaryHtml(buyer2));
+  return '<div style="display:flex; gap:32px; flex-wrap:wrap;">' + parts.join('') + '</div>';
+}
+
+function besiktningsprotokollSummary(apt){
+  const all = apt.besiktningsprotokoll.flatMap(p => p.items);
+  if(!all.length) return '—';
+  const open = all.filter(i => !i.avhjalpt).length;
+  return all.length + ' punkter · ' + open + ' kvar att åtgärda';
+}
+
+function renderBesiktningsprotokollList(){
+  const body = document.getElementById('besiktningsprotokollBody');
+  const table = document.getElementById('besiktningsprotokollTable');
+  const empty = document.getElementById('besiktningsprotokollEmptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.onclick = () => openBesiktningsprotokollDetail(apt);
+
+    const lghTd = document.createElement('td');
+    lghTd.style.cssText = "text-align:left; font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--blue);";
+    lghTd.textContent = apt.lgh || '—';
+    tr.appendChild(lghTd);
+
+    const projTd = document.createElement('td');
+    projTd.style.textAlign = 'left';
+    projTd.textContent = apt.projektnummer || '—';
+    tr.appendChild(projTd);
+
+    const addressTd = document.createElement('td');
+    addressTd.style.textAlign = 'left';
+    addressTd.textContent = apt.address || '—';
+    tr.appendChild(addressTd);
+
+    const kundTd = document.createElement('td');
+    kundTd.style.textAlign = 'left';
+    kundTd.textContent = kundinfoText(apt);
+    tr.appendChild(kundTd);
+
+    const summaryTd = document.createElement('td');
+    summaryTd.style.textAlign = 'left';
+    summaryTd.textContent = besiktningsprotokollSummary(apt);
+    tr.appendChild(summaryTd);
+
+    body.appendChild(tr);
+  });
+}
+
+function closeBesiktningsprotokollDetail(){
+  currentBesiktningsprotokollAptId = null;
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollListSubview').style.display = 'block';
+}
+document.getElementById('backToBesiktningsprotokollListBtn').onclick = closeBesiktningsprotokollDetail;
+
+function openBesiktningsprotokollDetail(apt){
+  currentBesiktningsprotokollAptId = apt.id;
+  document.getElementById('besiktningsprotokollListSubview').style.display = 'none';
+  document.getElementById('besiktningsprotokollDetailSubview').style.display = 'block';
+  document.getElementById('besiktningsprotokollUploadStatus').textContent = '';
+  document.getElementById('besiktningsprotokollUploadStatus').className = 'contract-upload-status';
+  renderBesiktningsprotokollDetail();
+}
+
+function renderBesiktningsprotokollDetail(){
+  const apt = apartments.find(a => a.id === currentBesiktningsprotokollAptId);
+  if(!apt){ closeBesiktningsprotokollDetail(); return; }
+
+  document.getElementById('besiktningsprotokollDetailTitle').textContent = 'LGH ' + (apt.lgh || '—');
+  document.getElementById('besiktningsprotokollDetailSub').textContent =
+    (apt.address || '—') + (apt.projektnummer ? ' · Projektnr ' + apt.projektnummer : '');
+  document.getElementById('besiktningsprotokollKundinfo').innerHTML = kundinfoHtml(apt);
+
+  const list = document.getElementById('besiktningsprotokollList');
+  const empty = document.getElementById('besiktningsprotokollDetailEmptyState');
+  list.innerHTML = '';
+
+  if(apt.besiktningsprotokoll.length === 0){
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  apt.besiktningsprotokoll.forEach(protokoll => {
+    const room = document.createElement('div');
+    room.className = 'material-room';
+
+    const header = document.createElement('div');
+    header.className = 'material-room-header';
+    const h3 = document.createElement('h3');
+    h3.textContent = (protokoll.typ || 'Besiktning') + (protokoll.datum ? ' · ' + protokoll.datum : '');
+    header.appendChild(h3);
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.title = 'Ta bort protokollet';
+    del.onclick = async () => {
+      apt.besiktningsprotokoll = apt.besiktningsprotokoll.filter(p => p.id !== protokoll.id);
+      renderBesiktningsprotokollDetail();
+      renderBesiktningsprotokollList();
+      await persistApartments();
+    };
+    header.appendChild(del);
+    room.appendChild(header);
+
+    const table = document.createElement('table');
+    table.innerHTML =
+      '<thead><tr>' +
+      '<th style="text-align:left; width:8%;">Nr</th>' +
+      '<th style="text-align:left; width:20%;">Del/Rum</th>' +
+      '<th style="text-align:left;">Fel</th>' +
+      '<th class="center" style="width:12%;">Avhjälpt</th>' +
+      '</tr></thead>';
+    const tbody = document.createElement('tbody');
+    protokoll.items.forEach(item => {
+      const tr = document.createElement('tr');
+
+      const nrTd = document.createElement('td');
+      nrTd.style.textAlign = 'left';
+      nrTd.textContent = item.nr != null ? item.nr : '—';
+      tr.appendChild(nrTd);
+
+      const delRumTd = document.createElement('td');
+      delRumTd.style.textAlign = 'left';
+      delRumTd.textContent = item.delRum || '—';
+      tr.appendChild(delRumTd);
+
+      const felTd = document.createElement('td');
+      felTd.style.textAlign = 'left';
+      felTd.textContent = item.fel || '—';
+      if(item.avhjalpt) felTd.style.textDecoration = 'line-through';
+      tr.appendChild(felTd);
+
+      const checkTd = document.createElement('td');
+      checkTd.className = 'center';
+      const box = document.createElement('div');
+      box.className = 'check' + (item.avhjalpt ? ' checked' : '');
+      box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      box.title = item.avhjalpt ? ('Avhjälpt av ' + (item.avhjalptBy || '') + ' ' + (item.avhjalptAt ? new Date(item.avhjalptAt).toLocaleDateString('sv-SE') : '')) : 'Markera som avhjälpt';
+      box.onclick = async () => {
+        if(!myName){ showToast('Ange ditt namn först'); return; }
+        item.avhjalpt = !item.avhjalpt;
+        item.avhjalptBy = item.avhjalpt ? myName : '';
+        item.avhjalptAt = item.avhjalpt ? new Date().toISOString() : '';
+        renderBesiktningsprotokollDetail();
+        renderBesiktningsprotokollList();
+        await persistApartments();
+      };
+      checkTd.appendChild(box);
+      tr.appendChild(checkTd);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    room.appendChild(table);
+
+    list.appendChild(room);
+  });
+}
+
+function setBesiktningsprotokollStatus(msg, kind){
+  const el = document.getElementById('besiktningsprotokollUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('besiktningsprotokollUploadBtn').onclick = () => {
+  document.getElementById('besiktningsprotokollFileInput').click();
+};
+document.getElementById('besiktningsprotokollFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const apt = apartments.find(a => a.id === currentBesiktningsprotokollAptId);
+  if(!apt){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setBesiktningsprotokollStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('besiktningsprotokollUploadBtn');
+  btn.disabled = true;
+  setBesiktningsprotokollStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-besiktningsprotokoll', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const items = (data && data.items) || [];
+    if(!items.length) throw new Error('Kunde inte hitta någon felförteckning i dokumentet.');
+    apt.besiktningsprotokoll.push({
+      id: uid(),
+      typ: (data && data.typ) || '',
+      datum: (data && data.datum) || '',
+      uppladdadAv: myName || '',
+      uppladdadAt: new Date().toISOString(),
+      items: items.map(it => ({
+        nr: it.nr != null ? it.nr : null,
+        delRum: it.delRum || '',
+        bet: it.bet || '',
+        fel: it.fel || '',
+        avhjalpt: false,
+        avhjalptBy: '',
+        avhjalptAt: ''
+      }))
+    });
+    setBesiktningsprotokollStatus(items.length + ' punkter inlästa.', 'ok');
+    renderBesiktningsprotokollDetail();
+    renderBesiktningsprotokollList();
+    await persistApartments();
+  }catch(err){
+    setBesiktningsprotokollStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+function openCalendarScreen(){
+  showScreen('calendar');
+  loadAllEvents().then(renderCalendar);
+}
+
+document.querySelectorAll('.sub-tab').forEach(btn => {
+  btn.onclick = () => setProjectSubView(btn.dataset.view);
+});
+document.querySelectorAll('.entreprenad-sub-tab').forEach(btn => {
+  btn.onclick = () => setEntreprenadSubView(btn.dataset.entreprenadView);
+});
+document.getElementById('backToHomeBtn').onclick = openHome;
+document.getElementById('backToHomeFromCalendarBtn').onclick = openHome;
+
+// ---------- Calendar ----------
+async function loadAllEvents(){
+  const events = [];
+  for(const p of projects){
+    try{
+      const raw = await fetchApartmentsRaw(p.id);
+      if(raw.apartments.length > 0){
+        const apts = raw.apartments.map(normalizeApartment);
+        apts.forEach(a => {
+          if(a.besiktning && a.besiktning.date){
+            events.push({ date: a.besiktning.date, type: 'besiktning', project: p.name, lgh: a.lgh });
+          }
+          if(a.inflyttning && a.inflyttning.date){
+            events.push({ date: a.inflyttning.date, type: 'inflyttning', project: p.name, lgh: a.lgh });
+          }
+        });
+      }
+    }catch(e){ /* projektet har inga lägenheter ännu - inget fel */ }
+  }
+  allEvents = events;
+}
+
+function renderCalendar(){
+  const grid = document.getElementById('calGrid');
+  grid.innerHTML = '';
+  ['Mån','Tis','Ons','Tors','Fre','Lör','Sön'].forEach(d=>{
+    const el = document.createElement('div');
+    el.className = 'cal-weekday';
+    el.textContent = d;
+    grid.appendChild(el);
+  });
+
+  const first = new Date(calendarYear, calendarMonth, 1);
+  let startDay = first.getDay();
+  startDay = (startDay === 0) ? 6 : startDay - 1;
+  const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+
+  for(let i = 0; i < startDay; i++){
+    const el = document.createElement('div');
+    el.className = 'cal-day empty';
+    grid.appendChild(el);
+  }
+
+  for(let day = 1; day <= daysInMonth; day++){
+    const dateStr = calendarYear + '-' + String(calendarMonth + 1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+    const cell = document.createElement('div');
+    cell.className = 'cal-day';
+    const num = document.createElement('div');
+    num.className = 'cal-day-num';
+    num.textContent = day;
+    cell.appendChild(num);
+    allEvents.filter(e => e.date === dateStr).forEach(e => {
+      const chip = document.createElement('div');
+      chip.className = 'cal-chip ' + (e.type === 'besiktning' ? 'chip-blue' : 'chip-green');
+      chip.textContent = 'LGH ' + e.lgh + ' · ' + e.project;
+      chip.title = (e.type === 'besiktning' ? 'Besiktning' : 'Inflyttning') + ' — ' + e.project + ', LGH ' + e.lgh;
+      cell.appendChild(chip);
+    });
+    grid.appendChild(cell);
+  }
+
+  document.getElementById('calTitle').textContent = MONTH_NAMES[calendarMonth] + ' ' + calendarYear;
+}
+
+document.getElementById('calPrev').onclick = () => {
+  calendarMonth--; if(calendarMonth < 0){ calendarMonth = 11; calendarYear--; }
+  renderCalendar();
+};
+document.getElementById('calNext').onclick = () => {
+  calendarMonth++; if(calendarMonth > 11){ calendarMonth = 0; calendarYear++; }
+  renderCalendar();
+};
+
+// ---------- Apartments ----------
+// Läser lägenheter för ett projekt: den vanliga klump-nyckeln i första hand. Om projektet av
+// misstag hann migreras till det tidigare (nu övergivna) per-lägenhet-formatet under en kort
+// period, läses det formatet också som fallback så ingen data tappas.
+async function fetchApartmentsRaw(projectId){
+  try{
+    const res = await window.storage.get(apartmentsKey(projectId), true);
+    if(res && res.value){
+      const apts = JSON.parse(res.value);
+      return { apartments: apts, fromPerItem: false };
+    }
+  }catch(e){ /* ingen data ännu */ }
+
+  return { apartments: [], fromPerItem: false };
+}
+
+async function loadApartments(showSyncState){
+  if(!activeProjectId) return;
+  if(hasUnsavedApartmentChanges) return; // don't let a poll clobber a change that failed to save
+  try{
+    if(showSyncState) document.getElementById('syncText').textContent = 'synkar…';
+    const raw = await fetchApartmentsRaw(activeProjectId);
+
+    if(raw.apartments.length > 0){
+      apartments = raw.apartments.map(normalizeApartment);
+      if(raw.fromPerItem){
+        // Konsolidera tillbaka till en enda klumpnyckel (en sparning istället för många).
+        await persistApartmentsNow();
+      }
+    } else {
+      // Listan är tom i lagringen (nytt projekt, eller en lista som av misstag blivit tom).
+      // Om projektet har en känd startlista, återskapa den istället för att fastna tomt.
+      const proj = projects.find(p => p.id === activeProjectId);
+      const seed = proj ? SEED_APARTMENTS_BY_PROJECT_NAME[proj.name] : null;
+      if(seed && apartments.length === 0){
+        apartments = seed.map(row => newApartment({
+          lgh: String(row[0]), totalyta: String(row[1]), avgift: String(row[2]), totalpris: String(row[3]), address: row[4] ? String(row[4]) : ''
+        }));
+        await persistApartmentsNow();
+      } else if(!loaded){
+        apartments = [];
+      } else {
+        apartments = apartments.map(normalizeApartment);
+      }
+    }
+    loaded = true;
+    document.getElementById('syncText').textContent = 'uppdaterad ' + new Date().toLocaleTimeString('sv-SE');
+    renderTable();
+  }catch(e){
+    showDebugError('Kunde inte synka lägenheter (loadApartments)', e);
+    document.getElementById('syncText').textContent = 'synk misslyckades';
+  }
+}
+
+// Debounce: om flera ändringar görs snabbt efter varandra (t.ex. flera kryssrutor i rad)
+// slås de ihop till EN sparning istället för en per klick. Det är det som håller nere
+// antalet anrop mot lagringstjänsten och undviker "rate limit"-fel.
+let persistApartmentsTimer = null;
+function persistApartments(){
+  return new Promise(resolve => {
+    if(persistApartmentsTimer) clearTimeout(persistApartmentsTimer);
+    persistApartmentsTimer = setTimeout(async () => {
+      persistApartmentsTimer = null;
+      await persistApartmentsNow();
+      resolve();
+    }, 900);
+  });
+}
+
+async function persistApartmentsNow(){
+  saving = true;
+  const projectIdAtSaveTime = activeProjectId;
+  const json = JSON.stringify(apartments);
+  try{
+    await withRetry(() => window.storage.set(apartmentsKey(projectIdAtSaveTime), json, true));
+    hasUnsavedApartmentChanges = false;
+    clearDebugError();
+  }catch(e){
+    hasUnsavedApartmentChanges = true;
+    showDebugError('Kunde inte spara lägenheter (persistApartments)', e, () => persistApartmentsNow());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+  saving = false;
+}
+
+function fieldStamp(obj){
+  if(!obj || !obj.by) return '';
+  return obj.by + ' · ' + timeAgo(obj.at);
+}
+
+function buyerSummaryHtml(buyer){
+  if(!buyer || !(buyer.name || buyer.phone || buyer.email)) return '<span style="color:var(--ink-soft);">—</span>';
+  const parts = [];
+  if(buyer.name) parts.push('<div style="font-weight:600;">' + escapeHtml(buyer.name) + '</div>');
+  if(buyer.phone) parts.push('<div>' + escapeHtml(buyer.phone) + '</div>');
+  if(buyer.email) parts.push('<div>' + escapeHtml(buyer.email) + '</div>');
+  return '<div style="font-family:\'JetBrains Mono\',monospace; font-size:12px; line-height:1.5; text-align:left;">' + parts.join('') + '</div>';
+}
+
+// Samma visuella mönster som makeCheckCell, men för Medlemsinformation-tabellen
+// (renderar om medlemsvyn istället för checklistan efteråt).
+function makeMedlemsCheckCell(apt, field, label){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const box = document.createElement('div');
+  box.className = 'check' + (apt[field].done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = apt[field].done ? fieldStamp(apt[field]) : label;
+  box.onclick = async () => {
+    if(!myName){ showToast('Ange ditt namn först'); return; }
+    apt[field].done = !apt[field].done;
+    apt[field].by = apt[field].done ? myName : '';
+    apt[field].at = apt[field].done ? new Date().toISOString() : '';
+    renderMedlemsinfo();
+    await persistApartments();
+  };
+  td.appendChild(box);
+  if(apt[field].done && apt[field].by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt[field].by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+function renderMedlemsinfo(){
+  const body = document.getElementById('medlemsBody');
+  const table = document.getElementById('medlemsTable');
+  const empty = document.getElementById('medlemsEmptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+
+    const lghTd = document.createElement('td');
+    lghTd.style.textAlign = 'left';
+    lghTd.style.fontFamily = "'JetBrains Mono', monospace";
+    lghTd.style.fontWeight = '700';
+    lghTd.style.color = 'var(--blue)';
+    lghTd.textContent = apt.lgh || '—';
+    tr.appendChild(lghTd);
+
+    const addressTd = document.createElement('td');
+    addressTd.style.textAlign = 'left';
+    addressTd.textContent = apt.address || '—';
+    tr.appendChild(addressTd);
+
+    if(apt.sald.done){
+      const buyer1Td = document.createElement('td');
+      buyer1Td.innerHTML = buyerSummaryHtml(apt.sald.buyer1);
+      tr.appendChild(buyer1Td);
+
+      const buyer2Td = document.createElement('td');
+      buyer2Td.innerHTML = buyerSummaryHtml(apt.sald.buyer2);
+      tr.appendChild(buyer2Td);
+    } else {
+      const notSoldTd1 = document.createElement('td');
+      notSoldTd1.innerHTML = '<span style="color:var(--ink-soft); font-size:12.5px;">Ej sålt</span>';
+      tr.appendChild(notSoldTd1);
+      const notSoldTd2 = document.createElement('td');
+      notSoldTd2.innerHTML = '<span style="color:var(--ink-soft); font-size:12.5px;">—</span>';
+      tr.appendChild(notSoldTd2);
+    }
+
+    tr.appendChild(makeMedlemsCheckCell(apt, 'upplatenKoncern', 'Upplåten inom koncernen'));
+    tr.appendChild(makeEditableTextCell(apt, 'anlaggningsid', 'Anläggnings-ID…'));
+
+    body.appendChild(tr);
+  });
+}
+
+// Gul = datum ifyllt men inte klart, grön = klart/bekräftat. Ingen färg = inget ifyllt än.
+function besiktningStatusColor(apt){
+  const b = apt.besiktning;
+  if(!b || !b.date) return '';
+  const allBooked = b.kontaktatKund && b.bokatBesiktningsman && b.meddelatEntreprenor && b.bokatStad;
+  return allBooked ? '#EEF6F0' : 'var(--amber-soft)';
+}
+
+function inflyttningsplanStatusColor(apt){
+  if(apt.upplatelse && apt.upplatelse.date) return '#EEF6F0';
+  const plan = apt.inflyttningPlan;
+  if(!plan) return '';
+  if(plan.bekraftatDatumKund) return '#EEF6F0';
+  if(plan.byggdatum || plan.onskatDatumKund) return 'var(--amber-soft)';
+  return '';
+}
+
+function renderInflyttningsinfo(){
+  const body = document.getElementById('inflyttningsinfoBody');
+  const table = document.getElementById('inflyttningsinfoTable');
+  const empty = document.getElementById('inflyttningsinfoEmptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+
+    const lghTd = document.createElement('td');
+    lghTd.style.cssText = "text-align:left; font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--blue);";
+    lghTd.textContent = apt.lgh || '—';
+    tr.appendChild(lghTd);
+
+    const addressTd = document.createElement('td');
+    addressTd.style.textAlign = 'left';
+    addressTd.textContent = apt.address || '—';
+    tr.appendChild(addressTd);
+
+    tr.appendChild(makeEditableTextCell(apt, 'projektnummer', 'Projektnummer…'));
+
+    const besiktningTd = document.createElement('td');
+    besiktningTd.style.textAlign = 'left';
+    besiktningTd.style.backgroundColor = besiktningStatusColor(apt);
+    const besiktningSpan = document.createElement('span');
+    besiktningSpan.className = 'editable';
+    besiktningSpan.style.cursor = 'pointer';
+    besiktningSpan.textContent = apt.besiktning.date || '—';
+    besiktningSpan.onclick = () => openBesiktningModal(apt);
+    besiktningTd.appendChild(besiktningSpan);
+    tr.appendChild(besiktningTd);
+
+    const inflyttningTd = document.createElement('td');
+    inflyttningTd.style.textAlign = 'left';
+    inflyttningTd.style.backgroundColor = inflyttningsplanStatusColor(apt);
+    const inflyttningSpan = document.createElement('span');
+    inflyttningSpan.className = 'editable';
+    inflyttningSpan.style.cursor = 'pointer';
+    const effDate = effectiveInflyttningDate(apt);
+    inflyttningSpan.textContent = effDate ? (effDate + (apt.upplatelse.date ? ' (upplåtelse/överlåtelse)' : '')) : '—';
+    inflyttningSpan.onclick = () => openInflyttningPlanModal(apt);
+    inflyttningTd.appendChild(inflyttningSpan);
+    tr.appendChild(inflyttningTd);
+
+    // Bekräftat inflyttningsdatum: gäller före det preliminära i Checklistan, Kalendern
+    // och likviditetsprognosen.
+    const bekTd = document.createElement('td');
+    bekTd.style.textAlign = 'left';
+    if(apt.inflyttningBekraftat.date) bekTd.style.backgroundColor = '#EEF6F0';
+    const bekInput = document.createElement('input');
+    bekInput.type = 'date';
+    bekInput.value = apt.inflyttningBekraftat.date || '';
+    bekInput.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:4px 6px; font-size:12.5px; background:#fff;';
+    bekInput.onchange = async () => {
+      if(!myName){ showToast('Ange ditt namn först'); return; }
+      apt.inflyttningBekraftat = { date: bekInput.value, by: bekInput.value ? myName : '', at: bekInput.value ? new Date().toISOString() : '' };
+      const newDate = effectiveInflyttningDate(apt);
+      if(newDate !== apt.inflyttning.date){ apt.inflyttning.by = myName || ''; apt.inflyttning.at = new Date().toISOString(); }
+      apt.inflyttning.date = newDate;
+      renderTable();
+      renderInflyttningsinfo();
+      await persistApartments();
+    };
+    bekTd.appendChild(bekInput);
+    if(apt.inflyttningBekraftat.date && apt.inflyttningBekraftat.by){
+      const stamp = document.createElement('div');
+      stamp.style.cssText = 'font-size:10.5px; color:var(--ink-soft); margin-top:3px;';
+      stamp.textContent = apt.inflyttningBekraftat.by + ' · ' + timeAgo(apt.inflyttningBekraftat.at);
+      bekTd.appendChild(stamp);
+    }
+    tr.appendChild(bekTd);
+
+    tr.appendChild(makeKommentarCell(apt, 'kommentarInflyttning'));
+
+    body.appendChild(tr);
+  });
+}
+
+function renderTable(){
+  const table = document.getElementById('aptTable');
+  const body = document.getElementById('aptBody');
+  const empty = document.getElementById('emptyState');
+  body.innerHTML = '';
+
+  if(apartments.length === 0){
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    document.getElementById('emptyStateText').textContent = 'Inga lägenheter tillagda i det här projektet än.';
+  } else {
+    table.style.display = 'table';
+    empty.style.display = 'none';
+  }
+
+  apartments.forEach(apt => {
+    const tr = document.createElement('tr');
+    if(isMovedIn(apt)) tr.className = 'moved-in';
+
+    tr.appendChild(makeLghCell(apt));
+    tr.appendChild(makeEditableTextCell(apt, 'address', 'Adress…'));
+    tr.appendChild(makeEditableCell(apt, 'totalyta', 'm²'));
+    tr.appendChild(makeEditableCell(apt, 'totalpris', ''));
+    tr.appendChild(makeSaldCell(apt));
+    tr.appendChild(makeSlutbetaldCell(apt));
+    tr.appendChild(makeDateCell(apt, 'besiktning'));
+    tr.appendChild(makeDateCell(apt, 'inflyttning'));
+    tr.appendChild(makeCheckCell(apt, 'grovstadat'));
+    tr.appendChild(makeCheckCell(apt, 'finstadat'));
+    tr.appendChild(makeCheckCell(apt, 'sopkarl'));
+    tr.appendChild(makeCheckCell(apt, 'fiber'));
+    tr.appendChild(makeCheckCell(apt, 'brevlada'));
+    tr.appendChild(makeTillvalCell(apt));
+    tr.appendChild(makeKommentarCell(apt, 'kommentar'));
+
+    const actionsTd = document.createElement('td');
+    actionsTd.className = 'row-actions';
+    const rm = document.createElement('button');
+    rm.className = 'remove-btn';
+    rm.textContent = '✕';
+    rm.title = 'Ta bort lägenhet';
+    rm.onclick = () => removeApartment(apt.id);
+    actionsTd.appendChild(rm);
+    tr.appendChild(actionsTd);
+
+    body.appendChild(tr);
+  });
+
+  // progress
+  let totalChecks = 0, doneChecks = 0;
+  apartments.forEach(a=>{
+    CHECK_FIELDS.forEach(f=>{ totalChecks++; if(a[f].done) doneChecks++; });
+    totalChecks += 3;
+    if(a.besiktning.date) doneChecks++;
+    if(a.inflyttning.date) doneChecks++;
+    if(a.tillval.done) doneChecks++;
+  });
+  document.getElementById('progressText').textContent = apartments.length
+    ? apartments.length + ' lägenheter · ' + doneChecks + '/' + totalChecks + ' punkter klara'
+    : '';
+}
+
+// ---------- Läs in lägenhetsförteckning från ekonomisk plan/kostnadskalkyl (PDF) ----------
+// Visas bara i tomläget (inga lägenheter tillagda än) - skriver aldrig över en
+// redan ifylld lista. Föreningslånet skrivs bara ut som info, sparas inte
+// automatiskt (det hör hemma i Ekonomi → Budget, som bara Mikael har tillgång till).
+function setKostnadskalkylStatus(msg, kind){
+  const el = document.getElementById('kostnadskalkylUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('kostnadskalkylUploadBtn').onclick = () => {
+  document.getElementById('kostnadskalkylFileInput').click();
+};
+document.getElementById('kostnadskalkylFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!activeProjectId){ e.target.value = ''; return; }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setKostnadskalkylStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('kostnadskalkylUploadBtn');
+  btn.disabled = true;
+  setKostnadskalkylStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-kostnadskalkyl', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const rows = (data && data.apartments) || [];
+    if(!rows.length) throw new Error('Kunde inte hitta någon lägenhetsförteckning i dokumentet.');
+    apartments = rows.map(r => newApartment({
+      lgh: r.lgh != null ? String(r.lgh) : '',
+      address: r.address || '',
+      totalyta: r.area != null ? String(r.area) : '',
+      avgift: r.avgift != null ? String(r.avgift) : '',
+      totalpris: r.totalpris != null ? String(r.totalpris) : ''
+    }));
+    await persistApartmentsNow();
+    renderTable();
+    let msg = rows.length + ' lägenheter inlästa.';
+    if(data && data.foreningslan){
+      msg += ' Beräknat föreningslån enligt dokumentet: ' + Math.round(data.foreningslan).toLocaleString('sv-SE') + ' kr (fyll i manuellt under Ekonomi → Budget).';
+    }
+    setKostnadskalkylStatus(msg, 'ok');
+  }catch(err){
+    setKostnadskalkylStatus(err.message || 'Något gick fel.', 'err');
+  } finally {
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+function makeCell(text, cls){
+  const td = document.createElement('td');
+  if(cls) td.className = cls;
+  td.textContent = text;
+  return td;
+}
+
+let currentKundinfoAptId = null;
+
+function makeLghCell(apt){
+  const td = document.createElement('td');
+  td.className = 'lgh-cell';
+  const span = document.createElement('span');
+  span.textContent = apt.lgh || '—';
+  span.style.cursor = 'pointer';
+  span.title = 'Klicka för kundinformation';
+  span.onclick = () => openKundinfoModal(apt);
+  td.appendChild(span);
+  return td;
+}
+
+function buyerHtml(buyer, label){
+  const hasInfo = buyer && (buyer.name || buyer.phone || buyer.email);
+  if(!hasInfo) return '';
+  return '<div class="kundinfo-buyer"><h4>' + label + '</h4>' +
+    (buyer.name ? '<div class="kundinfo-row"><span>Namn</span><span>' + escapeHtml(buyer.name) + '</span></div>' : '') +
+    (buyer.phone ? '<div class="kundinfo-row"><span>Telefon</span><span>' + escapeHtml(buyer.phone) + '</span></div>' : '') +
+    (buyer.email ? '<div class="kundinfo-row"><span>Mejl</span><span>' + escapeHtml(buyer.email) + '</span></div>' : '') +
+    '</div>';
+}
+
+function openKundinfoModal(apt){
+  currentKundinfoAptId = apt.id;
+  document.getElementById('kundinfoModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  const content = document.getElementById('kundinfoContent');
+
+  if(!apt.sald.done){
+    content.innerHTML = '<div class="kundinfo-empty">Lägenheten är inte markerad som såld ännu.</div>';
+  } else {
+    const buyer1Html = buyerHtml(apt.sald.buyer1, 'Köpare 1');
+    const buyer2Html = buyerHtml(apt.sald.buyer2, 'Köpare 2');
+    if(!buyer1Html && !buyer2Html){
+      content.innerHTML = '<div class="kundinfo-empty">Ingen köparinformation registrerad ännu.</div>';
+    } else {
+      content.innerHTML = buyer1Html + buyer2Html;
+    }
+    if(apt.sald.price){
+      content.innerHTML += '<div class="kundinfo-row" style="margin-top:8px;"><span>Sålt för</span><span>' + formatNumberSv(apt.sald.price) + ' kr</span></div>';
+    }
+  }
+
+  document.getElementById('kundinfoModalOverlay').classList.add('open');
+}
+
+function closeKundinfoModal(){
+  document.getElementById('kundinfoModalOverlay').classList.remove('open');
+  currentKundinfoAptId = null;
+}
+
+document.getElementById('kundinfoCloseBtn').onclick = closeKundinfoModal;
+document.getElementById('kundinfoModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'kundinfoModalOverlay') closeKundinfoModal();
+});
+document.getElementById('kundinfoEditBtn').onclick = () => {
+  const apt = apartments.find(a => a.id === currentKundinfoAptId);
+  closeKundinfoModal();
+  if(apt) openSaldModal(apt);
+};
+
+function formatNumberSv(value){
+  const digits = String(value).replace(/[^0-9]/g, '');
+  if(!digits) return '';
+  return parseInt(digits, 10).toLocaleString('sv-SE');
+}
+
+function makeEditableTextCell(apt, field, placeholder){
+  const td = document.createElement('td');
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.style.color = apt[field] ? 'inherit' : 'var(--ink-soft)';
+  span.textContent = apt[field] ? apt[field] : (placeholder || '—');
+  span.onclick = () => {
+    const input = document.createElement('input');
+    input.value = apt[field] || '';
+    input.type = 'text';
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    const save = async () => {
+      apt[field] = input.value.trim();
+      renderTable();
+      if(document.getElementById('medlemsinfoSubview').style.display !== 'none') renderMedlemsinfo();
+      await persistApartments();
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  td.appendChild(span);
+  return td;
+}
+
+// Kommentar visas alltid förkortad (ellipsis) i tabellen - klick öppnar en
+// popup för att läsa hela texten eller ändra den, istället för att redigeras
+// inline som övriga fält. Fältnamnet skickas in så samma cell/popup kan
+// användas för olika kommentarfält (Checklistan resp. Inflyttningsinformation).
+function makeKommentarCell(apt, field){
+  const td = document.createElement('td');
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.style.cursor = 'pointer';
+  span.style.color = apt[field] ? 'inherit' : 'var(--ink-soft)';
+  span.textContent = apt[field] ? apt[field] : 'Anteckning…';
+  span.onclick = () => openKommentarModal(apt, field);
+  td.appendChild(span);
+  return td;
+}
+
+let currentKommentarAptId = null;
+let currentKommentarField = 'kommentar';
+function openKommentarModal(apt, field){
+  currentKommentarAptId = apt.id;
+  currentKommentarField = field;
+  document.getElementById('kommentarModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('kommentarInput').value = apt[field] || '';
+  document.getElementById('kommentarModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('kommentarInput').focus(), 0);
+}
+function closeKommentarModal(){
+  document.getElementById('kommentarModalOverlay').classList.remove('open');
+  currentKommentarAptId = null;
+}
+document.getElementById('kommentarCancelBtn').onclick = closeKommentarModal;
+document.getElementById('kommentarModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'kommentarModalOverlay') closeKommentarModal();
+});
+document.getElementById('kommentarSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentKommentarAptId);
+  if(!apt){ closeKommentarModal(); return; }
+  apt[currentKommentarField] = document.getElementById('kommentarInput').value.trim();
+  closeKommentarModal();
+  renderTable();
+  renderInflyttningsinfo();
+  await persistApartments();
+};
+
+function makeEditableCell(apt, field, unit){
+  const td = document.createElement('td');
+  const span = document.createElement('span');
+  span.className = 'editable';
+  span.textContent = apt[field] ? (formatNumberSv(apt[field]) + (unit ? ' ' + unit : '')) : '—';
+  span.onclick = () => {
+    const input = document.createElement('input');
+    input.value = apt[field] || '';
+    input.type = 'text';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    const save = async () => {
+      apt[field] = input.value.replace(/[^0-9]/g, '').trim();
+      renderTable();
+      await persistApartments();
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if(e.key === 'Enter') input.blur(); });
+  };
+  td.appendChild(span);
+  return td;
+}
+
+let currentSaldAptId = null;
+
+function makeSaldCell(apt){
+  const td = document.createElement('td');
+  td.className = 'center';
+
+  const box = document.createElement('div');
+  box.className = 'check' + (apt.sald.done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = apt.sald.done ? fieldStamp(apt.sald) : 'Såld';
+  box.onclick = () => openSaldModal(apt);
+  td.appendChild(box);
+
+  if(apt.sald.done){
+    const noteWrap = document.createElement('div');
+    noteWrap.style.marginTop = '5px';
+    const priceDiffers = apt.sald.price && formatNumberSv(apt.sald.price) !== formatNumberSv(apt.totalpris);
+    const noteSpan = document.createElement('span');
+    noteSpan.className = 'editable';
+    noteSpan.style.cssText = 'font-size:10.5px; display:block; color:' + (apt.sald.price ? 'var(--ink-soft)' : 'var(--blue)');
+    if(apt.sald.price && priceDiffers){
+      noteSpan.textContent = 'Sålt för ' + formatNumberSv(apt.sald.price) + ' kr';
+    } else if(apt.sald.price){
+      noteSpan.textContent = formatNumberSv(apt.sald.price) + ' kr';
+    } else {
+      noteSpan.textContent = '+ pris';
+    }
+    noteSpan.onclick = () => openSaldModal(apt);
+    noteWrap.appendChild(noteSpan);
+    td.appendChild(noteWrap);
+  }
+
+  if(apt.sald.done && apt.sald.by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt.sald.by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+function openSaldModal(apt){
+  currentSaldAptId = apt.id;
+  document.getElementById('saldModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('saldDoneCheckbox').checked = !!apt.sald.done;
+  document.getElementById('saldAmountInput').value = apt.sald.price || '';
+  document.getElementById('saldBuyer1Name').value = apt.sald.buyer1.name || '';
+  document.getElementById('saldBuyer1Phone').value = apt.sald.buyer1.phone || '';
+  document.getElementById('saldBuyer1Email').value = apt.sald.buyer1.email || '';
+  document.getElementById('saldBuyer2Name').value = apt.sald.buyer2.name || '';
+  document.getElementById('saldBuyer2Phone').value = apt.sald.buyer2.phone || '';
+  document.getElementById('saldBuyer2Email').value = apt.sald.buyer2.email || '';
+  document.getElementById('saldInflyttningInput').value = (apt.inflyttning && apt.inflyttning.date) || '';
+  document.getElementById('contractFileInput').value = '';
+  const statusEl = document.getElementById('contractUploadStatus');
+  statusEl.textContent = '';
+  statusEl.className = 'contract-upload-status';
+  document.getElementById('saldModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('saldAmountInput').focus(), 0);
+}
+
+function closeSaldModal(){
+  document.getElementById('saldModalOverlay').classList.remove('open');
+  currentSaldAptId = null;
+}
+
+document.getElementById('saldCancelBtn').onclick = closeSaldModal;
+document.getElementById('saldModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'saldModalOverlay') closeSaldModal();
+});
+document.getElementById('saldSaveBtn').onclick = async () => {
+  if(!myName){ showToast('Ange ditt namn först'); closeSaldModal(); return; }
+  const apt = apartments.find(a => a.id === currentSaldAptId);
+  if(!apt){ closeSaldModal(); return; }
+  const done = document.getElementById('saldDoneCheckbox').checked;
+  const price = document.getElementById('saldAmountInput').value.replace(/[^0-9]/g, '').trim();
+
+  apt.sald.done = done;
+  apt.sald.price = price;
+  apt.sald.by = done ? myName : '';
+  apt.sald.at = done ? new Date().toISOString() : '';
+  apt.sald.buyer1 = {
+    name: document.getElementById('saldBuyer1Name').value.trim(),
+    phone: document.getElementById('saldBuyer1Phone').value.trim(),
+    email: document.getElementById('saldBuyer1Email').value.trim()
+  };
+  apt.sald.buyer2 = {
+    name: document.getElementById('saldBuyer2Name').value.trim(),
+    phone: document.getElementById('saldBuyer2Phone').value.trim(),
+    email: document.getElementById('saldBuyer2Email').value.trim()
+  };
+
+  const inflyttningDate = document.getElementById('saldInflyttningInput').value;
+  if(inflyttningDate && inflyttningDate !== apt.inflyttning.date){
+    apt.inflyttning.date = inflyttningDate;
+    apt.inflyttning.by = myName;
+    apt.inflyttning.at = new Date().toISOString();
+  }
+
+  closeSaldModal();
+  renderTable();
+  if(document.getElementById('medlemsinfoSubview').style.display !== 'none') renderMedlemsinfo();
+  await persistApartments();
+};
+
+// ---------- Läs in köpare/pris/inflyttning från uppladdat avtal (PDF) ----------
+// Filen sparas inte - används bara transient för att extrahera fälten, som sedan
+// granskas av användaren innan Spara klickas (aldrig auto-sparat).
+const CONTRACT_MAX_BYTES = 8 * 1024 * 1024;
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function setContractStatus(msg, kind){
+  const el = document.getElementById('contractUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('contractUploadBtn').onclick = () => {
+  document.getElementById('contractFileInput').click();
+};
+
+document.getElementById('contractFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setContractStatus('Filen är för stor (max 8 MB).', 'err');
+    return;
+  }
+  const btn = document.getElementById('contractUploadBtn');
+  btn.disabled = true;
+  setContractStatus('Läser avtalet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('hyper-responder', {
+      body: { pdfBase64, filename: file.name }
+    });
+    if(error) throw error;
+
+    if(data.price) document.getElementById('saldAmountInput').value = data.price;
+    if(data.buyer1){
+      if(data.buyer1.name) document.getElementById('saldBuyer1Name').value = data.buyer1.name;
+      if(data.buyer1.phone) document.getElementById('saldBuyer1Phone').value = data.buyer1.phone;
+      if(data.buyer1.email) document.getElementById('saldBuyer1Email').value = data.buyer1.email;
+    }
+    if(data.buyer2){
+      if(data.buyer2.name) document.getElementById('saldBuyer2Name').value = data.buyer2.name;
+      if(data.buyer2.phone) document.getElementById('saldBuyer2Phone').value = data.buyer2.phone;
+      if(data.buyer2.email) document.getElementById('saldBuyer2Email').value = data.buyer2.email;
+    }
+    if(data.moveInDate) document.getElementById('saldInflyttningInput').value = data.moveInDate;
+    document.getElementById('saldDoneCheckbox').checked = true;
+
+    let note = 'Klart - granska fälten innan du sparar.';
+    if(data.apartmentNumber) note += ' (Avtalet nämner lgh ' + data.apartmentNumber + ' - kolla att det stämmer med raden du redigerar.)';
+    setContractStatus(note, 'ok');
+  }catch(err){
+    setContractStatus('Kunde inte läsa avtalet: ' + err.message, 'err');
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+let currentSlutbetaldAptId = null;
+
+function makeSlutbetaldCell(apt){
+  const td = document.createElement('td');
+  td.className = 'center';
+
+  const box = document.createElement('div');
+  box.className = 'check' + (apt.slutbetald.done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = apt.slutbetald.done ? fieldStamp(apt.slutbetald) : 'Slutbetald';
+  box.onclick = () => openSlutbetaldModal(apt);
+  td.appendChild(box);
+
+  if(apt.slutbetald.done){
+    const noteWrap = document.createElement('div');
+    noteWrap.style.marginTop = '5px';
+    const noteSpan = document.createElement('span');
+    noteSpan.className = 'editable';
+    noteSpan.style.cssText = 'font-size:10.5px; display:block; color:var(--ink-soft);';
+    const parts = [];
+    if(apt.slutbetald.amount) parts.push(formatNumberSv(apt.slutbetald.amount) + ' kr');
+    if(apt.slutbetald.date) parts.push(apt.slutbetald.date);
+    noteSpan.textContent = parts.length ? parts.join(' · ') : '+ detaljer';
+    noteSpan.onclick = () => openSlutbetaldModal(apt);
+    noteWrap.appendChild(noteSpan);
+    td.appendChild(noteWrap);
+  }
+
+  if(apt.slutbetald.done && apt.slutbetald.by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt.slutbetald.by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+function openSlutbetaldModal(apt){
+  currentSlutbetaldAptId = apt.id;
+  document.getElementById('slutbetaldModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('slutbetaldDoneCheckbox').checked = !!apt.slutbetald.done;
+  document.getElementById('slutbetaldAmountInput').value = apt.slutbetald.amount || '';
+  document.getElementById('slutbetaldDateInput').value = apt.slutbetald.date || '';
+  document.getElementById('slutbetaldModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('slutbetaldAmountInput').focus(), 0);
+}
+
+function closeSlutbetaldModal(){
+  document.getElementById('slutbetaldModalOverlay').classList.remove('open');
+  currentSlutbetaldAptId = null;
+}
+
+document.getElementById('slutbetaldCancelBtn').onclick = closeSlutbetaldModal;
+document.getElementById('slutbetaldModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'slutbetaldModalOverlay') closeSlutbetaldModal();
+});
+document.getElementById('slutbetaldSaveBtn').onclick = async () => {
+  if(!myName){ showToast('Ange ditt namn först'); closeSlutbetaldModal(); return; }
+  const apt = apartments.find(a => a.id === currentSlutbetaldAptId);
+  if(!apt){ closeSlutbetaldModal(); return; }
+  const done = document.getElementById('slutbetaldDoneCheckbox').checked;
+  const amount = document.getElementById('slutbetaldAmountInput').value.replace(/[^0-9]/g, '').trim();
+  const date = document.getElementById('slutbetaldDateInput').value;
+
+  apt.slutbetald.done = done;
+  apt.slutbetald.amount = amount;
+  apt.slutbetald.date = date;
+  apt.slutbetald.by = done ? myName : '';
+  apt.slutbetald.at = done ? new Date().toISOString() : '';
+
+  closeSlutbetaldModal();
+  renderTable();
+  await persistApartments();
+};
+
+function makeCheckCell(apt, field){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const box = document.createElement('div');
+  box.className = 'check' + (apt[field].done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = apt[field].done ? fieldStamp(apt[field]) : CHECK_LABELS[field];
+  box.onclick = async () => {
+    if(!myName){ showToast('Ange ditt namn först'); return; }
+    apt[field].done = !apt[field].done;
+    apt[field].by = apt[field].done ? myName : '';
+    apt[field].at = apt[field].done ? new Date().toISOString() : '';
+    renderTable();
+    await persistApartments();
+  };
+  td.appendChild(box);
+  if(apt[field].done && apt[field].by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt[field].by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+let currentTillvalAptId = null;
+
+function makeTillvalCell(apt){
+  const td = document.createElement('td');
+  td.className = 'center';
+
+  const box = document.createElement('div');
+  box.className = 'check' + (apt.tillval.done ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.style.margin = '0 auto';
+  box.title = apt.tillval.done ? fieldStamp(apt.tillval) : 'Tillval';
+  box.onclick = () => openTillvalModal(apt);
+  td.appendChild(box);
+
+  if(apt.tillval.done){
+    const summary = document.createElement('div');
+    summary.className = 'tillval-summary';
+    summary.style.cursor = 'pointer';
+    summary.style.marginTop = '5px';
+    const parts = [];
+    if(apt.tillval.note) parts.push(apt.tillval.note);
+    const invoiceParts = [];
+    if(apt.tillval.invoicedCustomer) invoiceParts.push('Kund');
+    if(apt.tillval.invoicedLoan) invoiceParts.push('Bolån');
+    if(invoiceParts.length) parts.push('Fakt: ' + invoiceParts.join(' + '));
+    if(apt.tillval.amount) parts.push(formatNumberSv(apt.tillval.amount) + ' kr');
+    summary.textContent = parts.length ? parts.join(' · ') : 'Klicka för detaljer';
+    summary.onclick = () => openTillvalModal(apt);
+    td.appendChild(summary);
+  }
+
+  if(apt.tillval.done && apt.tillval.by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt.tillval.by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+function openTillvalModal(apt){
+  currentTillvalAptId = apt.id;
+  document.getElementById('tillvalModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('tillvalNoteInput').value = apt.tillval.note || '';
+  document.getElementById('tillvalInvoicedCustomer').checked = !!apt.tillval.invoicedCustomer;
+  document.getElementById('tillvalInvoicedLoan').checked = !!apt.tillval.invoicedLoan;
+  document.getElementById('tillvalAmountInput').value = apt.tillval.amount || '';
+  document.getElementById('tillvalModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('tillvalNoteInput').focus(), 0);
+}
+
+function closeTillvalModal(){
+  document.getElementById('tillvalModalOverlay').classList.remove('open');
+  currentTillvalAptId = null;
+}
+
+document.getElementById('tillvalCancelBtn').onclick = closeTillvalModal;
+document.getElementById('tillvalModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'tillvalModalOverlay') closeTillvalModal();
+});
+document.getElementById('tillvalSaveBtn').onclick = async () => {
+  if(!myName){ showToast('Ange ditt namn först'); closeTillvalModal(); return; }
+  const apt = apartments.find(a => a.id === currentTillvalAptId);
+  if(!apt){ closeTillvalModal(); return; }
+  const note = document.getElementById('tillvalNoteInput').value.trim();
+  const invoicedCustomer = document.getElementById('tillvalInvoicedCustomer').checked;
+  const invoicedLoan = document.getElementById('tillvalInvoicedLoan').checked;
+  const amount = document.getElementById('tillvalAmountInput').value.replace(/[^0-9]/g, '').trim();
+
+  apt.tillval.note = note;
+  apt.tillval.invoicedCustomer = invoicedCustomer;
+  apt.tillval.invoicedLoan = invoicedLoan;
+  apt.tillval.amount = amount;
+  const hasContent = !!(note || amount || invoicedCustomer || invoicedLoan);
+  apt.tillval.done = hasContent;
+  apt.tillval.by = hasContent ? myName : '';
+  apt.tillval.at = hasContent ? new Date().toISOString() : '';
+
+  closeTillvalModal();
+  renderTable();
+  await persistApartments();
+};
+
+// ---------- Besiktning (modal med checklista, öppnas från Inflyttningsinformation) ----------
+let currentBesiktningAptId = null;
+
+function openBesiktningModal(apt){
+  currentBesiktningAptId = apt.id;
+  document.getElementById('besiktningModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('besiktningDatumInput').value = apt.besiktning.date || '';
+  document.getElementById('besiktningKontaktatKund').checked = !!apt.besiktning.kontaktatKund;
+  document.getElementById('besiktningBokatBesiktningsman').checked = !!apt.besiktning.bokatBesiktningsman;
+  document.getElementById('besiktningMeddelatEntreprenor').checked = !!apt.besiktning.meddelatEntreprenor;
+  document.getElementById('besiktningBokatStad').checked = !!apt.besiktning.bokatStad;
+  document.getElementById('besiktningModalOverlay').classList.add('open');
+}
+function closeBesiktningModal(){
+  document.getElementById('besiktningModalOverlay').classList.remove('open');
+  currentBesiktningAptId = null;
+}
+document.getElementById('besiktningCancelBtn').onclick = closeBesiktningModal;
+document.getElementById('besiktningModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'besiktningModalOverlay') closeBesiktningModal();
+});
+document.getElementById('besiktningSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentBesiktningAptId);
+  if(!apt){ closeBesiktningModal(); return; }
+  const date = document.getElementById('besiktningDatumInput').value;
+  if(date && date !== apt.besiktning.date){
+    apt.besiktning.by = myName || '';
+    apt.besiktning.at = new Date().toISOString();
+  }
+  apt.besiktning.date = date;
+  apt.besiktning.kontaktatKund = document.getElementById('besiktningKontaktatKund').checked;
+  apt.besiktning.bokatBesiktningsman = document.getElementById('besiktningBokatBesiktningsman').checked;
+  apt.besiktning.meddelatEntreprenor = document.getElementById('besiktningMeddelatEntreprenor').checked;
+  apt.besiktning.bokatStad = document.getElementById('besiktningBokatStad').checked;
+  closeBesiktningModal();
+  renderTable();
+  if(document.getElementById('inflyttningsinfoSubview').style.display !== 'none') renderInflyttningsinfo();
+  await persistApartments();
+};
+
+// ---------- Inflyttningsdatum (modal med önskat/bygg/bekräftat datum + upplåtelse/överlåtelse) ----------
+let currentInflyttningAptId = null;
+
+function updateUpplatelseInfoDisplay(apt){
+  const infoEl = document.getElementById('upplatelseInfoText');
+  const clearBtn = document.getElementById('upplatelseClearBtn');
+  if(apt.upplatelse && apt.upplatelse.date){
+    infoEl.textContent = 'Datum enligt ' + (apt.upplatelse.typ || 'upplåtelse/överlåtelse') + ': ' + apt.upplatelse.date + ' - detta går före allt annat i checklistan.';
+    infoEl.style.display = 'block';
+    clearBtn.style.display = 'inline-block';
+  } else {
+    infoEl.style.display = 'none';
+    clearBtn.style.display = 'none';
+  }
+}
+
+function openInflyttningPlanModal(apt){
+  currentInflyttningAptId = apt.id;
+  document.getElementById('inflyttningPlanModalSub').textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+  document.getElementById('inflyttningOnskatInput').value = apt.inflyttningPlan.onskatDatumKund || '';
+  document.getElementById('inflyttningByggdatumInput').value = apt.inflyttningPlan.byggdatum || '';
+  document.getElementById('inflyttningBekraftatInput').value = apt.inflyttningPlan.bekraftatDatumKund || '';
+  setUpplatelseStatus('', '');
+  updateUpplatelseInfoDisplay(apt);
+  document.getElementById('inflyttningPlanModalOverlay').classList.add('open');
+}
+function closeInflyttningPlanModal(){
+  document.getElementById('inflyttningPlanModalOverlay').classList.remove('open');
+  currentInflyttningAptId = null;
+}
+document.getElementById('inflyttningPlanCancelBtn').onclick = closeInflyttningPlanModal;
+document.getElementById('inflyttningPlanModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'inflyttningPlanModalOverlay') closeInflyttningPlanModal();
+});
+document.getElementById('upplatelseClearBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt) return;
+  apt.upplatelse = { date: '', by: '', at: '', typ: '' };
+  const newDate = effectiveInflyttningDate(apt);
+  if(newDate !== apt.inflyttning.date){
+    apt.inflyttning.date = newDate;
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+  }
+  updateUpplatelseInfoDisplay(apt);
+  renderTable();
+  renderInflyttningsinfo();
+  await persistApartments();
+};
+document.getElementById('inflyttningPlanSaveBtn').onclick = async () => {
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt){ closeInflyttningPlanModal(); return; }
+  apt.inflyttningPlan.onskatDatumKund = document.getElementById('inflyttningOnskatInput').value;
+  apt.inflyttningPlan.byggdatum = document.getElementById('inflyttningByggdatumInput').value;
+  apt.inflyttningPlan.bekraftatDatumKund = document.getElementById('inflyttningBekraftatInput').value;
+  const newDate = effectiveInflyttningDate(apt);
+  if(newDate && newDate !== apt.inflyttning.date){
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+  }
+  apt.inflyttning.date = newDate;
+  closeInflyttningPlanModal();
+  renderTable();
+  renderInflyttningsinfo();
+  await persistApartments();
+};
+
+function setUpplatelseStatus(msg, kind){
+  const el = document.getElementById('upplatelseUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+document.getElementById('upplatelseUploadBtn').onclick = () => {
+  document.getElementById('upplatelseFileInput').click();
+};
+document.getElementById('upplatelseFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const apt = apartments.find(a => a.id === currentInflyttningAptId);
+  if(!apt) return;
+  if(file.size > CONTRACT_MAX_BYTES){
+    setUpplatelseStatus('Filen är för stor (max 8 MB).', 'err');
+    e.target.value = '';
+    return;
+  }
+  const btn = document.getElementById('upplatelseUploadBtn');
+  btn.disabled = true;
+  setUpplatelseStatus('Läser dokumentet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-upplatelse', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    if(!data || !data.datum) throw new Error('Kunde inte hitta ett datum i dokumentet.');
+    apt.upplatelse = { date: data.datum, by: myName || '', at: new Date().toISOString(), typ: data.dokumenttyp || '' };
+    const newDate = effectiveInflyttningDate(apt);
+    apt.inflyttning.date = newDate;
+    apt.inflyttning.by = myName || '';
+    apt.inflyttning.at = new Date().toISOString();
+    setUpplatelseStatus('Datum inläst: ' + data.datum, 'ok');
+    updateUpplatelseInfoDisplay(apt);
+    renderTable();
+    renderInflyttningsinfo();
+    await persistApartments();
+  }catch(err){
+    setUpplatelseStatus('Kunde inte läsa dokumentet: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function isMovedIn(apt){ return !!(apt.inflyttning && apt.inflyttning.date && apt.inflyttning.date <= todayStr()); }
+
+function makeDateCell(apt, field){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const input = document.createElement('input');
+  input.type = 'date';
+  input.className = 'date-input' + (apt[field].date ? ' filled' : '');
+  input.value = apt[field].date || '';
+  input.onchange = async () => {
+    if(!myName){ showToast('Ange ditt namn först'); input.value = apt[field].date || ''; return; }
+    apt[field].date = input.value;
+    apt[field].by = input.value ? myName : '';
+    apt[field].at = input.value ? new Date().toISOString() : '';
+    renderTable();
+    await persistApartments();
+  };
+  td.appendChild(input);
+  if(apt[field].date && apt[field].by){
+    const stamp = document.createElement('span');
+    stamp.className = 'stamp-mark';
+    stamp.textContent = apt[field].by;
+    td.appendChild(stamp);
+  }
+  return td;
+}
+
+async function removeApartment(id){
+  apartments = apartments.filter(a => a.id !== id);
+  renderTable();
+  await persistApartments();
+}
+
+// ---------- Add apartment row (form appended below table via prompt-free inline row) ----------
+function ensureAddRow(){
+  // Adds a persistent input row at bottom of table body for quick entry
+}
+
+
+// (Projekt-nivans Ekonomi-flik, SIE-import/budgetjamforelse mot budget, borttagen.)
+// ---------- Intresseanmälningar ----------
+const INTR_STORAGE_KEY = 'intresseanmalningar-v1';
+const STATUS_KEYS = ['Ny','Kontaktad','Ingen kontakt','Visning bokad','Visning genomförd','Tackat ja','Tackat nej'];
+const STATUS_CLASS = {
+  'Ny': 'st-ny', 'Kontaktad': 'st-kontaktad', 'Ingen kontakt': 'st-ingenkontakt',
+  'Visning bokad': 'st-visningbokad', 'Visning genomförd': 'st-visninggenomford',
+  'Tackat ja': 'st-tackatja', 'Tackat nej': 'st-tackatnej'
+};
+const VISNINGSANSVARIGA = ['Mikael','Rebecka','Saman','David'];
+const KONTAKTMETODER = ['E-post','SMS','Samtal'];
+
+let interests = [];
+let intrPersistTimer = null;
+let intrEditingId = null;
+let intrNewFormLockedProject = null;
+let intrReasonEntryId = null;
+let intrViewingEntryId = null;
+let intrContactEntryId = null;
+let intrDeleteTargetId = null;
+
+function emptyIntrForm(){
+  return {
+    namn:'', epost:'', telefon:'', projekt:'', objekt:'',
+    datum: new Date().toISOString().slice(0,10), status:'Ny', anteckningar:'',
+    avslagsanledning:'', visningsdatum:'', visningstid:'', visningsansvarig:'',
+    kontakthistorik:[], hanterad:false
+  };
+}
+
+function daysSince(dateStr){
+  if(!dateStr) return null;
+  const then = new Date(dateStr + 'T00:00:00');
+  const now = new Date();
+  now.setHours(0,0,0,0);
+  return Math.floor((now - then) / (1000*60*60*24));
+}
+function latestKontaktDatum(entry){
+  const hist = entry.kontakthistorik || [];
+  if(hist.length === 0) return null;
+  return hist.map(h => h.datum).sort().slice(-1)[0];
+}
+function normPhone(v){ return (v||'').replace(/[^\d]/g,''); }
+function normEmail(v){ return (v||'').trim().toLowerCase(); }
+
+function findIntrDuplicate(form, editingId){
+  const email = normEmail(form.epost);
+  const phone = normPhone(form.telefon);
+  const name = (form.namn||'').trim().toLowerCase();
+  return interests.find(en => {
+    if(en.id === editingId) return false;
+    if(en.projekt !== form.projekt) return false;
+    if(!name || (en.namn||'').trim().toLowerCase() !== name) return false;
+    const enEmail = normEmail(en.epost);
+    const enPhone = normPhone(en.telefon);
+    const emailMatches = email && enEmail && email === enEmail;
+    const phoneMatches = phone && enPhone && phone === enPhone;
+    return emailMatches || phoneMatches;
+  });
+}
+
+function parseIntrEmailText(text){
+  const result = {};
+  const lines = text.split(/\r?\n/);
+  for(const line of lines){
+    const m = line.match(/^\s*([^:]+):\s*(.+)$/);
+    if(!m) continue;
+    const key = m[1].trim().toLowerCase();
+    let val = m[2].trim();
+    const mailto = val.match(/\[([^\]]+)\]\(mailto:[^)]+\)/);
+    if(mailto) val = mailto[1];
+    val = val.replace(/[<>]/g,'').trim();
+    if(/^namn$/.test(key)) result.namn = val;
+    else if(/^(e-?post|mejl|email)$/.test(key)) result.epost = val;
+    else if(/^(telefon|mobil|tel)$/.test(key)) result.telefon = val;
+    else if(/^projekt$/.test(key)) result.projekt = val;
+    else if(/^(objekt|lägenhet|lgh|bostad)$/.test(key)) result.objekt = val;
+    else if(/^(meddelande|kommentar|anteckning(ar)?)$/.test(key)) result.anteckningar = val;
+  }
+  return result;
+}
+
+async function loadInterests(){
+  try{
+    const res = await window.storage.get(INTR_STORAGE_KEY, true);
+    interests = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    interests = [];
+  }
+}
+
+function persistInterests(){
+  return new Promise(resolve => {
+    if(intrPersistTimer) clearTimeout(intrPersistTimer);
+    intrPersistTimer = setTimeout(async () => {
+      intrPersistTimer = null;
+      await persistInterestsNow();
+      resolve();
+    }, 900);
+  });
+}
+
+async function persistInterestsNow(){
+  try{
+    await withRetry(() => window.storage.set(INTR_STORAGE_KEY, JSON.stringify(interests), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara intresseanmälningar', e, () => persistInterestsNow());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+function renderAllIntrViews(){
+  if(screen === 'intressen') renderIntressenScreen();
+  if(screen === 'project' && projectSubView === 'intressenter') renderIntressenterTab();
+}
+
+const STRUKEN_STATUSES = ['Tackat ja', 'Tackat nej', 'Ingen kontakt'];
+function isStruken(entry){ return STRUKEN_STATUSES.includes(entry.status); }
+
+function computeIntrFiltered(lockedProject, search, projektFilter, statusFilter, showHandled, showStruken){
+  return interests
+    .filter(e => lockedProject ? e.projekt === lockedProject : (projektFilter ? e.projekt === projektFilter : true))
+    .filter(e => statusFilter ? e.status === statusFilter : true)
+    .filter(e => showHandled ? true : !e.hanterad)
+    .filter(e => showStruken ? true : !isStruken(e))
+    .filter(e => {
+      if(!search.trim()) return true;
+      const q = search.toLowerCase();
+      return (e.namn||'').toLowerCase().includes(q) || (e.epost||'').toLowerCase().includes(q) ||
+        (e.telefon||'').toLowerCase().includes(q) || (e.objekt||'').toLowerCase().includes(q);
+    })
+    .sort((a,b) => (a.datum < b.datum ? 1 : -1));
+}
+
+function renderIntrRow(entry){
+  const stClass = STATUS_CLASS[entry.status] || STATUS_CLASS['Ny'];
+  const lastKontakt = latestKontaktDatum(entry);
+  const overdue = entry.status === 'Kontaktad' && lastKontakt && daysSince(lastKontakt) >= 3;
+
+  const row = document.createElement('div');
+  row.className = 'intr-row' + (isStruken(entry) ? ' handled' : '') + (overdue ? ' overdue' : '');
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!entry.hanterad;
+  cb.title = 'Markera som hanterad';
+  cb.onclick = async () => {
+    entry.hanterad = !entry.hanterad;
+    renderAllIntrViews();
+    await persistInterests();
+  };
+  row.appendChild(cb);
+
+  const main = document.createElement('div');
+  main.className = 'intr-row-main';
+
+  const top = document.createElement('div');
+  top.className = 'intr-row-top';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'intr-name' + (isStruken(entry) ? ' handled' : '');
+  nameSpan.textContent = entry.namn;
+  top.appendChild(nameSpan);
+
+  const badge = document.createElement('span');
+  badge.className = 'intr-badge ' + stClass;
+  badge.textContent = entry.status;
+  top.appendChild(badge);
+
+  if(overdue){
+    const ov = document.createElement('button');
+    ov.className = 'intr-overdue-badge';
+    ov.textContent = 'Dags att kontakta igen →';
+    ov.onclick = () => openIntrContactModal(entry);
+    top.appendChild(ov);
+  }
+
+  const dateSpan = document.createElement('span');
+  dateSpan.className = 'intr-date';
+  dateSpan.textContent = (entry.projekt ? entry.projekt + ' · ' : '') + (entry.datum || '');
+  top.appendChild(dateSpan);
+  main.appendChild(top);
+
+  const metaParts = [entry.epost, entry.telefon, entry.objekt].filter(Boolean);
+  if(metaParts.length){
+    const meta = document.createElement('div');
+    meta.className = 'intr-meta';
+    meta.textContent = metaParts.join(' · ');
+    main.appendChild(meta);
+  }
+
+  if(entry.anteckningar){
+    const note = document.createElement('div');
+    note.className = 'intr-note';
+    note.textContent = entry.anteckningar;
+    main.appendChild(note);
+  }
+  if(entry.status === 'Tackat nej' && entry.avslagsanledning){
+    const note = document.createElement('div');
+    note.className = 'intr-note';
+    note.textContent = 'Anledning: ' + entry.avslagsanledning;
+    main.appendChild(note);
+  }
+  if(entry.status === 'Visning bokad' && entry.visningsdatum){
+    const note = document.createElement('div');
+    note.className = 'intr-note';
+    note.textContent = 'Visning: ' + entry.visningsdatum + ' ' + (entry.visningstid||'') + ' · ' + (entry.visningsansvarig||'');
+    main.appendChild(note);
+  }
+  if(entry.kontakthistorik && entry.kontakthistorik.length){
+    const hist = document.createElement('div');
+    hist.className = 'intr-kontakthistorik';
+    entry.kontakthistorik.slice(-2).reverse().forEach(h => {
+      const d = document.createElement('div');
+      d.textContent = h.datum + ' · ' + (h.metoder||[]).join('/') + (h.kommentar ? ' – ' + h.kommentar : '');
+      hist.appendChild(d);
+    });
+    main.appendChild(hist);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'intr-row-actions';
+  const statusLabel = document.createElement('span');
+  statusLabel.style.cssText = 'font-size:11px; color:var(--ink-soft); align-self:center;';
+  statusLabel.textContent = 'Status:';
+  actions.appendChild(statusLabel);
+
+  const statusSelect = document.createElement('select');
+  statusSelect.className = 'intr-status-select';
+  STATUS_KEYS.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    if(s === entry.status) opt.selected = true;
+    statusSelect.appendChild(opt);
+  });
+  statusSelect.onchange = () => setIntrStatus(entry, statusSelect.value);
+  actions.appendChild(statusSelect);
+
+  const editBtn = document.createElement('button');
+  editBtn.className = 'intr-icon-btn';
+  editBtn.textContent = '✎ Redigera';
+  editBtn.onclick = () => openIntrForm(entry);
+  actions.appendChild(editBtn);
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'intr-icon-btn';
+  delBtn.textContent = '✕ Ta bort';
+  delBtn.onclick = () => openIntrDeleteModal(entry.id);
+  actions.appendChild(delBtn);
+
+  main.appendChild(actions);
+  row.appendChild(main);
+  return row;
+}
+
+function renderIntrListInto(containerId, lockedProject, search, statusFilter, showHandled, showStruken){
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  const filtered = computeIntrFiltered(lockedProject, search, '', statusFilter, showHandled, showStruken);
+  if(filtered.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.style.display = 'block';
+    empty.textContent = interests.length === 0
+      ? 'Inga anmälningar ännu. Lägg till den första när du får ett mejl.'
+      : 'Inga anmälningar matchar filtren.';
+    container.appendChild(empty);
+    return;
+  }
+  filtered.forEach(entry => container.appendChild(renderIntrRow(entry)));
+}
+
+function refreshIntrProjectFilterOptions(){
+  const sel = document.getElementById('intrProjektFilter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Alla projekt</option>' +
+    projects.map(p => '<option value="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + '</option>').join('');
+  sel.value = current;
+}
+
+function refreshIntrFormProjectOptions(preset){
+  const sel = document.getElementById('intrFormProjekt');
+  sel.innerHTML = '<option value="">Välj projekt…</option>' +
+    projects.map(p => '<option value="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + '</option>').join('') +
+    '<option value="Övrigt">Övrigt</option>';
+  if(preset) sel.value = preset;
+}
+
+function renderIntressenScreen(){
+  refreshIntrProjectFilterOptions();
+  const search = document.getElementById('intrSearch').value;
+  const projektFilter = document.getElementById('intrProjektFilter').value;
+  const statusFilter = document.getElementById('intrStatusFilter').value;
+  const showHandled = document.getElementById('intrShowHandled').checked;
+  const showStruken = document.getElementById('intrShowStruken').checked;
+  document.getElementById('intrList').innerHTML = '';
+  const container = document.getElementById('intrList');
+  const filtered = computeIntrFiltered(null, search, projektFilter, statusFilter, showHandled, showStruken);
+  if(filtered.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.style.display = 'block';
+    empty.textContent = interests.length === 0
+      ? 'Inga anmälningar ännu. Lägg till den första när du får ett mejl.'
+      : 'Inga anmälningar matchar filtren.';
+    container.appendChild(empty);
+    return;
+  }
+  filtered.forEach(entry => container.appendChild(renderIntrRow(entry)));
+}
+
+function renderIntressenterTab(){
+  const proj = projects.find(p => p.id === activeProjectId);
+  const lockedProject = proj ? proj.name : null;
+  const search = document.getElementById('intrSearchP').value;
+  const statusFilter = document.getElementById('intrStatusFilterP').value;
+  const showHandled = document.getElementById('intrShowHandledP').checked;
+  const showStruken = document.getElementById('intrShowStrukenP').checked;
+  renderIntrListInto('intrListP', lockedProject, search, statusFilter, showHandled, showStruken);
+}
+
+function openIntressenScreen(){
+  showScreen('intressen');
+  loadInterests().then(renderIntressenScreen);
+}
+
+// ---------- Status-ändringar ----------
+function setIntrStatus(entry, status){
+  if(status === 'Tackat nej'){ openIntrReasonModal(entry); return; }
+  if(status === 'Kontaktad'){ openIntrContactModal(entry); return; }
+  if(status === 'Visning bokad'){ openIntrViewingModal(entry); return; }
+  applyIntrStatus(entry, status, {});
+}
+async function applyIntrStatus(entry, status, extra){
+  Object.assign(entry, extra);
+  entry.status = status;
+  entry.hanterad = status !== 'Ny';
+  renderAllIntrViews();
+  await persistInterests();
+}
+
+function openIntrReasonModal(entry){
+  intrReasonEntryId = entry.id;
+  document.getElementById('intrReasonInput').value = entry.avslagsanledning || '';
+  document.getElementById('intrReasonError').style.display = 'none';
+  document.getElementById('intrReasonModalOverlay').classList.add('open');
+}
+function closeIntrReasonModal(){
+  document.getElementById('intrReasonModalOverlay').classList.remove('open');
+  intrReasonEntryId = null;
+  renderAllIntrViews();
+}
+document.getElementById('intrReasonCancelBtn').onclick = closeIntrReasonModal;
+document.getElementById('intrReasonModalOverlay').addEventListener('click', e => { if(e.target.id === 'intrReasonModalOverlay') closeIntrReasonModal(); });
+document.getElementById('intrReasonSaveBtn').onclick = async () => {
+  const val = document.getElementById('intrReasonInput').value.trim();
+  if(!val){ document.getElementById('intrReasonError').textContent = 'En anledning måste anges.'; document.getElementById('intrReasonError').style.display = 'block'; return; }
+  const entry = interests.find(e => e.id === intrReasonEntryId);
+  if(entry) await applyIntrStatus(entry, 'Tackat nej', { avslagsanledning: val });
+  document.getElementById('intrReasonModalOverlay').classList.remove('open');
+  intrReasonEntryId = null;
+};
+
+function openIntrViewingModal(entry){
+  intrViewingEntryId = entry.id;
+  document.getElementById('intrViewingDatum').value = entry.visningsdatum || '';
+  document.getElementById('intrViewingTid').value = entry.visningstid || '';
+  const sel = document.getElementById('intrViewingAnsvarig');
+  sel.innerHTML = '<option value="">Välj…</option>' + VISNINGSANSVARIGA.map(v => '<option value="' + v + '">' + v + '</option>').join('');
+  sel.value = entry.visningsansvarig || '';
+  document.getElementById('intrViewingError').style.display = 'none';
+  document.getElementById('intrViewingModalOverlay').classList.add('open');
+}
+function closeIntrViewingModal(){
+  document.getElementById('intrViewingModalOverlay').classList.remove('open');
+  intrViewingEntryId = null;
+  renderAllIntrViews();
+}
+document.getElementById('intrViewingCancelBtn').onclick = closeIntrViewingModal;
+document.getElementById('intrViewingModalOverlay').addEventListener('click', e => { if(e.target.id === 'intrViewingModalOverlay') closeIntrViewingModal(); });
+document.getElementById('intrViewingSaveBtn').onclick = async () => {
+  const datum = document.getElementById('intrViewingDatum').value;
+  const tid = document.getElementById('intrViewingTid').value.trim();
+  const ansvarig = document.getElementById('intrViewingAnsvarig').value;
+  if(!datum || !tid || !ansvarig){
+    document.getElementById('intrViewingError').textContent = 'Ange datum, tid och vem som möter upp kunden.';
+    document.getElementById('intrViewingError').style.display = 'block';
+    return;
+  }
+  const entry = interests.find(e => e.id === intrViewingEntryId);
+  if(entry) await applyIntrStatus(entry, 'Visning bokad', { visningsdatum: datum, visningstid: tid, visningsansvarig: ansvarig });
+  document.getElementById('intrViewingModalOverlay').classList.remove('open');
+  intrViewingEntryId = null;
+};
+
+function openIntrContactModal(entry){
+  intrContactEntryId = entry.id;
+  const wrap = document.getElementById('intrContactMetoder');
+  wrap.innerHTML = KONTAKTMETODER.map(m => '<label><input type="checkbox" value="' + m + '"> ' + m + '</label>').join('');
+  document.getElementById('intrContactDatum').value = new Date().toISOString().slice(0,10);
+  document.getElementById('intrContactKommentar').value = '';
+  document.getElementById('intrContactError').style.display = 'none';
+  document.getElementById('intrContactModalOverlay').classList.add('open');
+}
+function closeIntrContactModal(){
+  document.getElementById('intrContactModalOverlay').classList.remove('open');
+  intrContactEntryId = null;
+  renderAllIntrViews();
+}
+document.getElementById('intrContactCancelBtn').onclick = closeIntrContactModal;
+document.getElementById('intrContactModalOverlay').addEventListener('click', e => { if(e.target.id === 'intrContactModalOverlay') closeIntrContactModal(); });
+document.getElementById('intrContactSaveBtn').onclick = async () => {
+  const metoder = Array.from(document.querySelectorAll('#intrContactMetoder input:checked')).map(cb => cb.value);
+  const datum = document.getElementById('intrContactDatum').value;
+  const kommentar = document.getElementById('intrContactKommentar').value.trim();
+  if(!metoder.length || !datum){
+    document.getElementById('intrContactError').textContent = 'Välj minst en kontaktmetod och ange datum.';
+    document.getElementById('intrContactError').style.display = 'block';
+    return;
+  }
+  const entry = interests.find(e => e.id === intrContactEntryId);
+  if(entry){
+    const historik = [...(entry.kontakthistorik || []), { datum, metoder, kommentar }];
+    await applyIntrStatus(entry, 'Kontaktad', { kontakthistorik: historik });
+  }
+  document.getElementById('intrContactModalOverlay').classList.remove('open');
+  intrContactEntryId = null;
+};
+
+// ---------- Nytt/redigera formulär ----------
+function openIntrForm(entry, presetProjekt){
+  intrEditingId = entry ? entry.id : null;
+  const form = entry ? entry : emptyIntrForm();
+  document.getElementById('intrFormTitle').textContent = entry ? 'Redigera anmälan' : 'Ny anmälan';
+  document.getElementById('intrFormError').style.display = 'none';
+  document.getElementById('intrPasteText').value = '';
+  document.getElementById('intrFormNamn').value = form.namn || '';
+  refreshIntrFormProjectOptions(entry ? form.projekt : (presetProjekt || ''));
+  document.getElementById('intrFormEpost').value = form.epost || '';
+  document.getElementById('intrFormTelefon').value = form.telefon || '';
+  document.getElementById('intrFormObjekt').value = form.objekt || '';
+  document.getElementById('intrFormDatum').value = form.datum || new Date().toISOString().slice(0,10);
+  document.getElementById('intrFormAnteckningar').value = form.anteckningar || '';
+  document.getElementById('intrFormModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('intrFormNamn').focus(), 0);
+}
+function closeIntrForm(){
+  document.getElementById('intrFormModalOverlay').classList.remove('open');
+  intrEditingId = null;
+}
+document.getElementById('intrFormCancelBtn').onclick = closeIntrForm;
+document.getElementById('intrFormModalOverlay').addEventListener('click', e => { if(e.target.id === 'intrFormModalOverlay') closeIntrForm(); });
+document.getElementById('intrParseBtn').onclick = () => {
+  const parsed = parseIntrEmailText(document.getElementById('intrPasteText').value);
+  if(parsed.namn) document.getElementById('intrFormNamn').value = parsed.namn;
+  if(parsed.epost) document.getElementById('intrFormEpost').value = parsed.epost;
+  if(parsed.telefon) document.getElementById('intrFormTelefon').value = parsed.telefon;
+  if(parsed.projekt) document.getElementById('intrFormProjekt').value = parsed.projekt;
+  if(parsed.objekt) document.getElementById('intrFormObjekt').value = parsed.objekt;
+  if(parsed.anteckningar) document.getElementById('intrFormAnteckningar').value = parsed.anteckningar;
+};
+document.getElementById('intrFormSaveBtn').onclick = async () => {
+  const namn = document.getElementById('intrFormNamn').value.trim();
+  const projekt = document.getElementById('intrFormProjekt').value;
+  const errEl = document.getElementById('intrFormError');
+  if(!namn || !projekt){
+    errEl.textContent = 'Namn och projekt måste fyllas i.';
+    errEl.style.display = 'block';
+    return;
+  }
+  const formData = {
+    namn, projekt,
+    epost: document.getElementById('intrFormEpost').value.trim(),
+    telefon: document.getElementById('intrFormTelefon').value.trim(),
+    objekt: document.getElementById('intrFormObjekt').value.trim(),
+    datum: document.getElementById('intrFormDatum').value || new Date().toISOString().slice(0,10),
+    anteckningar: document.getElementById('intrFormAnteckningar').value.trim()
+  };
+  const dup = findIntrDuplicate(formData, intrEditingId);
+  if(dup){
+    errEl.textContent = dup.namn + ' är redan registrerad för ' + dup.projekt + (dup.objekt ? ' (' + dup.objekt + ')' : '') + ' — status: ' + dup.status + '. Redigera den befintliga posten istället.';
+    errEl.style.display = 'block';
+    return;
+  }
+  errEl.style.display = 'none';
+  if(intrEditingId){
+    const entry = interests.find(e => e.id === intrEditingId);
+    Object.assign(entry, formData);
+  } else {
+    interests = [{ ...emptyIntrForm(), ...formData, id: uid() }, ...interests];
+  }
+  closeIntrForm();
+  renderAllIntrViews();
+  await persistInterests();
+};
+
+// ---------- Ta bort ----------
+function openIntrDeleteModal(id){
+  intrDeleteTargetId = id;
+  document.getElementById('intrDeleteModalOverlay').classList.add('open');
+}
+document.getElementById('intrDeleteCancelBtn').onclick = () => {
+  document.getElementById('intrDeleteModalOverlay').classList.remove('open');
+  intrDeleteTargetId = null;
+};
+document.getElementById('intrDeleteModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'intrDeleteModalOverlay'){ document.getElementById('intrDeleteModalOverlay').classList.remove('open'); intrDeleteTargetId = null; }
+});
+document.getElementById('intrDeleteConfirmBtn').onclick = async () => {
+  interests = interests.filter(e => e.id !== intrDeleteTargetId);
+  document.getElementById('intrDeleteModalOverlay').classList.remove('open');
+  intrDeleteTargetId = null;
+  renderAllIntrViews();
+  await persistInterests();
+};
+
+// ---------- Backup / Återställ ----------
+document.getElementById('intrBackupBtn').onclick = () => {
+  document.getElementById('intrBackupText').value = JSON.stringify(interests, null, 2);
+  document.getElementById('intrBackupModalOverlay').classList.add('open');
+};
+document.getElementById('intrBackupCloseBtn').onclick = () => {
+  document.getElementById('intrBackupModalOverlay').classList.remove('open');
+};
+document.getElementById('intrRestoreBtn').onclick = () => {
+  document.getElementById('intrRestoreText').value = '';
+  document.getElementById('intrRestoreError').style.display = 'none';
+  document.getElementById('intrRestoreModalOverlay').classList.add('open');
+};
+document.getElementById('intrRestoreCancelBtn').onclick = () => {
+  document.getElementById('intrRestoreModalOverlay').classList.remove('open');
+};
+document.getElementById('intrRestoreConfirmBtn').onclick = async () => {
+  const errEl = document.getElementById('intrRestoreError');
+  let parsed;
+  try{
+    parsed = JSON.parse(document.getElementById('intrRestoreText').value);
+  }catch(e){
+    errEl.textContent = 'Kunde inte tolka texten som giltig backup-data (ogiltig JSON).';
+    errEl.style.display = 'block';
+    return;
+  }
+  if(!Array.isArray(parsed)){
+    errEl.textContent = 'Texten innehåller inte en lista med anmälningar.';
+    errEl.style.display = 'block';
+    return;
+  }
+  interests = parsed;
+  document.getElementById('intrRestoreModalOverlay').classList.remove('open');
+  renderAllIntrViews();
+  await persistInterestsNow();
+};
+
+// ---------- Kopplingar: navigering, verktygsfält ----------
+document.getElementById('backToHomeFromIntressenBtn').onclick = openHome;
+document.getElementById('intrNewBtn').onclick = () => openIntrForm(null, '');
+document.getElementById('intrManualSyncBtn').onclick = () => loadInterests().then(renderIntressenScreen);
+document.getElementById('intrManualSyncBtnP').onclick = () => loadInterests().then(renderIntressenterTab);
+document.getElementById('intrNewBtnP').onclick = () => {
+  const proj = projects.find(p => p.id === activeProjectId);
+  openIntrForm(null, proj ? proj.name : '');
+};
+
+['intrSearch','intrProjektFilter','intrStatusFilter','intrShowHandled','intrShowStruken'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderIntressenScreen);
+  document.getElementById(id).addEventListener('change', renderIntressenScreen);
+});
+['intrSearchP','intrStatusFilterP','intrShowHandledP','intrShowStrukenP'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderIntressenterTab);
+  document.getElementById(id).addEventListener('change', renderIntressenterTab);
+});
+
+(function initIntrStatusFilters(){
+  const optsHtml = '<option value="">Alla statusar</option>' + STATUS_KEYS.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+  document.getElementById('intrStatusFilter').innerHTML = optsHtml;
+  document.getElementById('intrStatusFilterP').innerHTML = optsHtml;
+})();
+
+// ---------- Material (rumsbeskrivning) ----------
+function materialKey(projectId){ return 'material:' + projectId; }
+function emptyMaterial(){ return { rooms: [] }; }
+function emptyMaterialProduct(){
+  return { id: uid(), name:'', supplier:'', priceExVat:'', priceIncVat:'', warranty:'', appliesTo: [], unitAmount:'', unitKind:'st', ordered:false, deliveries:{} };
+}
+
+// Räknar fram totalmängden att beställa: mängd per lägenhet x antal lägenheter av
+// rummets lägenhetstyp (varje rum hör till EN lägenhetstyp, satt via bofaktablad-
+// uppladdningen eller vald i rullistan när rummet skapades).
+function materialOrderQuantity(room, product){
+  const count = materialMatchingApartments(room).length;
+  const raw = parseFloat((product.unitAmount || '').toString().replace(',', '.'));
+  const perUnit = isNaN(raw) || raw <= 0 ? 1 : raw;
+  const total = perUnit * count;
+  const totalStr = Number.isInteger(total) ? String(total) : total.toFixed(2).replace(/0+$/,'').replace(/\.$/,'').replace('.', ',');
+  return { count, perUnit, total, totalStr, unit: product.unitKind || 'st' };
+}
+
+let materialData = emptyMaterial();
+
+async function loadMaterial(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(materialKey(projectId), true);
+    materialData = (res && res.value) ? JSON.parse(res.value) : emptyMaterial();
+  }catch(e){
+    materialData = emptyMaterial();
+  }
+  if(!Array.isArray(materialData.rooms)) materialData.rooms = [];
+  materialData.rooms.forEach(room => {
+    if(!Array.isArray(room.products)) room.products = [];
+    if(typeof room.floor !== 'string') room.floor = '';
+    if(typeof room.areaSqm !== 'string') room.areaSqm = '';
+    if(typeof room.unitType !== 'string') room.unitType = '';
+    room.products.forEach(p => {
+      if(!Array.isArray(p.appliesTo)) p.appliesTo = [];
+      if(!p.deliveries || typeof p.deliveries !== 'object') p.deliveries = {};
+      if(typeof p.unitAmount !== 'string') p.unitAmount = '';
+      if(p.unitKind !== 'kvm' && p.unitKind !== 'st') p.unitKind = 'st';
+    });
+  });
+  renderMaterial();
+}
+
+async function persistMaterial(){
+  try{
+    await withRetry(() => window.storage.set(materialKey(activeProjectId), JSON.stringify(materialData), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara material', e, () => persistMaterial());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+function materialSqmTypes(){
+  const set = new Set(apartments.map(a => (a.totalyta||'').toString().trim()).filter(Boolean));
+  return Array.from(set).sort((a,b) => parseFloat(a) - parseFloat(b));
+}
+
+function materialMatchingApartments(room){
+  if(!room.unitType) return [];
+  return apartments.filter(a => (a.totalyta||'').toString().trim() === room.unitType);
+}
+
+function formatWarranty(v){
+  const digits = (v || '').toString().replace(/[^0-9]/g, '');
+  return digits ? digits + ' år' : '—';
+}
+
+function formatMaterialPrice(v){
+  const n = parseFloat(v);
+  return isNaN(n) ? (v || '—') : formatNumberSv(String(Math.round(n)));
+}
+
+function refreshMaterialUnitTypeOptions(){
+  const sel = document.getElementById('materialUnitTypeFilter');
+  const current = sel.value;
+  const sqmTypes = materialSqmTypes();
+  sel.innerHTML = '<option value="">Välj lägenhetstyp (kvm)…</option>' +
+    sqmTypes.map(sqm => '<option value="' + escapeHtml(sqm) + '">' + escapeHtml(sqm) + ' kvm</option>').join('');
+  if(sqmTypes.includes(current)) sel.value = current;
+}
+
+function currentMaterialUnitType(){
+  return document.getElementById('materialUnitTypeFilter').value;
+}
+
+function renderMaterial(){
+  refreshMaterialUnitTypeOptions();
+  const unitType = currentMaterialUnitType();
+  const container = document.getElementById('materialRooms');
+  const empty = document.getElementById('materialEmptyState');
+  const noType = document.getElementById('materialNoTypeState');
+  container.innerHTML = '';
+
+  if(!unitType){
+    noType.style.display = 'block';
+    empty.style.display = 'none';
+    return;
+  }
+  noType.style.display = 'none';
+
+  const roomsForType = materialData.rooms.filter(r => r.unitType === unitType);
+  if(roomsForType.length === 0){
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  roomsForType.forEach(room => container.appendChild(renderMaterialRoom(room)));
+}
+
+document.getElementById('materialUnitTypeFilter').addEventListener('change', renderMaterial);
+
+function renderMaterialRoom(room){
+  const wrap = document.createElement('div');
+  wrap.className = 'material-room';
+
+  const sameTypeRooms = materialData.rooms.filter(r => r.unitType === room.unitType);
+  const idx = sameTypeRooms.findIndex(r => r.id === room.id);
+
+  const header = document.createElement('div');
+  header.className = 'material-room-header';
+  const h3 = document.createElement('h3');
+  h3.textContent = room.name;
+  header.appendChild(h3);
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'material-move-btn';
+  upBtn.textContent = '▲';
+  upBtn.title = 'Flytta upp';
+  upBtn.disabled = idx === 0;
+  upBtn.onclick = () => moveMaterialRoom(room, -1);
+  header.appendChild(upBtn);
+
+  const downBtn = document.createElement('button');
+  downBtn.className = 'material-move-btn';
+  downBtn.textContent = '▼';
+  downBtn.title = 'Flytta ner';
+  downBtn.disabled = idx === sameTypeRooms.length - 1;
+  downBtn.onclick = () => moveMaterialRoom(room, 1);
+  header.appendChild(downBtn);
+
+  const rmBtn = document.createElement('button');
+  rmBtn.textContent = '✕';
+  rmBtn.title = 'Ta bort rum';
+  rmBtn.onclick = async () => {
+    materialData.rooms = materialData.rooms.filter(r => r.id !== room.id);
+    renderMaterial();
+    await persistMaterial();
+  };
+  header.appendChild(rmBtn);
+  wrap.appendChild(header);
+
+  if(room.floor || room.areaSqm || room.unitType){
+    const sub = document.createElement('div');
+    sub.className = 'material-room-sub';
+    sub.textContent = [
+      room.unitType ? room.unitType + ' kvm' : '',
+      room.floor,
+      room.areaSqm ? room.areaSqm + ' m²' : ''
+    ].filter(Boolean).join(' · ');
+    wrap.appendChild(sub);
+  }
+
+  if(room.products.length > 0){
+    const scroll = document.createElement('div');
+    scroll.className = 'table-scroll';
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML =
+      '<tr>' +
+        '<th>Produkt</th><th>Leverantör</th><th class="center">Pris exkl</th><th class="center">Pris inkl</th>' +
+        '<th>Garanti</th><th class="center">Antal</th><th class="center">Beställd</th><th></th><th></th>' +
+      '</tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    room.products.forEach(product => tbody.appendChild(renderMaterialProductRow(room, product)));
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    wrap.appendChild(scroll);
+  }
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'material-add-product-btn';
+  addBtn.textContent = '+ Lägg till produkt';
+  addBtn.onclick = () => openMaterialProductModal(room, null);
+  wrap.appendChild(addBtn);
+
+  return wrap;
+}
+
+function makeMaterialOrderedCell(product){
+  const td = document.createElement('td');
+  td.className = 'center';
+  const box = document.createElement('div');
+  box.className = 'check' + (product.ordered ? ' checked' : '');
+  box.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  box.title = product.ordered ? 'Beställd' : 'Ej beställd';
+  box.onclick = async () => {
+    product.ordered = !product.ordered;
+    renderMaterial();
+    await persistMaterial();
+  };
+  td.appendChild(box);
+  return td;
+}
+
+function renderMaterialProductRow(room, product){
+  const tr = document.createElement('tr');
+
+  const nameTd = makeCell(product.name, '');
+  nameTd.style.cursor = 'pointer';
+  nameTd.className = 'material-editable-cell';
+  nameTd.title = 'Klicka för att redigera';
+  nameTd.onclick = () => openMaterialProductModal(room, product);
+  tr.appendChild(nameTd);
+
+  tr.appendChild(makeCell(product.supplier, ''));
+  tr.appendChild(makeCell(formatMaterialPrice(product.priceExVat), 'center'));
+  tr.appendChild(makeCell(formatMaterialPrice(product.priceIncVat), 'center'));
+  tr.appendChild(makeCell(formatWarranty(product.warranty), ''));
+
+  const qty = materialOrderQuantity(room, product);
+  const countTd = document.createElement('td');
+  countTd.className = 'center';
+  countTd.textContent = qty.totalStr + ' ' + qty.unit;
+  countTd.title = qty.perUnit + ' ' + qty.unit + ' × ' + qty.count + ' lägenheter';
+  tr.appendChild(countTd);
+
+  tr.appendChild(makeMaterialOrderedCell(product));
+
+  const deliveryTd = document.createElement('td');
+  const deliveryBtn = document.createElement('button');
+  deliveryBtn.className = 'material-delivery-btn';
+  deliveryBtn.textContent = 'Leveranser';
+  deliveryBtn.onclick = () => openMaterialDeliveryModal(room, product);
+  deliveryTd.appendChild(deliveryBtn);
+  tr.appendChild(deliveryTd);
+
+  const actionsTd = document.createElement('td');
+  actionsTd.className = 'row-actions';
+  const rmBtn = document.createElement('button');
+  rmBtn.className = 'remove-btn';
+  rmBtn.textContent = '✕';
+  rmBtn.title = 'Ta bort produkt';
+  rmBtn.onclick = async () => {
+    room.products = room.products.filter(p => p.id !== product.id);
+    renderMaterial();
+    await persistMaterial();
+  };
+  actionsTd.appendChild(rmBtn);
+  tr.appendChild(actionsTd);
+
+  return tr;
+}
+
+// ---------- Rum / Beställningslista ----------
+let materialView = 'rum';
+
+document.querySelectorAll('.material-view-tab').forEach(btn => {
+  btn.onclick = () => {
+    materialView = btn.dataset.materialView;
+    document.querySelectorAll('.material-view-tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.getElementById('materialRoomsView').style.display = materialView === 'rum' ? 'block' : 'none';
+    document.getElementById('materialOrderView').style.display = materialView === 'bestallningslista' ? 'block' : 'none';
+    document.getElementById('materialDeliveryScheduleView').style.display = materialView === 'leveransschema' ? 'block' : 'none';
+    if(materialView === 'bestallningslista') renderMaterialOrderList();
+    if(materialView === 'leveransschema') renderMaterialDeliverySchedule();
+  };
+});
+
+// ---------- Leveransschema (kalenderliknande vy, samma grid-stil som Tidsplan) ----------
+function isoWeekInfo(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if(target.getDay() !== 4){
+    target.setMonth(0, 1 + ((4 - target.getDay()) + 7) % 7);
+  }
+  const week = 1 + Math.round((firstThursday - target.valueOf()) / (7 * 24 * 3600 * 1000));
+  return { year: new Date(firstThursday).getFullYear(), week };
+}
+function isoWeekKey(dateStr){ const i = isoWeekInfo(dateStr); return i.year + '-' + String(i.week).padStart(2,'0'); }
+function dateToLocalIso(d){
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function addIsoWeeks(year, week, delta){
+  // Räkna om till en riktig kalenderdag (torsdagen i veckan) och stega därifrån - undviker manuellt årsskifte-krångel.
+  // OBS: bygg datumsträngen från lokala år/månad/dag (INTE toISOString, som konverterar till UTC
+  // och kan tappa en dag bakåt beroende på tidszon, vilket ger fel veckonummer nära veckoskiften).
+  const jan4 = new Date(year, 0, 4);
+  const dayNr = (jan4.getDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setDate(jan4.getDate() - dayNr);
+  const target = new Date(week1Monday);
+  target.setDate(week1Monday.getDate() + (week - 1 + delta) * 7);
+  return isoWeekInfo(dateToLocalIso(target));
+}
+
+function renderMaterialDeliverySchedule(){
+  const grid = document.getElementById('materialDeliveryScheduleGrid');
+  const wrap = grid.parentElement;
+  const empty = document.getElementById('materialDeliveryScheduleEmptyState');
+  grid.innerHTML = '';
+
+  // Samla alla (rum, produkt, lägenhet, datum) som har ett leveransdatum satt.
+  const entries = [];
+  materialData.rooms.forEach(room => {
+    room.products.forEach(product => {
+      Object.keys(product.deliveries || {}).forEach(aptId => {
+        const d = product.deliveries[aptId];
+        if(d && d.date) entries.push({ room, product, aptId, date: d.date });
+      });
+    });
+  });
+
+  if(entries.length === 0){
+    wrap.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  wrap.style.display = 'block';
+  empty.style.display = 'none';
+
+  // Bygg en sammanhängande veckoskala från första till sista leveransveckan.
+  let minInfo = isoWeekInfo(entries[0].date), maxInfo = minInfo;
+  entries.forEach(e => {
+    const info = isoWeekInfo(e.date);
+    if(info.year < minInfo.year || (info.year === minInfo.year && info.week < minInfo.week)) minInfo = info;
+    if(info.year > maxInfo.year || (info.year === maxInfo.year && info.week > maxInfo.week)) maxInfo = info;
+  });
+  const weekKeys = [];
+  const weekLabels = [];
+  let cursor = minInfo;
+  let guard = 0;
+  while(guard++ < 500){
+    weekKeys.push(cursor.year + '-' + String(cursor.week).padStart(2,'0'));
+    weekLabels.push('v.' + cursor.week + (cursor.year !== minInfo.year ? " '" + String(cursor.year).slice(2) : ''));
+    if(cursor.year === maxInfo.year && cursor.week === maxInfo.week) break;
+    cursor = addIsoWeeks(cursor.year, cursor.week, 1);
+  }
+  const weekIndexByKey = {};
+  weekKeys.forEach((k, i) => { weekIndexByKey[k] = i; });
+  const N = weekKeys.length;
+
+  // Gruppera per produkt (rad) - en produkt kan ha leveranser till flera lägenheter/veckor.
+  const rowsMap = new Map();
+  entries.forEach(e => {
+    const key = e.room.id + ':' + e.product.id;
+    if(!rowsMap.has(key)) rowsMap.set(key, { room: e.room, product: e.product, byWeek: {} });
+    const rowData = rowsMap.get(key);
+    const wIdx = weekIndexByKey[isoWeekKey(e.date)];
+    rowData.byWeek[wIdx] = (rowData.byWeek[wIdx] || 0) + 1;
+  });
+  const rows = Array.from(rowsMap.values());
+
+  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(34px, 1fr))';
+  let rowCounter = 1;
+  function place(el, col, rowNum, colSpan){
+    el.style.gridColumn = colSpan ? (col + ' / span ' + colSpan) : String(col);
+    el.style.gridRow = String(rowNum);
+    grid.appendChild(el);
+  }
+
+  const corner = document.createElement('div');
+  corner.className = 'tidsplan-corner';
+  place(corner, 1, rowCounter);
+  weekLabels.forEach((label, i) => {
+    const wh = document.createElement('div');
+    wh.className = 'tidsplan-week-header';
+    wh.textContent = label;
+    place(wh, i + 2, rowCounter);
+  });
+  rowCounter++;
+
+  rows.forEach(rowData => {
+    const label = document.createElement('div');
+    label.className = 'tidsplan-row-label';
+    label.innerHTML =
+      '<span class="task-name">' + escapeHtml(rowData.product.name) + '</span>' +
+      '<span class="task-ansvarig">' + escapeHtml(rowData.room.name) + '</span>';
+    label.onclick = () => openMaterialDeliveryModal(rowData.room, rowData.product);
+    place(label, 1, rowCounter);
+
+    Object.keys(rowData.byWeek).forEach(wIdxStr => {
+      const wIdx = parseInt(wIdxStr, 10);
+      const marker = document.createElement('div');
+      marker.className = 'delivery-marker';
+      const count = rowData.byWeek[wIdx];
+      marker.textContent = count + ' st';
+      marker.title = 'Klicka för att se/redigera leveranser';
+      marker.onclick = () => openMaterialDeliveryModal(rowData.room, rowData.product);
+      place(marker, wIdx + 2, rowCounter);
+    });
+    rowCounter++;
+  });
+}
+
+function renderMaterialOrderList(){
+  const body = document.getElementById('materialOrderBody');
+  const empty = document.getElementById('materialOrderEmptyState');
+  body.innerHTML = '';
+
+  const allRows = [];
+  materialData.rooms.forEach(room => {
+    room.products.forEach(product => allRows.push({ room, product }));
+  });
+  // Specas separat per lägenhetstyp (varje rum hör till en typ), och inom varje typ
+  // grupperas hela beställningen per leverantör så alla rader för t.ex. Smeg hamnar i följd.
+  allRows.sort((a, b) =>
+    (a.room.unitType || '').localeCompare(b.room.unitType || '', 'sv', {numeric:true}) ||
+    (a.product.supplier || '').localeCompare(b.product.supplier || '', 'sv') ||
+    a.product.name.localeCompare(b.product.name, 'sv')
+  );
+
+  document.querySelector('#materialOrderView .table-scroll').style.display = allRows.length ? 'block' : 'none';
+  empty.style.display = allRows.length ? 'none' : 'block';
+  document.getElementById('materialOrderTotals').style.display = allRows.length ? 'flex' : 'none';
+  if(allRows.length === 0) return;
+
+  let sumEx = 0, sumInc = 0;
+  let lastUnitType = null;
+  allRows.forEach(({ room, product }) => {
+    if(room.unitType !== lastUnitType){
+      lastUnitType = room.unitType;
+      const headerTr = document.createElement('tr');
+      const headerTd = document.createElement('td');
+      headerTd.colSpan = 12;
+      headerTd.className = 'material-order-section';
+      headerTd.textContent = 'Lägenhetstyp: ' + (lastUnitType || '—') + ' kvm';
+      headerTr.appendChild(headerTd);
+      body.appendChild(headerTr);
+    }
+
+    const qty = materialOrderQuantity(room, product);
+    const priceEx = parseFloat(product.priceExVat) || 0;
+    const priceInc = parseFloat(product.priceIncVat) || 0;
+    const totalEx = priceEx * qty.total;
+    const totalInc = priceInc * qty.total;
+    sumEx += totalEx;
+    sumInc += totalInc;
+
+    const tr = document.createElement('tr');
+    const nameTd = makeCell(product.name, '');
+    nameTd.style.cursor = 'pointer';
+    nameTd.className = 'material-editable-cell';
+    nameTd.title = 'Klicka för att redigera';
+    nameTd.onclick = () => openMaterialProductModal(room, product);
+    tr.appendChild(nameTd);
+    tr.appendChild(makeCell(room.name, ''));
+    tr.appendChild(makeCell(product.supplier, ''));
+    tr.appendChild(makeCell(room.unitType ? room.unitType + ' kvm' : '—', 'center'));
+    tr.appendChild(makeCell(qty.perUnit + ' ' + qty.unit, 'center'));
+    tr.appendChild(makeCell(String(qty.count), 'center'));
+    tr.appendChild(makeCell(qty.totalStr + ' ' + qty.unit, 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(product.priceExVat), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(product.priceIncVat), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(String(Math.round(totalEx))), 'center'));
+    tr.appendChild(makeCell(formatMaterialPrice(String(Math.round(totalInc))), 'center'));
+    tr.appendChild(makeMaterialOrderedCell(product));
+    body.appendChild(tr);
+  });
+
+  document.getElementById('materialOrderTotals').innerHTML =
+    '<span>Summa exkl moms: <strong>' + formatMaterialPrice(String(Math.round(sumEx))) + ' kr</strong></span>' +
+    '<span>Summa inkl moms: <strong>' + formatMaterialPrice(String(Math.round(sumInc))) + ' kr</strong></span>';
+}
+
+document.getElementById('addRoomBtn').onclick = async () => {
+  const unitType = currentMaterialUnitType();
+  if(!unitType){
+    showToast('Välj vilken lägenhetstyp (kvm) rummet gäller för först');
+    return;
+  }
+  const input = document.getElementById('newRoomInput');
+  const name = input.value.trim();
+  if(!name) return;
+  materialData.rooms.push({ id: uid(), name, floor: '', areaSqm: '', unitType, products: [] });
+  input.value = '';
+  renderMaterial();
+  await persistMaterial();
+};
+document.getElementById('newRoomInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addRoomBtn').click();
+});
+
+async function moveMaterialRoom(room, direction){
+  // Byt plats med grannen inom SAMMA lägenhetstyp (var de än ligger i den underliggande listan) -
+  // rum av andra typer visas aldrig tillsammans, så deras inbördes ordning spelar ingen roll.
+  const sameTypeRooms = materialData.rooms.filter(r => r.unitType === room.unitType);
+  const idx = sameTypeRooms.findIndex(r => r.id === room.id);
+  const swapIdx = idx + direction;
+  if(idx === -1 || swapIdx < 0 || swapIdx >= sameTypeRooms.length) return;
+  const other = sameTypeRooms[swapIdx];
+  const realIdxA = materialData.rooms.findIndex(r => r.id === room.id);
+  const realIdxB = materialData.rooms.findIndex(r => r.id === other.id);
+  const tmp = materialData.rooms[realIdxA];
+  materialData.rooms[realIdxA] = materialData.rooms[realIdxB];
+  materialData.rooms[realIdxB] = tmp;
+  renderMaterial();
+  await persistMaterial();
+}
+
+function setBofaktabladStatus(msg, kind){
+  const el = document.getElementById('bofaktabladUploadStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('bofaktabladUploadBtn').onclick = () => {
+  if(!document.getElementById('materialUnitTypeFilter').value){
+    setBofaktabladStatus('Välj vilken lägenhetstyp (kvm) bofaktabladet gäller för först.', 'err');
+    return;
+  }
+  document.getElementById('bofaktabladFileInput').click();
+};
+
+document.getElementById('bofaktabladFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!document.getElementById('materialUnitTypeFilter').value){
+    setBofaktabladStatus('Välj vilken lägenhetstyp (kvm) bofaktabladet gäller för först.', 'err');
+    e.target.value = '';
+    return;
+  }
+  if(file.size > CONTRACT_MAX_BYTES){
+    setBofaktabladStatus('Filen är för stor (max 8 MB).', 'err');
+    return;
+  }
+  const btn = document.getElementById('bofaktabladUploadBtn');
+  btn.disabled = true;
+  setBofaktabladStatus('Läser bofaktabladet…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    if(!window.DB || !window.DB.hasSupabase) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+    const { data, error } = await sb.functions.invoke('bright-processor', {
+      body: { pdfBase64, filename: file.name }
+    });
+    if(error) throw error;
+
+    const rooms = (data && Array.isArray(data.rooms)) ? data.rooms : [];
+    if(rooms.length === 0){
+      setBofaktabladStatus('Hittade inga rum i dokumentet.', 'err');
+      return;
+    }
+    const unitType = document.getElementById('materialUnitTypeFilter').value;
+    rooms.forEach(r => {
+      materialData.rooms.push({
+        id: uid(),
+        name: r.name || 'Okänt rum',
+        floor: r.floor || '',
+        areaSqm: r.areaSqm || '',
+        unitType: unitType,
+        products: []
+      });
+    });
+    renderMaterial();
+    await persistMaterial();
+    setBofaktabladStatus('Klart - la till ' + rooms.length + ' rum. Granska ordningen nedan.', 'ok');
+  }catch(err){
+    setBofaktabladStatus('Kunde inte läsa bofaktabladet: ' + err.message, 'err');
+  }finally{
+    btn.disabled = false;
+    document.getElementById('bofaktabladFileInput').value = '';
+  }
+});
+
+// ---------- Lägg till/redigera produkt ----------
+let currentMaterialRoomId = null;
+let currentMaterialProductId = null;
+
+function openMaterialProductModal(room, product){
+  currentMaterialRoomId = room.id;
+  currentMaterialProductId = product ? product.id : null;
+  document.getElementById('materialProductModalTitle').textContent = product ? 'Redigera produkt' : 'Lägg till produkt';
+  document.getElementById('materialProductModalSub').textContent = 'Rum: ' + room.name;
+  document.getElementById('materialProductName').value = product ? product.name : '';
+  const supplierSelect = document.getElementById('materialProductSupplierSelect');
+  const supplierCustom = document.getElementById('materialProductSupplierCustom');
+  const knownSuppliers = Array.from(supplierSelect.options).map(o => o.value).filter(v => v !== '__other__');
+  const currentSupplier = product ? (product.supplier || '') : '';
+  if(currentSupplier && !knownSuppliers.includes(currentSupplier)){
+    supplierSelect.value = '__other__';
+    supplierCustom.value = currentSupplier;
+    supplierCustom.style.display = 'block';
+  } else {
+    supplierSelect.value = currentSupplier || 'Smeg';
+    supplierCustom.value = '';
+    supplierCustom.style.display = 'none';
+  }
+  document.getElementById('materialProductPriceEx').value = product ? product.priceExVat : '';
+  document.getElementById('materialProductPriceInc').value = product ? product.priceIncVat : '';
+  document.getElementById('materialProductWarranty').value = product ? product.warranty : '';
+  document.getElementById('materialProductUnitAmount').value = product ? product.unitAmount : '';
+  document.getElementById('materialProductUnitKind').value = product ? product.unitKind : 'st';
+
+  document.getElementById('materialProductModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('materialProductName').focus(), 0);
+}
+function closeMaterialProductModal(){
+  document.getElementById('materialProductModalOverlay').classList.remove('open');
+  currentMaterialRoomId = null;
+  currentMaterialProductId = null;
+}
+document.getElementById('materialProductSupplierSelect').addEventListener('change', (e) => {
+  document.getElementById('materialProductSupplierCustom').style.display = e.target.value === '__other__' ? 'block' : 'none';
+});
+document.getElementById('materialProductCancelBtn').onclick = closeMaterialProductModal;
+document.getElementById('materialProductModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'materialProductModalOverlay') closeMaterialProductModal();
+});
+document.getElementById('materialProductSaveBtn').onclick = async () => {
+  const room = materialData.rooms.find(r => r.id === currentMaterialRoomId);
+  if(!room){ closeMaterialProductModal(); return; }
+  const name = document.getElementById('materialProductName').value.trim();
+  if(!name){ showToast('Ange ett produktnamn'); return; }
+
+  let product = room.products.find(p => p.id === currentMaterialProductId);
+  if(!product){
+    product = emptyMaterialProduct();
+    room.products.push(product);
+  }
+  product.name = name;
+  const supplierSelected = document.getElementById('materialProductSupplierSelect').value;
+  product.supplier = supplierSelected === '__other__'
+    ? document.getElementById('materialProductSupplierCustom').value.trim()
+    : supplierSelected;
+  product.priceExVat = document.getElementById('materialProductPriceEx').value.replace(/[^0-9]/g, '').trim();
+  product.priceIncVat = document.getElementById('materialProductPriceInc').value.replace(/[^0-9]/g, '').trim();
+  product.warranty = document.getElementById('materialProductWarranty').value.replace(/[^0-9]/g, '').trim();
+  product.unitAmount = document.getElementById('materialProductUnitAmount').value.replace(/[^0-9,\.]/g, '').trim();
+  product.unitKind = document.getElementById('materialProductUnitKind').value === 'kvm' ? 'kvm' : 'st';
+
+  closeMaterialProductModal();
+  renderMaterial();
+  await persistMaterial();
+};
+
+// ---------- Leveranstider per lägenhet ----------
+function openMaterialDeliveryModal(room, product){
+  document.getElementById('materialDeliveryModalSub').textContent = 'Produkt: ' + product.name + ' (' + room.name + ')';
+  const list = document.getElementById('materialDeliveryList');
+  const matching = materialMatchingApartments(room);
+  list.innerHTML = '';
+  if(matching.length === 0){
+    list.innerHTML = '<div style="color:var(--ink-soft); font-size:12.5px;">Inga lägenheter av den här lägenhetstypen (' + escapeHtml(room.unitType || '—') + ' kvm) hittades i projektet.</div>';
+  } else {
+    matching.forEach(apt => {
+      const row = document.createElement('div');
+      row.className = 'material-delivery-row';
+      const label = document.createElement('span');
+      label.textContent = 'LGH ' + (apt.lgh || '—') + (apt.address ? ' · ' + apt.address : '');
+      row.appendChild(label);
+      const existing = product.deliveries[apt.id];
+      const input = document.createElement('input');
+      input.type = 'date';
+      input.className = 'date-input' + (existing && existing.date ? ' filled' : '');
+      input.value = (existing && existing.date) || '';
+      input.onchange = async () => {
+        if(!myName){ showToast('Ange ditt namn först'); input.value = (existing && existing.date) || ''; return; }
+        product.deliveries[apt.id] = { date: input.value, by: input.value ? myName : '', at: input.value ? new Date().toISOString() : '' };
+        input.className = 'date-input' + (input.value ? ' filled' : '');
+        await persistMaterial();
+      };
+      row.appendChild(input);
+      list.appendChild(row);
+    });
+  }
+  document.getElementById('materialDeliveryModalOverlay').classList.add('open');
+}
+function closeMaterialDeliveryModal(){
+  document.getElementById('materialDeliveryModalOverlay').classList.remove('open');
+  renderMaterial();
+}
+document.getElementById('materialDeliveryCloseBtn').onclick = closeMaterialDeliveryModal;
+document.getElementById('materialDeliveryModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'materialDeliveryModalOverlay') closeMaterialDeliveryModal();
+});
+
+// ---------- Skapa rumsbeskrivning (PDF) ----------
+document.getElementById('createRumsbeskrivningBtn').onclick = () => {
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(16);
+  doc.text('Rumsbeskrivning' + (proj ? ' – ' + proj.name : ''), 14, 18);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Skapad ' + new Date().toLocaleDateString('sv-SE'), 14, 24);
+
+  let y = 32;
+  const roomsWithProducts = materialData.rooms.filter(r => r.products.length > 0);
+  roomsWithProducts.forEach(room => {
+    doc.setFontSize(13);
+    doc.setTextColor(20);
+    doc.text(room.name + (room.unitType ? ' (' + room.unitType + ' kvm)' : ''), 14, y);
+    const rows = room.products.map(p => [
+      p.name, p.supplier || '—',
+      p.priceExVat ? formatMaterialPrice(p.priceExVat) + ' kr' : '—',
+      p.priceIncVat ? formatMaterialPrice(p.priceIncVat) + ' kr' : '—',
+      formatWarranty(p.warranty),
+      (() => { const q = materialOrderQuantity(room, p); return q.totalStr + ' ' + q.unit; })()
+    ]);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Produkt', 'Leverantör', 'Pris exkl moms', 'Pris inkl moms', 'Garanti', 'Antal']],
+      body: rows,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 12;
+  });
+
+  if(roomsWithProducts.length === 0){
+    doc.setFontSize(11);
+    doc.setTextColor(120);
+    doc.text('Inga produkter tillagda än.', 14, y);
+  }
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Rumsbeskrivning' + fileNamePart + '.pdf');
+};
+
+// ---------- Tidsplan (Gantt-schema, dagnivå) ----------
+function tidsplanKey(projectId){ return 'tidsplan:' + projectId; }
+const TIDSPLAN_WEEKDAY_LABELS = ['Mån', 'Tis', 'Ons', 'Tors', 'Fre', 'Lör', 'Sön'];
+function mondayOfDate(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayNr = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dayNr);
+  return dateToLocalIso(d);
+}
+function addDaysIso(dateStr, days){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return dateToLocalIso(d);
+}
+function isoWeekMonday(year, week){
+  const jan4 = new Date(year, 0, 4);
+  const dayNr = (jan4.getDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setDate(jan4.getDate() - dayNr);
+  const target = new Date(week1Monday);
+  target.setDate(week1Monday.getDate() + (week - 1) * 7);
+  return dateToLocalIso(target);
+}
+function emptyTidsplan(){
+  return {
+    weeks: [], // ISO-datum (måndagen) för varje vecka som visas
+    houses: [],
+    legend: [
+      { task: 'VVS – grovinstallation', ansvarig: 'VVS', color: '#5B9BD5' },
+      { task: 'Ventilation – kanal/installation', ansvarig: 'Vent', color: '#70AD47' },
+      { task: 'El – rör, dosor & kablage', ansvarig: 'El', color: '#FFC000' },
+      { task: 'Installationskontroll / komplettering', ansvarig: 'Samordning', color: '#A5A5A5' },
+      { task: 'Snickare – komplettering/regling', ansvarig: 'Snickare', color: '#C55A11' },
+      { task: 'Gipsning väggar', ansvarig: 'Snickare', color: '#ED7D31' },
+      { task: 'Gipsning tak / inklädnader', ansvarig: 'Snickare', color: '#F4B183' },
+      { task: 'Kontroll före nästa skede', ansvarig: 'PL', color: '#8064A2' }
+    ],
+    avstamningar: [] // { id, baseDayIndex, approved, rowOverrides: { [rowId]: dayIndex } }
+  };
+}
+function emptyTidsplanRow(){
+  return { id: uid(), task: '', ansvarig: '', color: '#5B9BD5', startIndex: null, endIndex: null, comment: '' };
+}
+
+let tidsplanData = emptyTidsplan();
+let tidsplanTaskRowRefs = [];
+
+async function loadTidsplan(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(tidsplanKey(projectId), true);
+    tidsplanData = (res && res.value) ? JSON.parse(res.value) : emptyTidsplan();
+  }catch(e){
+    tidsplanData = emptyTidsplan();
+  }
+  if(!Array.isArray(tidsplanData.weeks)) tidsplanData.weeks = [];
+  if(!Array.isArray(tidsplanData.houses)) tidsplanData.houses = [];
+  if(!Array.isArray(tidsplanData.legend)) tidsplanData.legend = emptyTidsplan().legend;
+
+  // Migrering: äldre data hade veckor som fri text ("v.3") och stapelindex på
+  // veckonivå. Nu är varje vecka ett riktigt datum (måndagen) och index räknas
+  // per dag, så gamla veckor/staplar "expanderas" till att fylla hela veckan -
+  // användaren kan sedan själv justera datumen till vad de faktiskt var.
+  const looksLikeDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  let weeksMigrated = false;
+  if(tidsplanData.weeks.length && !tidsplanData.weeks.every(looksLikeDate)){
+    const startMonday = mondayOfDate(dateToLocalIso(new Date()));
+    tidsplanData.weeks = tidsplanData.weeks.map((_, i) => addDaysIso(startMonday, i * 7));
+    weeksMigrated = true;
+  }
+
+  if(!Array.isArray(tidsplanData.avstamningar)) tidsplanData.avstamningar = [];
+  // Migrering: äldre data hade en enda global avstämningslinje (vecko- eller
+  // dagbaserad), inte flera avstämningar med egna radavvikelser.
+  if(tidsplanData.avstamningslinje){
+    const oldDayIndex = tidsplanData.avstamningslinje.dayIndex;
+    const oldWeekIndex = tidsplanData.avstamningslinje.weekIndex;
+    const migratedDayIndex = (typeof oldDayIndex === 'number') ? oldDayIndex : (typeof oldWeekIndex === 'number' ? oldWeekIndex * 7 : null);
+    if(migratedDayIndex !== null){
+      tidsplanData.avstamningar.push({ id: uid(), baseDayIndex: migratedDayIndex, approved: false, rowOverrides: {} });
+    }
+    delete tidsplanData.avstamningslinje;
+  }
+  tidsplanData.avstamningar.forEach(cp => {
+    if(typeof cp.baseDayIndex !== 'number') cp.baseDayIndex = 0;
+    if(typeof cp.approved !== 'boolean') cp.approved = false;
+    if(!cp.rowOverrides || typeof cp.rowOverrides !== 'object') cp.rowOverrides = {};
+  });
+
+  tidsplanData.houses.forEach(h => {
+    if(!Array.isArray(h.rows)) h.rows = [];
+    h.rows.forEach(r => {
+      if(typeof r.task !== 'string') r.task = '';
+      if(typeof r.ansvarig !== 'string') r.ansvarig = '';
+      if(typeof r.color !== 'string') r.color = '#5B9BD5';
+      if(typeof r.comment !== 'string') r.comment = '';
+      if(typeof r.startIndex !== 'number') r.startIndex = null;
+      if(typeof r.endIndex !== 'number') r.endIndex = null;
+      if(weeksMigrated && r.startIndex !== null && r.endIndex !== null){
+        r.startIndex = r.startIndex * 7;
+        r.endIndex = r.endIndex * 7 + 6;
+      }
+    });
+  });
+  renderTidsplan();
+}
+
+async function persistTidsplan(){
+  try{
+    await withRetry(() => window.storage.set(tidsplanKey(activeProjectId), JSON.stringify(tidsplanData), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara tidsplan', e, () => persistTidsplan());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+// ---------- Legend ----------
+function renderTidsplanLegend(){
+  const list = document.getElementById('tidsplanLegendList');
+  list.innerHTML = '';
+  tidsplanData.legend.forEach((entry, idx) => {
+    const row = document.createElement('div');
+    row.className = 'tidsplan-legend-row';
+    const swatch = document.createElement('div');
+    swatch.className = 'tidsplan-legend-swatch';
+    swatch.style.background = entry.color;
+    row.appendChild(swatch);
+    const task = document.createElement('span');
+    task.className = 'legend-task';
+    task.textContent = entry.task;
+    row.appendChild(task);
+    const ansvarig = document.createElement('span');
+    ansvarig.className = 'legend-ansvarig';
+    ansvarig.textContent = entry.ansvarig;
+    row.appendChild(ansvarig);
+    const rmBtn = document.createElement('button');
+    rmBtn.textContent = '✕';
+    rmBtn.title = 'Ta bort från legend';
+    rmBtn.onclick = async () => {
+      tidsplanData.legend.splice(idx, 1);
+      renderTidsplanLegend();
+      await persistTidsplan();
+    };
+    row.appendChild(rmBtn);
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('addLegendBtn').onclick = async () => {
+  const task = document.getElementById('legendTaskInput').value.trim();
+  if(!task) return;
+  const ansvarig = document.getElementById('legendAnsvarigInput').value.trim();
+  const color = document.getElementById('legendColorInput').value;
+  tidsplanData.legend.push({ task, ansvarig, color });
+  document.getElementById('legendTaskInput').value = '';
+  document.getElementById('legendAnsvarigInput').value = '';
+  renderTidsplanLegend();
+  await persistTidsplan();
+};
+
+// ---------- Hus / veckor ----------
+document.getElementById('addHouseBtn').onclick = async () => {
+  const input = document.getElementById('newHouseInput');
+  const name = input.value.trim();
+  if(!name) return;
+  tidsplanData.houses.push({ id: uid(), name, rows: [] });
+  input.value = '';
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('newHouseInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('addHouseBtn').click();
+});
+
+document.getElementById('addWeekBtn').onclick = async () => {
+  const last = tidsplanData.weeks[tidsplanData.weeks.length - 1];
+  const nextMonday = last ? addDaysIso(last, 7) : mondayOfDate(dateToLocalIso(new Date()));
+  tidsplanData.weeks.push(nextMonday);
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+async function removeTidsplanHouse(house){
+  tidsplanData.houses = tidsplanData.houses.filter(h => h.id !== house.id);
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+async function moveTidsplanHouse(house, direction){
+  const idx = tidsplanData.houses.findIndex(h => h.id === house.id);
+  const swapIdx = idx + direction;
+  if(idx === -1 || swapIdx < 0 || swapIdx >= tidsplanData.houses.length) return;
+  const tmp = tidsplanData.houses[idx];
+  tidsplanData.houses[idx] = tidsplanData.houses[swapIdx];
+  tidsplanData.houses[swapIdx] = tmp;
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+async function addTidsplanRow(house){
+  house.rows.push(emptyTidsplanRow());
+  renderTidsplan();
+  await persistTidsplan();
+}
+
+// ---------- Avstämningslinje (dras fritt bland raderna, precis som staplarna) ----------
+document.getElementById('tidsplanStamBtn').onclick = async () => {
+  if(!tidsplanData.weeks.length){ showToast('Lägg till minst en vecka först'); return; }
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(activeStam && !activeStam.approved){
+    showToast('Godkänn eller ta bort den aktiva avstämningen innan du lägger en ny.');
+    return;
+  }
+  const firstMonday = tidsplanData.weeks[0];
+  const todayIso = dateToLocalIso(new Date());
+  const diffDays = Math.round((new Date(todayIso + 'T00:00:00') - new Date(firstMonday + 'T00:00:00')) / 86400000);
+  const N = tidsplanData.weeks.length * 7;
+  const baseDayIndex = Math.max(0, Math.min(N - 1, diffDays));
+  tidsplanData.avstamningar.push({ id: uid(), baseDayIndex, approved: false, rowOverrides: {} });
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('tidsplanApproveStamBtn').onclick = async () => {
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(!activeStam || activeStam.approved) return;
+  activeStam.approved = true;
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('tidsplanRemoveStamBtn').onclick = async () => {
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  if(!activeStam || activeStam.approved) return;
+  tidsplanData.avstamningar.pop();
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+// ---------- Rad-redigering (modal) ----------
+let tidsplanEditingHouseId = null;
+let tidsplanEditingRowId = null;
+
+function openTidsplanRowModal(house, row){
+  tidsplanEditingHouseId = house.id;
+  tidsplanEditingRowId = row.id;
+  document.getElementById('tidsplanRowModalTitle').textContent = row.task ? 'Redigera uppgift' : 'Ny uppgift';
+  document.getElementById('tidsplanRowTask').value = row.task || '';
+  document.getElementById('tidsplanRowAnsvarig').value = row.ansvarig || '';
+  document.getElementById('tidsplanRowColor').value = row.color || '#5B9BD5';
+  document.getElementById('tidsplanRowComment').value = row.comment || '';
+  document.getElementById('tidsplanRowModalOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('tidsplanRowTask').focus(), 0);
+}
+function closeTidsplanRowModal(){
+  document.getElementById('tidsplanRowModalOverlay').classList.remove('open');
+  tidsplanEditingHouseId = null;
+  tidsplanEditingRowId = null;
+}
+document.getElementById('tidsplanRowCancelBtn').onclick = closeTidsplanRowModal;
+document.getElementById('tidsplanRowModalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'tidsplanRowModalOverlay') closeTidsplanRowModal();
+});
+document.getElementById('tidsplanRowTask').addEventListener('input', (e) => {
+  const match = tidsplanData.legend.find(l => l.task.toLowerCase() === e.target.value.trim().toLowerCase());
+  if(match){
+    document.getElementById('tidsplanRowAnsvarig').value = match.ansvarig;
+    document.getElementById('tidsplanRowColor').value = match.color;
+  }
+});
+document.getElementById('tidsplanRowSaveBtn').onclick = async () => {
+  const house = tidsplanData.houses.find(h => h.id === tidsplanEditingHouseId);
+  const row = house && house.rows.find(r => r.id === tidsplanEditingRowId);
+  if(!row){ closeTidsplanRowModal(); return; }
+  row.task = document.getElementById('tidsplanRowTask').value.trim();
+  row.ansvarig = document.getElementById('tidsplanRowAnsvarig').value.trim();
+  row.color = document.getElementById('tidsplanRowColor').value;
+  row.comment = document.getElementById('tidsplanRowComment').value.trim();
+  closeTidsplanRowModal();
+  renderTidsplan();
+  await persistTidsplan();
+};
+document.getElementById('tidsplanRowDeleteBtn').onclick = async () => {
+  const house = tidsplanData.houses.find(h => h.id === tidsplanEditingHouseId);
+  if(house) house.rows = house.rows.filter(r => r.id !== tidsplanEditingRowId);
+  closeTidsplanRowModal();
+  renderTidsplan();
+  await persistTidsplan();
+};
+
+// ---------- Rendering ----------
+function renderTidsplan(){
+  renderTidsplanLegend();
+  const grid = document.getElementById('tidsplanGrid');
+  const empty = document.getElementById('tidsplanEmptyState');
+  const wrap = document.getElementById('tidsplanGridWrap');
+  grid.innerHTML = '';
+
+  if(tidsplanData.houses.length === 0){
+    wrap.style.display = 'none';
+    empty.style.display = 'block';
+    document.getElementById('tidsplanApproveStamBtn').style.display = 'none';
+    document.getElementById('tidsplanRemoveStamBtn').style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  empty.style.display = 'none';
+  tidsplanTaskRowRefs = [];
+
+  const N = tidsplanData.weeks.length * 7;
+  grid.style.gridTemplateColumns = '210px repeat(' + Math.max(N, 1) + ', minmax(28px, 1fr))';
+
+  let rowCounter = 1;
+
+  function place(el, col, rowNum, colSpan){
+    el.style.gridColumn = colSpan ? (col + ' / span ' + colSpan) : String(col);
+    el.style.gridRow = String(rowNum);
+    grid.appendChild(el);
+  }
+
+  // Header-rad 1+2: hörncell (spänner båda) + vecka (v.NN + datum) + veckodag/datum per dag
+  const corner = document.createElement('div');
+  corner.className = 'tidsplan-corner';
+  place(corner, 1, rowCounter);
+  corner.style.gridRow = '1 / 3';
+
+  tidsplanData.weeks.forEach((monday, wi) => {
+    const info = isoWeekInfo(monday);
+    const wh = document.createElement('div');
+    wh.className = 'tidsplan-week-header';
+    const label = document.createElement('span');
+    label.textContent = 'v.' + info.week;
+    wh.appendChild(label);
+    const dateInput = document.createElement('input');
+    dateInput.type = 'date';
+    dateInput.className = 'tidsplan-week-date-input';
+    dateInput.value = monday;
+    dateInput.title = 'Måndagen den här veckan börjar på';
+    dateInput.onchange = async () => {
+      tidsplanData.weeks[wi] = mondayOfDate(dateInput.value || monday);
+      renderTidsplan();
+      await persistTidsplan();
+    };
+    wh.appendChild(dateInput);
+    place(wh, wi * 7 + 2, 1, 7);
+
+    for(let d = 0; d < 7; d++){
+      const dateStr = addDaysIso(monday, d);
+      const dh = document.createElement('div');
+      dh.className = 'tidsplan-day-header';
+      dh.innerHTML =
+        '<span class="tidsplan-day-name">' + TIDSPLAN_WEEKDAY_LABELS[d] + '</span>' +
+        '<span class="tidsplan-day-num">' + parseInt(dateStr.slice(8, 10), 10) + '</span>';
+      place(dh, wi * 7 + d + 2, 2);
+    }
+  });
+  rowCounter = 3;
+
+  tidsplanData.houses.forEach((house, houseIdx) => {
+    const houseRow = document.createElement('div');
+    houseRow.className = 'tidsplan-house-row';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'tidsplan-house-name-input';
+    nameInput.value = house.name;
+    nameInput.onchange = async () => {
+      house.name = nameInput.value.trim() || house.name;
+      renderTidsplan();
+      await persistTidsplan();
+    };
+    houseRow.appendChild(nameInput);
+    const upBtn = document.createElement('button');
+    upBtn.textContent = '▲';
+    upBtn.title = 'Flytta upp';
+    upBtn.disabled = houseIdx === 0;
+    upBtn.onclick = () => moveTidsplanHouse(house, -1);
+    houseRow.appendChild(upBtn);
+    const downBtn = document.createElement('button');
+    downBtn.textContent = '▼';
+    downBtn.title = 'Flytta ner';
+    downBtn.disabled = houseIdx === tidsplanData.houses.length - 1;
+    downBtn.onclick = () => moveTidsplanHouse(house, 1);
+    houseRow.appendChild(downBtn);
+    const addRowBtn = document.createElement('button');
+    addRowBtn.textContent = '+ Lägg till rad';
+    addRowBtn.onclick = () => addTidsplanRow(house);
+    houseRow.appendChild(addRowBtn);
+    const rmHouseBtn = document.createElement('button');
+    rmHouseBtn.className = 'tidsplan-house-remove';
+    rmHouseBtn.textContent = '✕ Ta bort hus';
+    rmHouseBtn.onclick = () => removeTidsplanHouse(house);
+    houseRow.appendChild(rmHouseBtn);
+    place(houseRow, 1, rowCounter, N + 1);
+    rowCounter++;
+
+    house.rows.forEach(row => {
+      const thisRowNum = rowCounter;
+      const label = document.createElement('div');
+      label.className = 'tidsplan-row-label';
+      label.innerHTML =
+        '<span class="task-name">' + escapeHtml(row.task || 'Namnlös uppgift') + '</span>' +
+        (row.ansvarig ? '<span class="task-ansvarig">' + escapeHtml(row.ansvarig) + '</span>' : '');
+      label.onclick = () => openTidsplanRowModal(house, row);
+      place(label, 1, thisRowNum);
+      tidsplanTaskRowRefs.push({ rowId: row.id, gridRow: thisRowNum, labelEl: label, hasBar: row.startIndex !== null && row.endIndex !== null });
+
+      if(row.startIndex === null || row.endIndex === null){
+        for(let i = 0; i < N; i++){
+          const cell = document.createElement('div');
+          cell.className = 'tidsplan-week-cell';
+          cell.title = 'Klicka för att lägga uppgiften här';
+          cell.onclick = async () => {
+            row.startIndex = i;
+            row.endIndex = i;
+            renderTidsplan();
+            await persistTidsplan();
+          };
+          place(cell, i + 2, thisRowNum);
+        }
+      } else {
+        const bar = document.createElement('div');
+        bar.className = 'tidsplan-bar';
+        bar.style.background = row.color;
+        bar.textContent = row.task || 'Namnlös uppgift';
+        bar.title = row.comment || row.task;
+        place(bar, row.startIndex + 2, thisRowNum, row.endIndex - row.startIndex + 1);
+
+        const handle = document.createElement('div');
+        handle.className = 'tidsplan-bar-handle';
+        bar.appendChild(handle);
+
+        wireTidsplanBarDrag(bar, handle, house, row);
+      }
+      rowCounter++;
+    });
+  });
+
+  // Avstämningar - varje aktiv (ej godkänd) avstämning kan dras per rad för att
+  // visa var arbetet faktiskt låg vid avstämningstillfället. Godkända
+  // avstämningar fryses och ritas kvar som historik (streckad).
+  const activeStam = tidsplanData.avstamningar[tidsplanData.avstamningar.length - 1];
+  const hasActiveStam = !!(activeStam && !activeStam.approved);
+  document.getElementById('tidsplanApproveStamBtn').style.display = hasActiveStam ? 'inline-block' : 'none';
+  document.getElementById('tidsplanRemoveStamBtn').style.display = hasActiveStam ? 'inline-block' : 'none';
+
+  if(hasActiveStam){
+    tidsplanTaskRowRefs.filter(r => r.hasBar).forEach(ref => {
+      const dayIdx = activeStam.rowOverrides[ref.rowId] != null ? activeStam.rowOverrides[ref.rowId] : activeStam.baseDayIndex;
+      const handle = document.createElement('div');
+      handle.className = 'tidsplan-stamline-handle';
+      handle.title = 'Dra för att visa var det här arbetet faktiskt låg vid avstämningen';
+      place(handle, dayIdx + 2, ref.gridRow, 1);
+      wireTidsplanStamHandleDrag(handle, activeStam, ref.rowId);
+    });
+  }
+
+  drawTidsplanStamSvg();
+}
+
+function drawTidsplanStamSvg(){
+  const grid = document.getElementById('tidsplanGrid');
+  const old = document.getElementById('tidsplanStamSvg');
+  if(old) old.remove();
+  if(!tidsplanData.avstamningar.length) return;
+  const barRows = tidsplanTaskRowRefs.filter(r => r.hasBar);
+  if(!barRows.length) return;
+
+  const gridRect = grid.getBoundingClientRect();
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'tidsplanStamSvg';
+  svg.setAttribute('class', 'tidsplan-stam-svg');
+  svg.setAttribute('viewBox', '0 0 ' + gridRect.width + ' ' + gridRect.height);
+
+  const colWidth = getTidsplanColWidth();
+  const xFor = (dayIndex) => 210 + dayIndex * colWidth;
+
+  tidsplanData.avstamningar.forEach(cp => {
+    const rowPoints = barRows.map(ref => {
+      const r = ref.labelEl.getBoundingClientRect();
+      const midY = (r.top - gridRect.top) + r.height / 2;
+      const dayIdx = cp.rowOverrides[ref.rowId] != null ? cp.rowOverrides[ref.rowId] : cp.baseDayIndex;
+      return [xFor(dayIdx), midY];
+    });
+    const topPoint = [xFor(cp.baseDayIndex), 0];
+    const bottomPoint = [rowPoints[rowPoints.length - 1][0], gridRect.height];
+    const allPoints = [topPoint, ...rowPoints, bottomPoint];
+    const d = allPoints.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'tidsplan-stam-path' + (cp.approved ? ' approved' : ' active'));
+    svg.appendChild(path);
+  });
+
+  grid.appendChild(svg);
+}
+
+function wireTidsplanStamHandleDrag(handle, checkpoint, rowId){
+  let dragState = null;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const current = checkpoint.rowOverrides[rowId] != null ? checkpoint.rowOverrides[rowId] : checkpoint.baseDayIndex;
+    dragState = { startX: e.clientX, orig: current };
+  });
+
+  function onMove(e){
+    if(!dragState) return;
+    const colWidth = getTidsplanColWidth();
+    const deltaPx = e.clientX - dragState.startX;
+    const deltaDays = Math.round(deltaPx / colWidth);
+    const N = tidsplanData.weeks.length * 7;
+    const newIndex = Math.max(0, Math.min(N - 1, dragState.orig + deltaDays));
+    handle.style.gridColumn = String(newIndex + 2);
+    handle._pendingIndex = newIndex;
+    checkpoint.rowOverrides[rowId] = newIndex;
+    drawTidsplanStamSvg();
+  }
+
+  async function onUp(){
+    if(!dragState) return;
+    dragState = null;
+    if(typeof handle._pendingIndex === 'number'){
+      checkpoint.rowOverrides[rowId] = handle._pendingIndex;
+    }
+    renderTidsplan();
+    await persistTidsplan();
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// ---------- Dra i stapel: flytta / förläng ----------
+function getTidsplanColWidth(){
+  const grid = document.getElementById('tidsplanGrid');
+  const totalWidth = grid.getBoundingClientRect().width;
+  const N = Math.max(tidsplanData.weeks.length * 7, 1);
+  return (totalWidth - 210) / N;
+}
+
+function wireTidsplanBarDrag(bar, handle, house, row){
+  let dragState = null;
+
+  bar.addEventListener('mousedown', (e) => {
+    if(e.target === handle) return;
+    e.preventDefault();
+    dragState = { mode: 'move', startX: e.clientX, moved: 0, origStart: row.startIndex, origEnd: row.endIndex };
+  });
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragState = { mode: 'resize', startX: e.clientX, moved: 0, origStart: row.startIndex, origEnd: row.endIndex };
+  });
+
+  function onMove(e){
+    if(!dragState) return;
+    const colWidth = getTidsplanColWidth();
+    const deltaPx = e.clientX - dragState.startX;
+    dragState.moved = Math.abs(deltaPx);
+    const deltaDays = Math.round(deltaPx / colWidth);
+    const N = tidsplanData.weeks.length * 7;
+
+    if(dragState.mode === 'move'){
+      const length = dragState.origEnd - dragState.origStart;
+      let newStart = dragState.origStart + deltaDays;
+      newStart = Math.max(0, Math.min(newStart, N - 1 - length));
+      const newEnd = newStart + length;
+      bar.style.gridColumn = (newStart + 2) + ' / span ' + (newEnd - newStart + 1);
+      bar._pendingStart = newStart;
+      bar._pendingEnd = newEnd;
+    } else {
+      let newEnd = dragState.origEnd + deltaDays;
+      newEnd = Math.max(dragState.origStart, Math.min(newEnd, N - 1));
+      bar.style.gridColumn = (dragState.origStart + 2) + ' / span ' + (newEnd - dragState.origStart + 1);
+      bar._pendingStart = dragState.origStart;
+      bar._pendingEnd = newEnd;
+    }
+  }
+
+  async function onUp(){
+    if(!dragState) return;
+    const wasClick = dragState.moved < 4;
+    const ds = dragState;
+    dragState = null;
+    if(wasClick){
+      renderTidsplan();
+      openTidsplanRowModal(house, row);
+      return;
+    }
+    if(typeof bar._pendingStart === 'number'){
+      row.startIndex = bar._pendingStart;
+      row.endIndex = bar._pendingEnd;
+    }
+    renderTidsplan();
+    await persistTidsplan();
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// ---------- Importera från Excel ----------
+function tidsplanFindLegendMatch(text){
+  const t = (text || '').trim().toLowerCase();
+  if(!t) return null;
+  return tidsplanData.legend.find(l => l.task.toLowerCase() === t) ||
+    tidsplanData.legend.find(l => t.includes(l.task.toLowerCase()) || l.task.toLowerCase().includes(t));
+}
+
+function setTidsplanImportStatus(msg, kind){
+  const el = document.getElementById('tidsplanImportStatus');
+  el.textContent = msg;
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+
+document.getElementById('tidsplanImportBtn').onclick = () => {
+  document.getElementById('tidsplanImportInput').click();
+};
+
+document.getElementById('tidsplanImportInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  setTidsplanImportStatus('Läser Excel-filen…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellStyles: true });
+
+    // Läs ev. Inställningar-flik som legend (arbetsmoment/ansvarig/färgkod-kolumner)
+    const settingsSheetName = wb.SheetNames.find(n => /inställning/i.test(n));
+    if(settingsSheetName){
+      const s = wb.Sheets[settingsSheetName];
+      const rows = XLSX.utils.sheet_to_json(s, { header: 1 });
+      for(let i = 1; i < rows.length; i++){
+        const [task, ansvarig, color] = rows[i];
+        if(task && color && /^#/.test(color) && !tidsplanData.legend.some(l => l.task === task)){
+          tidsplanData.legend.push({ task: String(task), ansvarig: ansvarig ? String(ansvarig) : '', color: String(color) });
+        }
+      }
+    }
+
+    const sheetName = wb.SheetNames.find(n => /tidsplan/i.test(n)) || wb.SheetNames[0];
+    const sheet = wb.Sheets[sheetName];
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    const merges = sheet['!merges'] || [];
+
+    function cellText(r, c){
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[ref];
+      return cell && cell.v !== undefined ? String(cell.v).trim() : '';
+    }
+    function mergeFor(r, c){
+      return merges.find(m => m.s.r === r && m.s.c === c);
+    }
+
+    // Hitta header-rader (celler som matchar v.NN i följd)
+    const headerRows = [];
+    for(let r = range.s.r; r <= range.e.r; r++){
+      let weekCols = [];
+      for(let c = range.s.c; c <= range.e.c; c++){
+        if(/^v\.\d+$/i.test(cellText(r, c))) weekCols.push(c);
+      }
+      if(weekCols.length >= 3) headerRows.push({ r, cols: weekCols });
+    }
+
+    if(headerRows.length === 0){
+      setTidsplanImportStatus('Hittade inga veckorubriker (t.ex. "v.35") i filen.', 'err');
+      return;
+    }
+
+    const firstHeader = headerRows[0];
+    // Excel har bara veckonummer ("v.35"), inte år - antar innevarande år.
+    // Användaren kan sedan justera varje veckas datum för hand om det behövs.
+    const importYear = new Date().getFullYear();
+    const weeks = firstHeader.cols.map(c => {
+      const m = cellText(firstHeader.r, c).match(/\d+/);
+      return isoWeekMonday(importYear, m ? parseInt(m[0], 10) : 1);
+    });
+    if(tidsplanData.weeks.length === 0) tidsplanData.weeks = weeks;
+    const colToWeekIndex = {};
+    firstHeader.cols.forEach((c, i) => { colToWeekIndex[c] = i; });
+    const firstWeekCol = firstHeader.cols[0];
+    const lastWeekCol = firstHeader.cols[firstHeader.cols.length - 1];
+
+    let housesAdded = 0, rowsAdded = 0;
+    for(let hIdx = 0; hIdx < headerRows.length; hIdx++){
+      const startR = headerRows[hIdx].r;
+      const endR = (hIdx + 1 < headerRows.length) ? headerRows[hIdx + 1].r - 1 : range.e.r;
+
+      // Hitta husnamn: leta "HUS n" i blockets första rader
+      let houseName = 'Hus ' + (hIdx + 1);
+      for(let r = startR; r <= Math.min(startR + 3, endR); r++){
+        for(let c = range.s.c; c <= range.e.c; c++){
+          const t = cellText(r, c);
+          if(/^hus\s*\d+/i.test(t)){ houseName = t; break; }
+        }
+      }
+
+      const house = { id: uid(), name: houseName, rows: [] };
+
+      // Gå igenom raderna i blocket, leta efter text-celler inom veckokolumnerna
+      const seenLabelCells = new Set();
+      for(let r = startR + 1; r <= endR; r++){
+        for(let c = firstWeekCol; c <= lastWeekCol; c++){
+          const key = r + ':' + c;
+          if(seenLabelCells.has(key)) continue;
+          const text = cellText(r, c);
+          if(!text || /^v\.\d+$/i.test(text) || /^hus\s*\d+/i.test(text)) continue;
+
+          const merge = mergeFor(r, c);
+          let sCol = c, eCol = c;
+          if(merge){
+            sCol = merge.s.c; eCol = merge.e.c;
+            for(let mc = sCol; mc <= eCol; mc++) seenLabelCells.add(r + ':' + mc);
+          }
+          if(sCol < firstWeekCol || eCol > lastWeekCol) continue;
+
+          const legendMatch = tidsplanFindLegendMatch(text);
+          house.rows.push({
+            id: uid(),
+            task: text,
+            ansvarig: legendMatch ? legendMatch.ansvarig : '',
+            color: legendMatch ? legendMatch.color : '#5B9BD5',
+            startIndex: (colToWeekIndex[sCol] !== undefined ? colToWeekIndex[sCol] : 0) * 7,
+            endIndex: (colToWeekIndex[eCol] !== undefined ? colToWeekIndex[eCol] : 0) * 7 + 6,
+            comment: ''
+          });
+          rowsAdded++;
+        }
+      }
+
+      tidsplanData.houses.push(house);
+      housesAdded++;
+    }
+
+    renderTidsplan();
+    await persistTidsplan();
+    setTidsplanImportStatus('Klart - la till ' + housesAdded + ' hus och ' + rowsAdded + ' uppgifter. Granska och justera nedan.', 'ok');
+  }catch(err){
+    setTidsplanImportStatus('Kunde inte läsa filen: ' + err.message, 'err');
+  }finally{
+    document.getElementById('tidsplanImportInput').value = '';
+  }
+});
+
+document.getElementById('tidsplanPdfBtn').onclick = () => {
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+
+  doc.setFontSize(16);
+  doc.text('Tidsplan' + (proj ? ' – ' + proj.name : ''), 14, 16);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Skapad ' + new Date().toLocaleDateString('sv-SE'), 14, 22);
+
+  const dayIndexToDate = (idx) => {
+    const weekIdx = Math.floor(idx / 7);
+    const dayOffset = idx % 7;
+    return tidsplanData.weeks[weekIdx] ? addDaysIso(tidsplanData.weeks[weekIdx], dayOffset) : '—';
+  };
+
+  let y = 30;
+  const housesWithRows = tidsplanData.houses.filter(h => h.rows.length);
+  housesWithRows.forEach(house => {
+    doc.setFontSize(12);
+    doc.setTextColor(20);
+    doc.text(house.name, 14, y);
+    const rows = house.rows.map(r => [
+      r.task || 'Namnlös uppgift',
+      r.ansvarig || '—',
+      r.startIndex !== null ? dayIndexToDate(r.startIndex) : '—',
+      r.endIndex !== null ? dayIndexToDate(r.endIndex) : '—',
+      r.comment || ''
+    ]);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Arbetsmoment', 'Ansvarig', 'Start', 'Slut', 'Kommentar']],
+      body: rows,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 10;
+  });
+
+  if(housesWithRows.length === 0){
+    doc.setFontSize(11);
+    doc.setTextColor(120);
+    doc.text('Inga uppgifter tillagda än.', 14, y);
+  }
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Tidsplan' + fileNamePart + '.pdf');
+};
+
+// ---------- Byggmöten (protokoll, en flik under Entreprenad) ----------
+function byggmoteKey(projectId){ return 'byggmoten:' + projectId; }
+const BYGGMOTE_STANDARDPUNKTER = [
+  'Nästa möte', 'Föregående protokoll', 'Tidsplan', 'Bygg', 'VVS', 'El',
+  'Målare', 'Mark', 'Arbetsmiljö', 'Personalliggare'
+];
+function nextByggmoteNr(){
+  const nums = byggmoteList.map(m => parseInt(m.moteNr, 10)).filter(n => !isNaN(n));
+  return String((nums.length ? Math.max(...nums) : 0) + 1);
+}
+function emptyByggmote(){
+  return {
+    id: uid(),
+    moteNr: nextByggmoteNr(),
+    datum: todayStr(),
+    narvarande: [{ namn: '', foretag: '' }],
+    punkter: BYGGMOTE_STANDARDPUNKTER.map(rubrik => ({ rubrik, anteckningar: '', ansvarig: '' }))
+  };
+}
+function currentProjectOrt(){
+  const p = projects.find(pr => pr.id === activeProjectId);
+  return (p && p.ort) || '';
+}
+
+let byggmoteList = [];
+let currentByggmoteId = null;
+
+async function loadByggmoten(projectId){
+  if(!projectId) return;
+  try{
+    const res = await window.storage.get(byggmoteKey(projectId), true);
+    byggmoteList = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){
+    byggmoteList = [];
+  }
+  if(!Array.isArray(byggmoteList)) byggmoteList = [];
+  renderByggmoteList();
+}
+
+async function persistByggmoten(){
+  try{
+    await withRetry(() => window.storage.set(byggmoteKey(activeProjectId), JSON.stringify(byggmoteList), true));
+    clearDebugError();
+  }catch(e){
+    showDebugError('Kunde inte spara byggmötet', e, () => persistByggmoten());
+    showToast('Kunde inte spara – klicka "Försök spara igen" nedan');
+  }
+}
+
+function renderByggmoteList(){
+  const tbody = document.getElementById('byggmoteListBody');
+  const empty = document.getElementById('byggmoteListEmptyState');
+  tbody.innerHTML = '';
+  empty.style.display = byggmoteList.length ? 'none' : 'block';
+  const sorted = [...byggmoteList].sort((a, b) => (parseInt(b.moteNr, 10) || 0) - (parseInt(a.moteNr, 10) || 0));
+  const ort = currentProjectOrt();
+  sorted.forEach(m => {
+    const row = document.createElement('tr');
+    row.onclick = () => openByggmoteForm(m.id);
+    row.innerHTML =
+      '<td>' + escapeHtml(m.moteNr || '—') + '</td>' +
+      '<td>' + escapeHtml(m.datum || '—') + '</td>' +
+      '<td>' + escapeHtml(ort || '—') + '</td>';
+    tbody.appendChild(row);
+  });
+}
+
+function openByggmoteForm(id){
+  currentByggmoteId = id;
+  document.getElementById('byggmoteListSubview').style.display = 'none';
+  document.getElementById('byggmoteFormSubview').style.display = 'block';
+  renderByggmoteForm();
+}
+
+function closeByggmoteForm(){
+  currentByggmoteId = null;
+  document.getElementById('byggmoteFormSubview').style.display = 'none';
+  document.getElementById('byggmoteListSubview').style.display = 'block';
+  renderByggmoteList();
+}
+
+function currentByggmote(){
+  return byggmoteList.find(m => m.id === currentByggmoteId);
+}
+
+function renderByggmoteForm(){
+  const m = currentByggmote();
+  if(!m) return;
+  document.getElementById('byggmoteNrDisplay').textContent = m.moteNr || '—';
+  document.getElementById('byggmoteDatumInput').value = m.datum || '';
+  document.getElementById('byggmoteOrtDisplay').textContent = currentProjectOrt() || '—';
+
+  const narvBody = document.getElementById('byggmoteNarvarandeBody');
+  narvBody.innerHTML = '';
+  m.narvarande.forEach((p, idx) => {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td></td><td></td><td></td>';
+    const namnInput = document.createElement('input');
+    namnInput.type = 'text';
+    namnInput.value = p.namn || '';
+    namnInput.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:5px;padding:5px 7px;font-size:13px;';
+    namnInput.onchange = () => { p.namn = namnInput.value; persistByggmoten(); };
+    row.children[0].appendChild(namnInput);
+    const foretagInput = document.createElement('input');
+    foretagInput.type = 'text';
+    foretagInput.value = p.foretag || '';
+    foretagInput.style.cssText = namnInput.style.cssText;
+    foretagInput.onchange = () => { p.foretag = foretagInput.value; persistByggmoten(); };
+    row.children[1].appendChild(foretagInput);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => { m.narvarande.splice(idx, 1); persistByggmoten(); renderByggmoteForm(); };
+    row.children[2].appendChild(removeBtn);
+    row.children[2].className = 'row-actions';
+    narvBody.appendChild(row);
+  });
+
+  const punkterList = document.getElementById('byggmotePunkterList');
+  punkterList.innerHTML = '';
+  m.punkter.forEach((p, idx) => {
+    const row = document.createElement('div');
+    row.className = 'byggmote-punkt-row';
+    const top = document.createElement('div');
+    top.className = 'byggmote-punkt-row-top';
+    const nrSpan = document.createElement('span');
+    nrSpan.style.cssText = 'font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--ink-soft);';
+    nrSpan.textContent = (idx + 1) + '.';
+    top.appendChild(nrSpan);
+    const rubrikInput = document.createElement('input');
+    rubrikInput.type = 'text';
+    rubrikInput.placeholder = 'Rubrik';
+    rubrikInput.value = p.rubrik || '';
+    rubrikInput.onchange = () => { p.rubrik = rubrikInput.value; persistByggmoten(); };
+    top.appendChild(rubrikInput);
+    const ansvarigInput = document.createElement('input');
+    ansvarigInput.type = 'text';
+    ansvarigInput.className = 'byggmote-punkt-ansvarig';
+    ansvarigInput.placeholder = 'Ansvarig';
+    ansvarigInput.value = p.ansvarig || '';
+    ansvarigInput.onchange = () => { p.ansvarig = ansvarigInput.value; persistByggmoten(); };
+    top.appendChild(ansvarigInput);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Ta bort punkt';
+    removeBtn.textContent = '✕';
+    removeBtn.onclick = () => { m.punkter.splice(idx, 1); persistByggmoten(); renderByggmoteForm(); };
+    top.appendChild(removeBtn);
+    row.appendChild(top);
+
+    const anteckningar = document.createElement('div');
+    anteckningar.className = 'byggmote-punkt-anteckningar';
+    anteckningar.contentEditable = 'true';
+    anteckningar.setAttribute('data-placeholder', 'Anteckningar');
+    anteckningar.innerHTML = p.anteckningar || '';
+    anteckningar.oninput = () => { p.anteckningar = anteckningar.innerHTML; };
+    anteckningar.onblur = () => { p.anteckningar = anteckningar.innerHTML; persistByggmoten(); };
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'byggmote-anteckningar-toolbar';
+    const toolbarLabel = document.createElement('span');
+    toolbarLabel.className = 'byggmote-anteckningar-toolbar-label';
+    toolbarLabel.textContent = 'Färg på markerad text:';
+    toolbar.appendChild(toolbarLabel);
+    const swatches = document.createElement('div');
+    swatches.className = 'byggmote-color-swatches';
+    ['red', 'yellow', 'green'].forEach(c => {
+      const swatchBtn = document.createElement('button');
+      swatchBtn.type = 'button';
+      swatchBtn.className = 'byggmote-color-swatch ' + c;
+      swatchBtn.title = c === 'red' ? 'Rött' : c === 'yellow' ? 'Gult' : 'Grönt';
+      swatchBtn.onmousedown = e => e.preventDefault();
+      swatchBtn.onclick = () => applyByggmoteTextColor(anteckningar, p, BYGGMOTE_COLOR_HEX[c]);
+      swatches.appendChild(swatchBtn);
+    });
+    toolbar.appendChild(swatches);
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'byggmote-color-clear-btn';
+    clearBtn.textContent = 'Rensa färg';
+    clearBtn.onmousedown = e => e.preventDefault();
+    clearBtn.onclick = () => applyByggmoteTextColor(anteckningar, p, null);
+    toolbar.appendChild(clearBtn);
+    row.appendChild(toolbar);
+    row.appendChild(anteckningar);
+    punkterList.appendChild(row);
+  });
+}
+
+const BYGGMOTE_COLOR_HEX = { red: '#B23B3B', yellow: '#B5762C', green: '#4C7A5E' };
+function applyByggmoteTextColor(el, p, colorHex){
+  el.focus();
+  document.execCommand('styleWithCSS', false, true);
+  document.execCommand('foreColor', false, colorHex || '#22190F');
+  p.anteckningar = el.innerHTML;
+  persistByggmoten();
+}
+
+document.getElementById('byggmoteNewBtn').onclick = () => {
+  const m = emptyByggmote();
+  byggmoteList.push(m);
+  persistByggmoten();
+  openByggmoteForm(m.id);
+};
+document.getElementById('byggmoteBackBtn').onclick = closeByggmoteForm;
+document.getElementById('byggmoteDatumInput').onchange = e => {
+  const m = currentByggmote(); if(!m) return;
+  m.datum = e.target.value; persistByggmoten();
+};
+document.getElementById('byggmoteAddNarvarandeBtn').onclick = () => {
+  const m = currentByggmote(); if(!m) return;
+  m.narvarande.push({ namn: '', foretag: '' });
+  persistByggmoten();
+  renderByggmoteForm();
+};
+document.getElementById('byggmoteAddPunktBtn').onclick = () => {
+  const m = currentByggmote(); if(!m) return;
+  m.punkter.push({ rubrik: '', anteckningar: '', ansvarig: '' });
+  persistByggmoten();
+  renderByggmoteForm();
+};
+document.getElementById('byggmoteSaveBtn').onclick = async () => {
+  await persistByggmoten();
+  showToast('Byggmötet sparat');
+  closeByggmoteForm();
+};
+document.getElementById('byggmotePdfBtn').onclick = () => {
+  const m = currentByggmote();
+  if(!m) return;
+  const proj = projects.find(p => p.id === activeProjectId);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(16);
+  doc.text('Byggmötesprotokoll' + (proj ? ' – ' + proj.name : ''), 14, 18);
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text('Möte nr: ' + (m.moteNr || '—') + '    Datum: ' + (m.datum || '—') + '    Ort: ' + (currentProjectOrt() || '—'), 14, 24);
+
+  let y = 32;
+  const attendees = m.narvarande.filter(p => p.namn || p.foretag);
+  if(attendees.length){
+    doc.setFontSize(12);
+    doc.setTextColor(20);
+    doc.text('Närvarande', 14, y);
+    doc.autoTable({
+      startY: y + 4,
+      head: [['Namn', 'Företag']],
+      body: attendees.map(p => [p.namn || '', p.foretag || '']),
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [58, 44, 32] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 10;
+  }
+
+  doc.setFontSize(12);
+  doc.setTextColor(20);
+  doc.text('Punkter', 14, y);
+  doc.autoTable({
+    startY: y + 4,
+    head: [['#', 'Punkt', 'Anteckningar', 'Ansvarig']],
+    body: m.punkter.map((p, i) => [String(i + 1), p.rubrik || '', stripHtml(p.anteckningar), p.ansvarig || '']),
+    styles: { fontSize: 9, valign: 'top' },
+    headStyles: { fillColor: [58, 44, 32] },
+    columnStyles: { 0: { cellWidth: 8 }, 1: { cellWidth: 32 }, 3: { cellWidth: 26 } },
+    margin: { left: 14, right: 14 }
+  });
+
+  const fileNamePart = proj ? '-' + proj.name.replace(/[^a-zA-Z0-9åäöÅÄÖ]+/g, '-') : '';
+  doc.save('Byggmotesprotokoll-' + (m.moteNr || 'utan-nr') + fileNamePart + '.pdf');
+};
+document.getElementById('byggmoteDeleteBtn').onclick = async () => {
+  const m = currentByggmote(); if(!m) return;
+  byggmoteList = byggmoteList.filter(x => x.id !== m.id);
+  await persistByggmoten();
+  closeByggmoteForm();
+};
+
+const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minuter - bara ett fåtal personer använder verktyget
+
+document.getElementById('manualSyncBtn').onclick = () => {
+  if(!saving && activeProjectId) loadApartments(true);
+};
+
+setInterval(() => {
+  if(!saving && activeProjectId && screen === 'project' && projectSubView === 'checklista') loadApartments(true);
+}, SYNC_INTERVAL_MS);
+setInterval(() => { loadProjects(); }, SYNC_INTERVAL_MS);
+setInterval(() => {
+  if(screen === 'calendar') loadAllEvents().then(renderCalendar);
+}, SYNC_INTERVAL_MS);
+setInterval(() => {
+  if(screen === 'intressen') loadInterests().then(renderIntressenScreen);
+  if(screen === 'project' && projectSubView === 'intressenter') loadInterests().then(renderIntressenterTab);
+}, SYNC_INTERVAL_MS);
+
+async function init(){
+  await loadProjects();
+  const info = await DB.getCurrentUserInfo();
+  myEmail = (info.email || '').toLowerCase();
+  isEkonomiAdmin = myEmail === EKONOMI_ADMIN_EMAIL;
+  document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
+  if(isEkonomiAdmin) await loadEkonomiData();
+  else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } }
+  myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
+  myPersonId = info.id;
+  renderNameUI();
+  openPersonal();
+}
+
+// ---------- Personlig inloggning (eget konto per medarbetare) ----------
+function showPersonalLoginError(msg){
+  const el = document.getElementById('personalLoginError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+async function attemptPersonalLogin(){
+  const email = document.getElementById('personalLoginEmail').value.trim();
+  const password = document.getElementById('personalLoginPassword').value;
+  if(!email || !password) return;
+  const btn = document.getElementById('personalLoginSubmit');
+  btn.disabled = true;
+  try{
+    const res = await DB.signIn(email, password);
+    if(res.ok){
+      document.getElementById('codeGateOverlay').classList.remove('open');
+      await startApp();
+    } else {
+      showPersonalLoginError('Fel e-post eller lösenord, försök igen.');
+    }
+  }catch(e){
+    showPersonalLoginError('Kunde inte logga in just nu. Försök igen om en stund.');
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('personalLoginSubmit').onclick = attemptPersonalLogin;
+document.getElementById('personalLoginPassword').addEventListener('keydown', e => {
+  if(e.key === 'Enter') attemptPersonalLogin();
+});
+
+// ---------- Realtidssynk: ersätter/kompletterar 30-minuterspollningen ovan ----------
+// När någon annan sparar en ändring (i Supabase, eller i en annan flik lokalt i mock-läge)
+// triggas detta direkt istället för att vänta på nästa polling-intervall.
+function wireRemoteSync(){
+  DB.onRemoteChange(function(key){
+    if(key === PROJECTS_KEY){
+      loadProjects();
+    } else if(key.indexOf('apartments:') === 0){
+      const pid = key.slice('apartments:'.length);
+      if(pid === activeProjectId && screen === 'project' && projectSubView === 'checklista') loadApartments(false);
+      if(screen === 'calendar') loadAllEvents().then(renderCalendar);
+      if(screen === 'home') loadProjects();
+    } else if(key === INTR_STORAGE_KEY){
+      loadInterests().then(() => {
+        if(screen === 'intressen') renderIntressenScreen();
+        if(screen === 'project' && projectSubView === 'intressenter') renderIntressenterTab();
+      });
+    }
+  });
+}
+
+async function startApp(){
+  await init();
+  wireRemoteSync();
+}
+
+(async function boot(){
+  const propaShareId = new URLSearchParams(location.search).get('propa');
+  if(propaShareId){
+    await renderPublicNyaProjektView(propaShareId);
+    return;
+  }
+  if(await DB.isAuthenticated()){
+    document.getElementById('codeGateOverlay').classList.remove('open');
+    await startApp();
+  }
+})();
