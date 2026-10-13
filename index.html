@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261013110937">
+<meta name="app-build" content="20261013114254">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1858,6 +1858,7 @@
 
     <div class="sub-tabs">
       <button class="sub-tab" data-view="checklista">Checklista</button>
+      <button class="sub-tab" data-view="betalningar">Betalningar</button>
       <button class="sub-tab" data-view="medlemsinfo">Medlemsinformation</button>
       <button class="sub-tab" data-view="inflyttningsinfo">Inflyttningsinformation</button>
       <button class="sub-tab" data-view="intressenter">Intressenter</button>
@@ -1928,6 +1929,30 @@
           <button id="manualSyncBtn" class="back-btn" style="padding:4px 10px; font-size:11px;">↻ Synka nu</button>
           <span id="syncText">synkar…</span>
         </span>
+      </div>
+    </div>
+
+    <div id="betalningarSubview" style="display:none;">
+      <div class="eko-section">
+        <h3>Betalningar</h3>
+        <p class="eko-sub">Slutbetalt belopp och datum kommer från Slutbetald i checklistan, tillvalsbeloppet från Tillval. Fyll i avgiftsfritt per lägenhet och bocka i om tillvalet lades på slutbetalningen – bara då dras det från summan. Summa = slutbetalt − avgiftsfritt − tillval.</p>
+        <div class="table-scroll">
+          <table class="eko-compare-table" id="betalningarTable" style="width:100%;">
+            <thead>
+              <tr>
+                <th style="text-align:left;">LGH</th>
+                <th>Slutbetald</th>
+                <th>Avgiftsfritt</th>
+                <th>Tillval</th>
+                <th>Tillval på slutbetalning</th>
+                <th>Summa</th>
+              </tr>
+            </thead>
+            <tbody id="betalningarBody"></tbody>
+            <tfoot id="betalningarFoot"></tfoot>
+          </table>
+          <div id="betalningarEmptyState" class="empty-state" style="display:none;">Inga lägenheter i det här projektet än.</div>
+        </div>
       </div>
     </div>
 
@@ -2575,7 +2600,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261013110937"></script>
-<script src="app.js?v=20261013110937"></script>
+<script src="db.js?v=20261013114254"></script>
+<script src="app.js?v=20261013114254"></script>
 </body>
 </html>
