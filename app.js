@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261013123423';
+const APP_BUILD = '20261013124351';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4930,16 +4930,18 @@ function ekoAptLabel(apt){
 // Markeringen skriver slutbetald i projektöversikten (samma fält), så beloppet
 // flyttar till inbetalningsmånaden om kunden betalade en annan månad.
 function showEkonomiInsatserPopup(pid, title, items){
-  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 860 });
+  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 1140 });
   if(!items.length){ p.body.innerHTML = '<p class="eko-sub">Inga bostäder.</p>'; return; }
   const today = new Date().toISOString().slice(0, 10);
   const prog = ekonomiPrognosRec(pid);
   const pending = {}; // aptId -> 'YYYY-MM' | '' (ändringar som sparas med "Applicera ändringar")
   const pendingF = {}; // aptId -> beräknad försäljningsmånad för osålda
-  const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
+  // Sorterat på lägenhetsnummer.
+  const sorted = [...items].sort((a, b) => String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
-  table.style.cssText = 'width:100%; white-space:nowrap;';
+  table.style.cssText = 'width:100%; min-width:980px; white-space:nowrap;';
+  p.body.style.overflowX = 'auto';
   table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th style="text-align:left;">Beräknad försäljning</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
