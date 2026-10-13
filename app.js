@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261013114441';
+const APP_BUILD = '20261013123423';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -10151,17 +10151,22 @@ function makeMedlemsCheckCell(apt, field, label){
 }
 
 // ---------- Betalningar (flik i projektet) ----------
-// Per lägenhet: slutbetalt belopp (från Slutbetald i checklistan), avgiftsfritt (kr, fylls i här),
-// tillval (beloppet från Tillval i checklistan) och om tillvalet lagts på slutbetalningen.
-// Summa per lägenhet = slutbetalt − avgiftsfritt − tillval (bara om tillvalet ligger på slutbetalningen).
+// Per lägenhet: totalpris enligt ekonomiska planen (budget), slutbetalt belopp (från Slutbetald i
+// checklistan), avgiftsfritt och dubbelboende (fylls i här) och tillval (beloppet från Tillval i
+// checklistan – dras bara när det är fakturerat via bolån, dvs ligger på slutbetalningen).
+// Summa = slutbetalt − avgiftsfritt − dubbelboende − tillval. Diff = totalpris − summa.
 function betalningRad(apt){
-  const b = apt.betalning || { avgiftsfritt: '', dubbelboende: '', tillvalPaSlut: false };
-  const slut = apt.slutbetald && apt.slutbetald.done ? (parseKr(apt.slutbetald.amount) || parseKr(apt.totalpris)) : 0;
+  const b = apt.betalning || { avgiftsfritt: '', dubbelboende: '' };
+  const plan = parseKr(apt.totalpris);
+  const betald = !!(apt.slutbetald && apt.slutbetald.done);
+  const slut = betald ? (parseKr(apt.slutbetald.amount) || plan) : 0;
   const avgiftsfritt = parseKr(b.avgiftsfritt);
   const dubbelboende = parseKr(b.dubbelboende);
   const tillval = apt.tillval && apt.tillval.done ? parseKr(apt.tillval.amount) : 0;
-  const tillvalDras = b.tillvalPaSlut ? tillval : 0;
-  return { slut, avgiftsfritt, dubbelboende, tillval, tillvalDras, summa: slut - avgiftsfritt - dubbelboende - tillvalDras, betald: !!(apt.slutbetald && apt.slutbetald.done) };
+  const tillvalPaSlut = !!(apt.tillval && apt.tillval.done && apt.tillval.invoicedLoan);
+  const tillvalDras = tillvalPaSlut ? tillval : 0;
+  const summa = betald ? slut - avgiftsfritt - dubbelboende - tillvalDras : 0;
+  return { plan, betald, slut, avgiftsfritt, dubbelboende, tillval, tillvalPaSlut, tillvalDras, summa, diff: betald ? plan - summa : 0 };
 }
 function renderBetalningar(){
   const body = document.getElementById('betalningarBody');
@@ -10173,71 +10178,49 @@ function renderBetalningar(){
   if(apartments.length === 0){ table.style.display = 'none'; empty.style.display = 'block'; return; }
   table.style.display = 'table'; empty.style.display = 'none';
   const mono = "font-family:'JetBrains Mono', monospace;";
-  const tot = { slut: 0, avgiftsfritt: 0, dubbelboende: 0, tillval: 0, tillvalDras: 0, summa: 0, betalda: 0 };
-  apartments.forEach(apt => {
-    if(!apt.betalning || typeof apt.betalning !== 'object') apt.betalning = { avgiftsfritt: '', dubbelboende: '', tillvalPaSlut: false };
-    const r = betalningRad(apt);
-    tot.slut += r.slut; tot.avgiftsfritt += r.avgiftsfritt; tot.dubbelboende += r.dubbelboende; tot.tillval += r.tillval; tot.tillvalDras += r.tillvalDras; tot.summa += r.summa; if(r.betald) tot.betalda++;
-    const tr = document.createElement('tr');
-    const lghTd = document.createElement('td');
-    lghTd.style.cssText = 'text-align:left; ' + mono + ' font-weight:700; color:var(--blue);';
-    lghTd.textContent = apt.lgh || '—';
-    tr.appendChild(lghTd);
-    // Slutbetalt: belopp och datum från checklistans Slutbetald.
-    const slutTd = document.createElement('td');
-    slutTd.style.cssText = mono;
-    if(r.betald){
-      slutTd.innerHTML = formatKrFull(r.slut) + '<div style="font-size:10.5px; color:var(--ink-soft); font-family:inherit;">' + escapeHtml(apt.slutbetald.date || '') + '</div>';
-    } else {
-      slutTd.innerHTML = '<span style="color:var(--danger); font-size:12px;">Ej slutbetald</span>';
-    }
-    tr.appendChild(slutTd);
-    // Avgiftsfritt: skrivs in här.
-    const avgTd = document.createElement('td');
+  const tot = { plan: 0, planBetalda: 0, slut: 0, avgiftsfritt: 0, dubbelboende: 0, tillval: 0, tillvalDras: 0, summa: 0, diff: 0, betalda: 0 };
+  const krInput = (value, onSave) => {
     const inp = document.createElement('input');
     inp.type = 'text'; inp.inputMode = 'numeric'; inp.placeholder = '0';
-    inp.value = apt.betalning.avgiftsfritt ? formatNumberSv(apt.betalning.avgiftsfritt) : '';
-    inp.style.cssText = 'width:120px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:4px 8px; font-size:13px; ' + mono;
-    inp.onchange = async () => { apt.betalning.avgiftsfritt = String(parseKr(inp.value) || ''); renderBetalningar(); await persistApartments(); };
-    avgTd.appendChild(inp);
-    tr.appendChild(avgTd);
-    // Dubbelboende: ersättning som dras från summan, skrivs in här.
-    const dbTd = document.createElement('td');
-    const dbInp = document.createElement('input');
-    dbInp.type = 'text'; dbInp.inputMode = 'numeric'; dbInp.placeholder = '0';
-    dbInp.value = apt.betalning.dubbelboende ? formatNumberSv(apt.betalning.dubbelboende) : '';
-    dbInp.style.cssText = inp.style.cssText;
-    dbInp.onchange = async () => { apt.betalning.dubbelboende = String(parseKr(dbInp.value) || ''); renderBetalningar(); await persistApartments(); };
-    dbTd.appendChild(dbInp);
-    tr.appendChild(dbTd);
-    // Tillval: beloppet från checklistans Tillval.
-    const tvTd = document.createElement('td');
-    tvTd.style.cssText = mono;
-    tvTd.innerHTML = apt.tillval && apt.tillval.done ? (r.tillval ? formatKrFull(r.tillval) : '<span style="color:var(--ink-soft); font-size:12px;">Tillval utan belopp</span>') : '<span style="color:var(--ink-soft);">—</span>';
-    tr.appendChild(tvTd);
-    // Tillval på slutbetalningen: bara då dras det från summan.
-    const cbTd = document.createElement('td');
-    cbTd.style.textAlign = 'center';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = !!apt.betalning.tillvalPaSlut; cb.disabled = !r.tillval;
-    cb.title = r.tillval ? 'Tillvalet är fakturerat på slutbetalningen och dras från summan' : 'Inget tillvalsbelopp på lägenheten';
-    cb.onchange = async () => { apt.betalning.tillvalPaSlut = cb.checked; renderBetalningar(); await persistApartments(); };
-    cbTd.appendChild(cb);
-    tr.appendChild(cbTd);
-    const sumTd = document.createElement('td');
-    sumTd.style.cssText = mono + ' font-weight:700;';
-    sumTd.textContent = r.betald ? formatKrFull(r.summa) : '—';
-    tr.appendChild(sumTd);
+    inp.value = value ? formatNumberSv(value) : '';
+    inp.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:4px 8px; font-size:13px; ' + mono;
+    inp.onchange = async () => { await onSave(String(parseKr(inp.value) || '')); renderBetalningar(); await persistApartments(); };
+    return inp;
+  };
+  apartments.forEach(apt => {
+    if(!apt.betalning || typeof apt.betalning !== 'object') apt.betalning = { avgiftsfritt: '', dubbelboende: '' };
+    const r = betalningRad(apt);
+    tot.plan += r.plan; tot.slut += r.slut; tot.avgiftsfritt += r.avgiftsfritt; tot.dubbelboende += r.dubbelboende; tot.tillval += r.tillval; tot.tillvalDras += r.tillvalDras; tot.summa += r.summa; tot.diff += r.diff;
+    if(r.betald){ tot.betalda++; tot.planBetalda += r.plan; }
+    const tr = document.createElement('tr');
+    const td = (html, css) => { const c = document.createElement('td'); c.style.cssText = css || mono; c.innerHTML = html; tr.appendChild(c); return c; };
+    td(escapeHtml(apt.lgh || '—'), 'text-align:left; ' + mono + ' font-weight:700; color:var(--blue);');
+    td(r.plan ? formatKrFull(r.plan) : '<span style="color:var(--ink-soft);">—</span>');
+    td(r.betald ? formatKrFull(r.slut) + '<div style="font-size:10.5px; color:var(--ink-soft);">' + escapeHtml(apt.slutbetald.date || '') + '</div>' : '<span style="color:var(--danger); font-size:12px;">Ej slutbetald</span>');
+    td('').appendChild(krInput(apt.betalning.avgiftsfritt, async v => { apt.betalning.avgiftsfritt = v; }));
+    td('').appendChild(krInput(apt.betalning.dubbelboende, async v => { apt.betalning.dubbelboende = v; }));
+    // Tillval: dras bara när det är fakturerat via bolån (ligger på slutbetalningen).
+    if(apt.tillval && apt.tillval.done && r.tillval){
+      td(r.tillvalPaSlut ? formatKrFull(r.tillval) : '<span style="color:var(--ink-soft);" title="Tillvalet är fakturerat kund separat och dras inte från slutbetalningen">' + formatKrFull(r.tillval) + '</span><div style="font-size:10.5px; color:var(--ink-soft);">fakturerat kund</div>');
+    } else {
+      td('<span style="color:var(--ink-soft);">—</span>');
+    }
+    td(r.betald ? formatKrFull(r.summa) : '—', mono + ' font-weight:700;');
+    const diffCell = td(r.betald ? (r.diff === 0 ? '0 kr' : (r.diff > 0 ? '−' : '+') + formatKrFull(Math.abs(r.diff))) : '—');
+    if(r.betald && r.diff > 0) diffCell.style.color = 'var(--danger)';
+    if(r.betald && r.diff < 0) diffCell.style.color = 'var(--good, #2e7d32)';
     body.appendChild(tr);
   });
+  const diffTxt = tot.diff === 0 ? '0 kr' : (tot.diff > 0 ? '−' : '+') + formatKrFull(Math.abs(tot.diff));
   foot.innerHTML = '<tr class="eko-row-resultat">' +
     '<td style="text-align:left;">Totalt huset (' + tot.betalda + ' av ' + apartments.length + ' slutbetalda)</td>' +
+    '<td style="' + mono + '">' + formatKrFull(tot.plan) + '<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">varav slutbetalda ' + formatKrFull(tot.planBetalda) + '</div></td>' +
     '<td style="' + mono + '">' + formatKrFull(tot.slut) + '</td>' +
     '<td style="' + mono + '">−' + formatKrFull(tot.avgiftsfritt) + '</td>' +
     '<td style="' + mono + '">−' + formatKrFull(tot.dubbelboende) + '</td>' +
-    '<td style="' + mono + '">' + formatKrFull(tot.tillval) + '</td>' +
-    '<td style="' + mono + ' font-size:11px; color:var(--ink-soft);">−' + formatKrFull(tot.tillvalDras) + '</td>' +
-    '<td style="' + mono + ' font-weight:700;">' + formatKrFull(tot.summa) + '</td></tr>';
+    '<td style="' + mono + '">−' + formatKrFull(tot.tillvalDras) + '</td>' +
+    '<td style="' + mono + ' font-weight:700;">' + formatKrFull(tot.summa) + '</td>' +
+    '<td style="' + mono + ' font-weight:700; color:' + (tot.diff > 0 ? 'var(--danger)' : tot.diff < 0 ? 'var(--good, #2e7d32)' : 'inherit') + ';" title="Totalpris enligt ekonomiska planen (slutbetalda lägenheter) minus summa">' + diffTxt + '</td></tr>';
 }
 function renderMedlemsinfo(){
   const body = document.getElementById('medlemsBody');
