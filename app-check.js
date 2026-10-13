@@ -378,6 +378,7 @@ function normalizeApartment(apt){
   if(typeof apt.tillval.amount !== 'string') apt.tillval.amount = '';
   if(!apt.betalning || typeof apt.betalning !== 'object') apt.betalning = { avgiftsfritt: '', tillvalPaSlut: false };
   if(typeof apt.betalning.avgiftsfritt !== 'string') apt.betalning.avgiftsfritt = '';
+  if(typeof apt.betalning.dubbelboende !== 'string') apt.betalning.dubbelboende = '';
   if(typeof apt.betalning.tillvalPaSlut !== 'boolean') apt.betalning.tillvalPaSlut = false;
   if(!apt.upplatenKoncern || typeof apt.upplatenKoncern !== 'object') apt.upplatenKoncern = emptyCheck();
   return apt;
@@ -10154,12 +10155,13 @@ function makeMedlemsCheckCell(apt, field, label){
 // tillval (beloppet från Tillval i checklistan) och om tillvalet lagts på slutbetalningen.
 // Summa per lägenhet = slutbetalt − avgiftsfritt − tillval (bara om tillvalet ligger på slutbetalningen).
 function betalningRad(apt){
-  const b = apt.betalning || { avgiftsfritt: '', tillvalPaSlut: false };
+  const b = apt.betalning || { avgiftsfritt: '', dubbelboende: '', tillvalPaSlut: false };
   const slut = apt.slutbetald && apt.slutbetald.done ? (parseKr(apt.slutbetald.amount) || parseKr(apt.totalpris)) : 0;
   const avgiftsfritt = parseKr(b.avgiftsfritt);
+  const dubbelboende = parseKr(b.dubbelboende);
   const tillval = apt.tillval && apt.tillval.done ? parseKr(apt.tillval.amount) : 0;
   const tillvalDras = b.tillvalPaSlut ? tillval : 0;
-  return { slut, avgiftsfritt, tillval, tillvalDras, summa: slut - avgiftsfritt - tillvalDras, betald: !!(apt.slutbetald && apt.slutbetald.done) };
+  return { slut, avgiftsfritt, dubbelboende, tillval, tillvalDras, summa: slut - avgiftsfritt - dubbelboende - tillvalDras, betald: !!(apt.slutbetald && apt.slutbetald.done) };
 }
 function renderBetalningar(){
   const body = document.getElementById('betalningarBody');
@@ -10171,11 +10173,11 @@ function renderBetalningar(){
   if(apartments.length === 0){ table.style.display = 'none'; empty.style.display = 'block'; return; }
   table.style.display = 'table'; empty.style.display = 'none';
   const mono = "font-family:'JetBrains Mono', monospace;";
-  const tot = { slut: 0, avgiftsfritt: 0, tillval: 0, tillvalDras: 0, summa: 0, betalda: 0 };
+  const tot = { slut: 0, avgiftsfritt: 0, dubbelboende: 0, tillval: 0, tillvalDras: 0, summa: 0, betalda: 0 };
   apartments.forEach(apt => {
-    if(!apt.betalning || typeof apt.betalning !== 'object') apt.betalning = { avgiftsfritt: '', tillvalPaSlut: false };
+    if(!apt.betalning || typeof apt.betalning !== 'object') apt.betalning = { avgiftsfritt: '', dubbelboende: '', tillvalPaSlut: false };
     const r = betalningRad(apt);
-    tot.slut += r.slut; tot.avgiftsfritt += r.avgiftsfritt; tot.tillval += r.tillval; tot.tillvalDras += r.tillvalDras; tot.summa += r.summa; if(r.betald) tot.betalda++;
+    tot.slut += r.slut; tot.avgiftsfritt += r.avgiftsfritt; tot.dubbelboende += r.dubbelboende; tot.tillval += r.tillval; tot.tillvalDras += r.tillvalDras; tot.summa += r.summa; if(r.betald) tot.betalda++;
     const tr = document.createElement('tr');
     const lghTd = document.createElement('td');
     lghTd.style.cssText = 'text-align:left; ' + mono + ' font-weight:700; color:var(--blue);';
@@ -10199,6 +10201,15 @@ function renderBetalningar(){
     inp.onchange = async () => { apt.betalning.avgiftsfritt = String(parseKr(inp.value) || ''); renderBetalningar(); await persistApartments(); };
     avgTd.appendChild(inp);
     tr.appendChild(avgTd);
+    // Dubbelboende: ersättning som dras från summan, skrivs in här.
+    const dbTd = document.createElement('td');
+    const dbInp = document.createElement('input');
+    dbInp.type = 'text'; dbInp.inputMode = 'numeric'; dbInp.placeholder = '0';
+    dbInp.value = apt.betalning.dubbelboende ? formatNumberSv(apt.betalning.dubbelboende) : '';
+    dbInp.style.cssText = inp.style.cssText;
+    dbInp.onchange = async () => { apt.betalning.dubbelboende = String(parseKr(dbInp.value) || ''); renderBetalningar(); await persistApartments(); };
+    dbTd.appendChild(dbInp);
+    tr.appendChild(dbTd);
     // Tillval: beloppet från checklistans Tillval.
     const tvTd = document.createElement('td');
     tvTd.style.cssText = mono;
@@ -10223,6 +10234,7 @@ function renderBetalningar(){
     '<td style="text-align:left;">Totalt huset (' + tot.betalda + ' av ' + apartments.length + ' slutbetalda)</td>' +
     '<td style="' + mono + '">' + formatKrFull(tot.slut) + '</td>' +
     '<td style="' + mono + '">−' + formatKrFull(tot.avgiftsfritt) + '</td>' +
+    '<td style="' + mono + '">−' + formatKrFull(tot.dubbelboende) + '</td>' +
     '<td style="' + mono + '">' + formatKrFull(tot.tillval) + '</td>' +
     '<td style="' + mono + ' font-size:11px; color:var(--ink-soft);">−' + formatKrFull(tot.tillvalDras) + '</td>' +
     '<td style="' + mono + ' font-weight:700;">' + formatKrFull(tot.summa) + '</td></tr>';
