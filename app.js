@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261009100116';
+const APP_BUILD = '20261013110937';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -554,7 +554,14 @@ async function renderHomeGrid(){
 }
 
 // ---------- Projektöversikt som lista (filter och sortering sparas per användare) ----------
-const HOME_LIST_DEFAULT_STATUS = ['Pågående', 'Bygglov/projektering', 'Kommande'];
+const HOME_LIST_DEFAULT_STATUS = ['Pågående', 'Bygglov/projektering', 'Kommande', 'Slutförd'];
+// Slutförd ska alltid vara ibockad från start: läggs till en gång i redan sparade statusval.
+function uiPrefsMigrera(){
+  if(uiPrefs.slutfordDefault) return false;
+  ['homeStatus', 'likvStatus', 'ekoProjektStatus', 'budgetStatus', 'markStatus', 'lanStatus', 'vinstStatus'].forEach(k => { if(Array.isArray(uiPrefs[k]) && !uiPrefs[k].includes('Slutförd')) uiPrefs[k].push('Slutförd'); });
+  uiPrefs.slutfordDefault = true;
+  return true;
+}
 const HOME_LIST_COLUMNS = [
   { k: 'name', label: 'Namn', left: true },
   { k: 'status', label: 'Status', left: true },
@@ -1396,6 +1403,7 @@ async function loadEkonomiData(){
       loadNyaProjektMall() // budgetstrukturen utgår från kalkylmallen
     ]);
     try{ uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; }
+    if(uiPrefsMigrera()) saveUiPrefs();
     companyEkonomiData = {
       meta: (meta && JSON.parse(meta.value)) || {},
       budgetDetalj: (budgetDetalj && JSON.parse(budgetDetalj.value)) || {},
@@ -13537,7 +13545,7 @@ async function init(){
   isEkonomiAdmin = myEmail === EKONOMI_ADMIN_EMAIL;
   document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
   if(isEkonomiAdmin) await loadEkonomiData();
-  else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } }
+  else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } if(uiPrefsMigrera()) saveUiPrefs(); }
   myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
   myPersonId = info.id;
   renderNameUI();
