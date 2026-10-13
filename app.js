@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261013124351';
+const APP_BUILD = '20261013124527';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4940,7 +4940,7 @@ function showEkonomiInsatserPopup(pid, title, items){
   const sorted = [...items].sort((a, b) => String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
-  table.style.cssText = 'width:100%; min-width:980px; white-space:nowrap;';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
   p.body.style.overflowX = 'auto';
   table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th style="text-align:left;">Beräknad försäljning</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
   const tbody = document.createElement('tbody');
