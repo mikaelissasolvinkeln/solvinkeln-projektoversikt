@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261014140944">
+<meta name="app-build" content="20261019150833">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -827,6 +827,7 @@
   .st-visninggenomford{ background:#DCEEE9; color:#2E6F63; }
   .st-tackatja{ background:#E4F0E8; color: var(--good); }
   .st-tackatnej{ background: var(--line-soft); color: var(--ink-soft); }
+  .st-annatprojekt{ background:#E3E9F6; color:#2F4A8A; }
   .intr-status-select{
     font-family:'Inter', sans-serif; font-size: 11.5px; padding: 4px 6px; border-radius: 6px;
     border: 1px solid var(--line-soft); background: var(--paper); color: var(--ink-soft); cursor:pointer;
@@ -2409,6 +2410,22 @@
   </div>
 </div>
 
+<div id="intrMoveModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h3>Intresserad av annat projekt</h3>
+    <p class="modal-sub" id="intrMoveSub"></p>
+    <div id="intrMoveError" class="intr-error" style="display:none;"></div>
+    <label class="field-label" for="intrMoveProjekt">Projekt kunden vill bli kontaktad om</label>
+    <select id="intrMoveProjekt"></select>
+    <label class="field-label" for="intrMoveNote" style="margin-top:10px;">Anteckning (valfritt)</label>
+    <input type="text" id="intrMoveNote" placeholder="t.ex. Vill ha 3 rok, ring när säljstart">
+    <div class="modal-actions">
+      <button id="intrMoveCancelBtn">Avbryt</button>
+      <button id="intrMoveSaveBtn">Flytta anmälan</button>
+    </div>
+  </div>
+</div>
+
 <div id="intrReasonModalOverlay" class="modal-overlay">
   <div class="modal-box">
     <h3>Tackat nej</h3>
@@ -2601,7 +2618,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261014140944"></script>
-<script src="app.js?v=20261014140944"></script>
+<script src="db.js?v=20261019150833"></script>
+<script src="app.js?v=20261019150833"></script>
 </body>
 </html>
