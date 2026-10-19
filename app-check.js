@@ -4930,16 +4930,18 @@ function ekoAptLabel(apt){
 // Markeringen skriver slutbetald i projektöversikten (samma fält), så beloppet
 // flyttar till inbetalningsmånaden om kunden betalade en annan månad.
 function showEkonomiInsatserPopup(pid, title, items){
-  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 860 });
+  const p = ekoPopup({ title, sub: 'Preliminära datum följer med från Inflyttningsinformation men kan ändras här (påverkar bara prognosen). Ett bekräftat datum låser månaden. Markera när inbetalningen skett – då blir beloppet svart.', maxWidth: 1140 });
   if(!items.length){ p.body.innerHTML = '<p class="eko-sub">Inga bostäder.</p>'; return; }
   const today = new Date().toISOString().slice(0, 10);
   const prog = ekonomiPrognosRec(pid);
   const pending = {}; // aptId -> 'YYYY-MM' | '' (ändringar som sparas med "Applicera ändringar")
   const pendingF = {}; // aptId -> beräknad försäljningsmånad för osålda
-  const sorted = [...items].sort((a, b) => String(a.manad || '').localeCompare(String(b.manad || '')) || String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
+  // Sorterat på lägenhetsnummer.
+  const sorted = [...items].sort((a, b) => String(a.apt.lgh || '').localeCompare(String(b.apt.lgh || ''), 'sv', { numeric: true }));
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
-  table.style.cssText = 'width:100%; white-space:nowrap;';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  p.body.style.overflowX = 'auto';
   table.innerHTML = '<thead><tr><th style="text-align:left;">LGH</th><th style="text-align:left;">Månad i prognosen</th><th style="text-align:left;">Datum</th><th style="text-align:left;">Beräknad försäljning</th><th>Belopp</th><th style="text-align:left;">Inbetalning</th></tr></thead>';
   const tbody = document.createElement('tbody');
   table.appendChild(tbody);
@@ -11219,11 +11221,11 @@ function ensureAddRow(){
 // (Projekt-nivans Ekonomi-flik, SIE-import/budgetjamforelse mot budget, borttagen.)
 // ---------- Intresseanmälningar ----------
 const INTR_STORAGE_KEY = 'intresseanmalningar-v1';
-const STATUS_KEYS = ['Ny','Kontaktad','Ingen kontakt','Visning bokad','Visning genomförd','Tackat ja','Tackat nej'];
+const STATUS_KEYS = ['Ny','Kontaktad','Ingen kontakt','Visning bokad','Visning genomförd','Tackat ja','Tackat nej','Annat projekt'];
 const STATUS_CLASS = {
   'Ny': 'st-ny', 'Kontaktad': 'st-kontaktad', 'Ingen kontakt': 'st-ingenkontakt',
   'Visning bokad': 'st-visningbokad', 'Visning genomförd': 'st-visninggenomford',
-  'Tackat ja': 'st-tackatja', 'Tackat nej': 'st-tackatnej'
+  'Tackat ja': 'st-tackatja', 'Tackat nej': 'st-tackatnej', 'Annat projekt': 'st-annatprojekt'
 };
 const VISNINGSANSVARIGA = ['Mikael','Rebecka','Saman','David'];
 const KONTAKTMETODER = ['E-post','SMS','Samtal'];
@@ -11333,7 +11335,7 @@ function renderAllIntrViews(){
   if(screen === 'project' && projectSubView === 'intressenter') renderIntressenterTab();
 }
 
-const STRUKEN_STATUSES = ['Tackat ja', 'Tackat nej', 'Ingen kontakt'];
+const STRUKEN_STATUSES = ['Tackat ja', 'Tackat nej', 'Ingen kontakt', 'Annat projekt'];
 function isStruken(entry){ return STRUKEN_STATUSES.includes(entry.status); }
 
 function computeIntrFiltered(lockedProject, search, projektFilter, statusFilter, showHandled, showStruken){
@@ -11411,6 +11413,18 @@ function renderIntrRow(entry){
     const note = document.createElement('div');
     note.className = 'intr-note';
     note.textContent = entry.anteckningar;
+    main.appendChild(note);
+  }
+  if(entry.status === 'Annat projekt' && entry.flyttadTill){
+    const note = document.createElement('div');
+    note.className = 'intr-note';
+    note.textContent = 'Intresserad av ' + entry.flyttadTill + ' i stället' + (entry.flyttadDatum ? ' (' + entry.flyttadDatum + ')' : '') + ' – ligger som ny anmälan där.';
+    main.appendChild(note);
+  }
+  if(entry.flyttadFran){
+    const note = document.createElement('div');
+    note.className = 'intr-note';
+    note.textContent = 'Var tidigare intresserad av ' + entry.flyttadFran + (entry.flyttadDatum ? ' · flyttad hit ' + entry.flyttadDatum : '') + '.';
     main.appendChild(note);
   }
   if(entry.status === 'Tackat nej' && entry.avslagsanledning){
@@ -11545,6 +11559,7 @@ function openIntressenScreen(){
 // ---------- Status-ändringar ----------
 function setIntrStatus(entry, status){
   if(status === 'Tackat nej'){ openIntrReasonModal(entry); return; }
+  if(status === 'Annat projekt'){ openIntrMoveModal(entry); return; }
   if(status === 'Kontaktad'){ openIntrContactModal(entry); return; }
   if(status === 'Visning bokad'){ openIntrViewingModal(entry); return; }
   applyIntrStatus(entry, status, {});
@@ -11557,6 +11572,49 @@ async function applyIntrStatus(entry, status, extra){
   await persistInterests();
 }
 
+// Kunden vill i stället bli kontaktad om ett annat projekt: originalet får status "Annat projekt"
+// (struken i det gamla projektet) och en ny anmälan med status Ny skapas i det valda projektet,
+// med namn, kontaktuppgifter och kontakthistorik medföljande.
+function openIntrMoveModal(entry){
+  intrMoveEntryId = entry.id;
+  const sel = document.getElementById('intrMoveProjekt');
+  sel.innerHTML = '<option value="">Välj projekt…</option>' + projects.filter(p => p.name !== entry.projekt).map(p => '<option value="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + '</option>').join('');
+  document.getElementById('intrMoveSub').textContent = (entry.namn || 'Kunden') + ' är anmäld på ' + (entry.projekt || '–') + '. Välj vilket projekt kunden vill bli kontaktad om i stället.';
+  document.getElementById('intrMoveNote').value = '';
+  document.getElementById('intrMoveError').style.display = 'none';
+  document.getElementById('intrMoveModalOverlay').classList.add('open');
+}
+function closeIntrMoveModal(){
+  document.getElementById('intrMoveModalOverlay').classList.remove('open');
+  intrMoveEntryId = null;
+  renderAllIntrViews();
+}
+let intrMoveEntryId = null;
+document.getElementById('intrMoveCancelBtn').onclick = closeIntrMoveModal;
+document.getElementById('intrMoveModalOverlay').addEventListener('click', e => { if(e.target.id === 'intrMoveModalOverlay') closeIntrMoveModal(); });
+document.getElementById('intrMoveSaveBtn').onclick = async () => {
+  const target = document.getElementById('intrMoveProjekt').value;
+  const err = document.getElementById('intrMoveError');
+  if(!target){ err.textContent = 'Välj ett projekt.'; err.style.display = 'block'; return; }
+  const entry = interests.find(e => e.id === intrMoveEntryId);
+  if(!entry){ closeIntrMoveModal(); return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const note = document.getElementById('intrMoveNote').value.trim();
+  const copy = Object.assign({}, entry, {
+    id: uid(), projekt: target, status: 'Ny', hanterad: false, datum: today,
+    avslagsanledning: '', visningsdatum: '', visningstid: '', visningsansvarig: '',
+    flyttadFran: entry.projekt || '', flyttadTill: '', flyttadDatum: today,
+    kontakthistorik: (entry.kontakthistorik || []).map(h => Object.assign({}, h)),
+    anteckningar: [note, entry.anteckningar].filter(Boolean).join('\n')
+  });
+  interests.unshift(copy);
+  Object.assign(entry, { status: 'Annat projekt', hanterad: true, flyttadTill: target, flyttadDatum: today });
+  document.getElementById('intrMoveModalOverlay').classList.remove('open');
+  intrMoveEntryId = null;
+  renderAllIntrViews();
+  await persistInterests();
+  showToast((entry.namn || 'Kunden') + ' ligger nu som ny anmälan på ' + target + '.');
+};
 function openIntrReasonModal(entry){
   intrReasonEntryId = entry.id;
   document.getElementById('intrReasonInput').value = entry.avslagsanledning || '';
