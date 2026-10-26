@@ -47,3 +47,10 @@ create policy "public read when shared" on nya_projekt
   for select using (is_public = true);
 
 alter publication supabase_realtime add table nya_projekt;
+
+-- Från 2026-10-30 ger Supabase inte längre nya tabeller i "public" automatisk
+-- åtkomst via Data API. anon behöver select för den publika delningslänken
+-- (RLS-policyn "public read when shared" begränsar sen till delade rader).
+grant select on nya_projekt to anon;
+grant select, insert, update, delete on nya_projekt to authenticated;
+grant select, insert, update, delete on nya_projekt to service_role;
