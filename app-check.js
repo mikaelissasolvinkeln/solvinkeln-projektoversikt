@@ -2193,7 +2193,7 @@ function parseLonelista(buf){
     const row = (grid[i] || []).map(v => String(v == null ? '' : v).toLowerCase());
     const nc = row.findIndex(v => /namn|anställd|person/.test(v));
     const lc = row.findIndex(v => /brutto|lön|lon|salary/.test(v) && !/netto/.test(v));
-    if(nc >= 0 || lc >= 0){ nameCol = nc; lonCol = lc; start = i + 1; break; }
+    if(nc >= 0 && lc >= 0 && nc !== lc){ nameCol = nc; lonCol = lc; start = i + 1; break; } // rubrikrad kräver både namn- och lönkolumn (en titelrad som "Bruttolönelista oktober" räknas inte)
   }
   const rows = [];
   for(let i = start; i < grid.length; i++){
