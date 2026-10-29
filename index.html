@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261029141808">
+<meta name="app-build" content="20261029142018">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1229,18 +1229,11 @@
     </div>
 
     <div id="ekonomiKoncernLanView" style="display:none;">
-      <p class="eko-sub" style="margin:0 0 10px;">Koncernens lån: långivare, låntagare (bolag eller förening i koncernen), saldo, ränta och upplupen ränta (räknas dagligen, klicka på beloppet för att ange ackumulerat läge) samt förfallodatum.</p>
       <div class="contract-upload-row">
-        <button type="button" id="ekoKoncernLanBrBtn" class="upload-btn">📄 Läs in lån från BR (PDF)</button>
-        <input type="file" id="ekoKoncernLanBrInput" accept="application/pdf" style="display:none;">
-        <span id="ekoKoncernLanBrStatus" class="contract-upload-status"></span>
+        <button type="button" id="ekoKoncernLanFilBtn" class="upload-btn">📄 Läs in fil (BR-PDF eller SIE)</button>
+        <input type="file" id="ekoKoncernLanFilInput" accept=".pdf,.se,.si,.sie,.txt,application/pdf" multiple style="display:none;">
+        <span id="ekoKoncernLanFilStatus" class="contract-upload-status"></span>
       </div>
-      <div class="contract-upload-row">
-        <button type="button" id="ekoKoncernLanSieBtn" class="upload-btn">📥 Läs in SIE-fil från Fortnox</button>
-        <input type="file" id="ekoKoncernLanSieInput" accept=".se,.si,.sie,.txt" multiple style="display:none;">
-        <span id="ekoKoncernLanSieStatus" class="contract-upload-status"></span>
-      </div>
-      <p class="eko-sub" style="margin:0 0 10px;">Fortnox: Register → Exportera → SIE 4 (transaktioner) för bolaget eller föreningen. Ange kontonumret på lånet i kolumnen Konto, så bokas alla rörelser på kontot automatiskt och saldot uppdateras. Flera filer kan väljas samtidigt.</p>
       <datalist id="ekoKoncernPartList"></datalist>
       <div class="table-scroll">
         <table class="eko-compare-table" style="width:100%;">
@@ -2639,7 +2632,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261029141808"></script>
-<script src="app.js?v=20261029141808"></script>
+<script src="db.js?v=20261029142018"></script>
+<script src="app.js?v=20261029142018"></script>
 </body>
 </html>
