@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029133141';
+const APP_BUILD = '20261029133634';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1605,6 +1605,31 @@ function ekonomiKoncernLanRanta(l, perDatum){
   const perDag = ekonomiKoncernLanSaldo(l) * ((parseFloat(l.ranta) || 0) / 100) / 365;
   return { belopp: (ack.belopp || 0) + perDag * dagar, dagar, perDag, ack };
 }
+// Räntebetalningsplan på ett koncernlån: l.rantePlan = [{ id, manad, belopp, klart, datum, betaltBelopp }].
+// Planerade poster ligger preliminärt (rött) i sin månad; betalda i betalmånaden med faktiskt belopp.
+function ekonomiKoncernLanRantePlan(l){ if(!Array.isArray(l.rantePlan)) l.rantePlan = []; return l.rantePlan; }
+function ekonomiKoncernLanRantePlanPer(l, months){
+  const per = {}, prelim = {}; const set = new Set(months);
+  ekonomiKoncernLanRantePlan(l).forEach(b => {
+    const m = b.klart ? String(b.datum || '').slice(0, 7) : b.manad;
+    const v = b.klart ? (b.betaltBelopp != null ? b.betaltBelopp : b.belopp) : b.belopp;
+    if(!m || !set.has(m) || !v) return;
+    per[m] = (per[m] || 0) + v;
+    if(!b.klart) prelim[m] = true;
+  });
+  return { per, prelim };
+}
+// Koncernlån vars låntagare är ett visst projekt (förening) eller en viss aktör (bolag).
+function ekonomiKoncernLanForPart(namn){
+  if(!namn) return [];
+  return ekonomiKoncernList('_lan').filter(l => l.lantagare && sieBolagMatchar(l.lantagare, namn) && ekonomiKoncernLanRantePlan(l).length);
+}
+// Rader till projektets likviditetsprognos (Finansiering): en per koncernlån med räntebetalningsplan.
+function ekonomiKoncernLanRantePlanRows(pid, months){
+  const p = projects.find(x => x.id === pid);
+  if(!p) return [];
+  return ekonomiKoncernLanForPart(p.name).map(l => Object.assign({ key: 'klan:' + l.id, namn: 'Ränta ' + (l.langivare || 'koncernlån') + ' (betalningsplan)', any: true }, ekonomiKoncernLanRantePlanPer(l, months))).filter(r => Object.keys(r.per).length);
+}
 function showEkonomiKoncernLanRantaPopup(l){
   const r = ekonomiKoncernLanRanta(l);
   const p = ekoPopup({ title: 'Upplupen ränta · ' + (l.langivare || 'Lån') + (l.lantagare ? ' (' + l.lantagare + ')' : ''), sub: 'Ange hur mycket ränta som är ackumulerad per ett datum. Därefter räknas räntan upp dagligen på saldot med räntesatsen. Utan angivet belopp räknas från 0 kr den 1 oktober 2026.', maxWidth: 560 });
@@ -1632,6 +1657,79 @@ function showEkonomiKoncernLanRantaPopup(l){
     await saveEkonomiKoncern(); p.close(); renderEkonomiKoncernLan();
   }, true));
   p.body.appendChild(form);
+  // Räntebetalningsplan: när räntan ska betalas och med hur mycket. Betald ränta med datum
+  // slår igenom i likviditetsprognosen (låntagarens projekt eller aktörens koncernlikviditet) och minskar upplupen ränta.
+  const planBox = document.createElement('div');
+  planBox.style.cssText = 'margin-top:18px; padding-top:12px; border-top:1px solid var(--line-soft);';
+  planBox.innerHTML = '<div style="font-weight:700; margin-bottom:6px;">Räntebetalningsplan</div><p class="eko-sub" style="margin:0 0 8px;">Planerade betalningar ligger preliminärt (rött) i likviditetsprognosen för ' + escapeHtml(l.lantagare || 'låntagaren') + '. Markera betald med datum och faktiskt belopp – då blir den svart och dras av från upplupen ränta.</p>';
+  const planList = document.createElement('div');
+  planBox.appendChild(planList);
+  const plan = ekonomiKoncernLanRantePlan(l);
+  const inpCss = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+  const refresh = async () => { await saveEkonomiKoncern(); renderEkonomiKoncernLan(); if(typeof renderEkonomiPrognos === 'function' && document.getElementById('ekoPrognosWrap') && currentEkonomiLikviditetProjectId) renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern(); };
+  const renderPlan = () => {
+    planList.innerHTML = '';
+    if(!plan.length) planList.innerHTML = '<p class="eko-sub">Ingen plan ännu – skapa en nedan eller lägg till rader.</p>';
+    plan.slice().sort((a, b) => String(a.manad).localeCompare(String(b.manad))).forEach(b => {
+      const left = document.createElement('div'); left.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+      const mon = document.createElement('input'); mon.type = 'month'; mon.value = b.manad || ''; mon.style.cssText = inpCss; mon.disabled = !!b.klart;
+      mon.onchange = async () => { b.manad = mon.value; await refresh(); renderPlan(); };
+      left.appendChild(mon);
+      if(b.klart){ const t = document.createElement('span'); t.style.cssText = 'font-size:11px; color:var(--good, #2e7d32);'; t.textContent = 'Betald ' + (b.datum || '') + ' · ' + formatKrFull(b.betaltBelopp != null ? b.betaltBelopp : b.belopp); left.appendChild(t); }
+      else { const t = document.createElement('span'); t.style.cssText = 'font-size:11px; color:var(--danger);'; t.textContent = 'Preliminär'; left.appendChild(t); }
+      const right = document.createElement('div'); right.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;';
+      const amt = document.createElement('input'); amt.type = 'number'; amt.value = b.klart ? (b.betaltBelopp != null ? b.betaltBelopp : b.belopp) : (b.belopp || ''); amt.placeholder = 'Belopp (kr)';
+      amt.style.cssText = 'width:120px; text-align:right; ' + inpCss; amt.disabled = !!b.klart;
+      amt.onchange = async () => { b.belopp = parseFloat(String(amt.value).replace(',', '.')) || 0; await refresh(); renderPlan(); };
+      right.appendChild(amt);
+      if(!b.klart){
+        const date = document.createElement('input'); date.type = 'date'; date.style.cssText = inpCss;
+        const today = new Date().toISOString().slice(0, 10);
+        date.value = b.manad && b.manad > today.slice(0, 7) ? b.manad + '-01' : today;
+        right.appendChild(date);
+        right.appendChild(ekoSmallBtn('Markera betald', async () => {
+          if(!date.value){ showToast('Ange datum.'); return; }
+          const betalt = parseFloat(String(amt.value).replace(',', '.')) || 0;
+          if(!betalt){ showToast('Ange belopp.'); return; }
+          b.klart = true; b.datum = date.value; b.betaltBelopp = betalt; b.by = myName || '';
+          // Upplupen ränta per betaldatum minskar med det betalda beloppet.
+          const upp = ekonomiKoncernLanRanta(l, date.value).belopp;
+          l.rantaAck = { belopp: Math.max(0, upp - betalt), datum: date.value, by: myName || '', at: new Date().toISOString() };
+          await refresh(); p.close(); showEkonomiKoncernLanRantaPopup(l);
+          showToast(formatKrFull(betalt) + ' ränta markerad som betald ' + date.value + '.');
+        }));
+      } else {
+        right.appendChild(ekoSmallBtn('Ångra', async () => { if(!confirm('Ångra markeringen betald? Upplupen ränta justeras inte tillbaka automatiskt.')) return; b.klart = false; b.datum = ''; delete b.betaltBelopp; await refresh(); renderPlan(); }));
+      }
+      right.appendChild(ekoSmallBtn('Ta bort', async () => { if(!confirm('Ta bort raden ur planen?')) return; l.rantePlan = plan.filter(x => x !== b); await refresh(); p.close(); showEkonomiKoncernLanRantaPopup(l); }, true));
+      planList.appendChild(ekoPopupLine(left, right));
+    });
+    const kvar = plan.filter(b => !b.klart).reduce((s2, b) => s2 + (b.belopp || 0), 0), betalt = plan.filter(b => b.klart).reduce((s2, b) => s2 + (b.betaltBelopp != null ? b.betaltBelopp : b.belopp || 0), 0);
+    if(plan.length) planList.appendChild(ekoPopupLine('Betalt ' + formatKrFull(betalt) + ' · planerat kvar ' + formatKrFull(kvar), '', { muted: true }));
+  };
+  renderPlan();
+  const gen = document.createElement('div');
+  gen.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap;';
+  const nextM = ekonomiPrognosMonths(new Date().toISOString().slice(0, 7), 2)[1];
+  const from = document.createElement('input'); from.type = 'month'; from.value = nextM; from.style.cssText = inpCss; from.title = 'Första betalmånad';
+  const to = document.createElement('input'); to.type = 'month'; to.value = l.forfallodatum ? l.forfallodatum.slice(0, 7) : ekonomiPrognosMonths(nextM, 12)[11]; to.style.cssText = inpCss; to.title = 'Sista betalmånad';
+  const freq = document.createElement('select'); freq.className = 'eko-inline-select'; freq.innerHTML = '<option value="1">Varje månad</option><option value="3">Varje kvartal</option><option value="6">Halvår</option><option value="12">Årsvis</option>';
+  const perManad = ekonomiKoncernLanSaldo(l) * ((parseFloat(l.ranta) || 0) / 100) / 12;
+  gen.appendChild(document.createTextNode('Från ')); gen.appendChild(from); gen.appendChild(document.createTextNode(' till ')); gen.appendChild(to); gen.appendChild(freq);
+  gen.appendChild(ekoSmallBtn('Skapa plan', async () => {
+    if(!from.value || !to.value || to.value < from.value){ showToast('Ange från- och till-månad.'); return; }
+    const step = parseInt(freq.value, 10);
+    if(plan.some(b => !b.klart) && !confirm('Ersätta de preliminära raderna i planen? Betalda rader behålls.')) return;
+    const kept = plan.filter(b => b.klart);
+    let m = from.value; const out = [];
+    while(m <= to.value){ out.push({ id: uid(), manad: m, belopp: Math.round(perManad * step), klart: false, datum: '' }); m = ekonomiPrognosMonths(m, step + 1)[step]; }
+    l.rantePlan = kept.concat(out);
+    await refresh(); p.close(); showEkonomiKoncernLanRantaPopup(l);
+  }));
+  gen.appendChild(ekoSmallBtn('+ Lägg till rad', async () => { plan.push({ id: uid(), manad: nextM, belopp: Math.round(perManad), klart: false, datum: '' }); await refresh(); p.close(); showEkonomiKoncernLanRantaPopup(l); }));
+  const hint = document.createElement('div'); hint.style.cssText = 'font-size:11px; color:var(--ink-soft); margin-top:4px;'; hint.textContent = 'Beloppet föreslås som saldo × ränta / 12 per månad' + (perManad ? ' (' + formatKrFull(Math.round(perManad)) + ')' : ' – ange ränta % först') + '.';
+  planBox.appendChild(gen); planBox.appendChild(hint);
+  p.body.appendChild(planBox);
 }
 function renderEkonomiKoncernLan(){
   ekonomiKoncernRefreshPartList();
@@ -1685,9 +1783,36 @@ function renderEkonomiKoncernLan(){
     sum += ekonomiKoncernLanSaldo(l); sumRanta += (parseFloat(l.ranta) || l.rantaAck) ? ekonomiKoncernLanRanta(l).belopp : 0;
     tbody.appendChild(tr);
   });
+  // Projektens externa lån (Kameo, Sparbanken, Triol) följer med automatiskt: långivare = banken,
+  // låntagare = föreningen. Saldot kommer från projektets Lån-flik och ändras där. Lån från
+  // Solvinkeln, NBE, Derome och BORO tas inte med här (koncerninterna).
+  const EXTERNA_LAN = [['lanKameo', 'Kameo'], ['lanSparbanken', 'Sparbanken'], ['lanTriol', 'Triol']];
+  const idag = new Date().toISOString().slice(0, 10);
+  let autoN = 0;
+  ekonomiSortedProjects().forEach(p => {
+    const lanRec = companyEkonomiData.lan[p.id] || {};
+    EXTERNA_LAN.forEach(([key, namn]) => {
+      const d = ekonomiLanDetalj(p.id, key, false);
+      const saldo = d ? ekonomiLanSaldoPer(d, idag) : (lanRec[key] || 0);
+      if(!saldo) return;
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'background:var(--paper-soft, #f6f4ef); cursor:pointer;';
+      tr.title = 'Från projektets Lån-flik – klicka för att öppna';
+      tr.onclick = () => { if(typeof openEkonomiProjektLan === 'function') openEkonomiProjektLan(p); };
+      const forfall = lanRec[key + 'Forfallodatum'] || '';
+      const rantaTxt = d && d.ranta != null && d.ranta !== '' ? String(d.ranta).replace('.', ',') + ' %' : '—';
+      tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(namn) + '<div style="font-size:10px; color:var(--ink-soft);">projektets Lån-flik</div></td>' +
+        '<td style="text-align:left;">' + escapeHtml(p.name) + '</td><td></td>' +
+        '<td>' + formatKrFull(saldo) + '</td><td>' + rantaTxt + '</td><td>—</td>' +
+        '<td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>' +
+        '<td style="text-align:left; font-size:11px; color:var(--ink-soft);">Saldo enligt Lån-fliken' + (d ? ' · ' + d.tx.length + ' bokningar' : '') + '</td><td></td>';
+      tbody.appendChild(tr);
+      sum += saldo; autoN++;
+    });
+  });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + (list.length + autoN) + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
 }
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
@@ -2071,7 +2196,7 @@ async function ekonomiPrognosLikviditetPerManad(pid, wantedMonths){
   const inb = ekonomiPrognosInbetalningar(pid, start, months);
   const struktur = ekonomiBudgetStruktur(pid);
   const lanFields = EKONOMI_TAB_CONFIG.lan.fields.filter(f => f.dated);
-  const ranta = lanFields.map(f => ekonomiPrognosRanta(pid, f.key, months));
+  const ranta = lanFields.map(f => ekonomiPrognosRanta(pid, f.key, months)).concat(ekonomiKoncernLanRantePlanRows(pid, months));
   const out = {};
   let saldo = (companyEkonomiData.likviditet[pid] && companyEkonomiData.likviditet[pid].belopp) || 0;
   months.forEach(m => {
@@ -2254,8 +2379,16 @@ async function renderEkonomiKoncern(){
       });
       addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
     });
+    // Räntebetalningsplaner på koncernlån där aktören är låntagare: utbetalningar i aktörens likviditet.
+    ekonomiKoncernLanForPart(a.namn).forEach(l => {
+      const rp = ekonomiKoncernLanRantePlanPer(l, months);
+      if(!Object.keys(rp.per).length) return;
+      const cells = months.map(m => { const v = rp.per[m] || 0; sum[m] -= v; const sp = sumCell(-v); if(v && rp.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Räntebetalningsplan · klicka på upplupen ränta under Lån för att ändra'; return sp; });
+      addRow('Ränta ' + (l.langivare || 'koncernlån') + ' (betalningsplan)', ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (rp.per[m] || 0), 0))]), { indent: 18 });
+    });
     const addBtn = document.createElement('button');
     addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
+
     addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
     addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; const flera = confirm('Ska posten även räknas med när flera aktörer visas tillsammans? OK = ja, gäller flera aktörer. Avbryt = nej, bara ' + a.namn + '.'); rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {}, flera }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
     addRow(addBtn, ['', ''].concat(blanks, ['']), { indent: 18 });
@@ -6084,7 +6217,7 @@ function renderEkonomiPrognos(){
   };
 
   // Ränta på lånebokningar i prognosen: en rad per lån under Finansiering.
-  const rantaRows = lanFields.map(f => Object.assign({ key: f.key, namn: 'Ränta ' + f.label.replace(' (kr)', '') }, ekonomiPrognosRanta(pid, f.key, months))).filter(r => r.any);
+  const rantaRows = lanFields.map(f => Object.assign({ key: f.key, namn: 'Ränta ' + f.label.replace(' (kr)', '') }, ekonomiPrognosRanta(pid, f.key, months))).filter(r => r.any).concat(ekonomiKoncernLanRantePlanRows(pid, months));
   const grupper = struktur.kostnadsgrupper.slice();
   let finGroup = grupper.find(gr => /finansiering/i.test(gr.grupp || ''));
   if(rantaRows.length && !finGroup){ finGroup = { id: 'prognos-finansiering', grupp: 'Finansiering', poster: [] }; grupper.push(finGroup); }
@@ -6183,7 +6316,7 @@ function renderEkonomiPrognos(){
       const cells = months.map(m => {
         const sp = document.createElement('span');
         sp.textContent = cell(r.per[m] || 0);
-        sp.title = 'Beräknad ränta på lånebokningar i prognosen' + (r.prelim[m] ? ' (preliminära bokningar)' : '');
+        sp.title = (/^klan:/.test(r.key) ? 'Räntebetalningsplan på koncernlånet (Koncern → Lån)' : 'Beräknad ränta på lånebokningar i prognosen') + (r.prelim[m] ? ' (preliminärt)' : '');
         if(r.prelim[m]) sp.style.color = 'var(--danger)';
         return sp;
       });
