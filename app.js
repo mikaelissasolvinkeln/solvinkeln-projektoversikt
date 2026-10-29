@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029134620';
+const APP_BUILD = '20261029135409';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1455,7 +1455,7 @@ async function openCompanyEkonomi(){
 // Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
 const EKONOMI_TAB_GROUPS = {
   projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
-  koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån']]
+  koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']]
 };
 function ekonomiTabGroupOf(view){
   return Object.keys(EKONOMI_TAB_GROUPS).find(g => EKONOMI_TAB_GROUPS[g].some(x => x[0] === view)) || null;
@@ -2084,6 +2084,190 @@ function showEkonomiKoncernLanHistorik(l){
   p.body.appendChild(ekoPopupLine('Saldo nu', formatKrFull(ekonomiKoncernLanSaldo(l)), { bold: true }));
   if(l.sie && l.sie.ub != null && Math.abs(l.sie.ub - ekonomiKoncernLanSaldo(l)) > 0.5) p.body.appendChild(ekoPopupLine('<span style="color:var(--danger);">UB enligt SIE-filen</span>', formatKrFull(l.sie.ub)));
 }
+// ---------- Koncern: Kostnader per bolag ----------
+// koncern._kostnader = [{ id, bolag, poster: [{ id, kategori, namn, belopp (kr/mån), anteckning,
+//   lon: { rader:[{namn, brutto}], ag, sem, pension, fil, datum } }] }]
+// Kostnaderna för ett bolag som är en aktör (Solvinkeln, Derome …) dras varje månad i koncernlikviditeten.
+const EKONOMI_KOSTNAD_KATEGORIER = ['Anställda', 'Bilar', 'Lokalhyra', 'Försäkringar', 'IT/telefoni', 'Revision/redovisning', 'Marknadsföring', 'Räntor/avgifter', 'Övrigt'];
+function ekonomiKoncernKostnadBolag(){ return ekonomiKoncernList('_kostnader'); }
+function ekonomiKoncernKostnadSumma(b){ return (b.poster || []).reduce((s, p) => s + (p.belopp || 0), 0); }
+// Månadskostnad för en part (aktör eller förening) – summerar alla bolagsblock med matchande namn.
+function ekonomiKoncernKostnadPerManad(namn){
+  return ekonomiKoncernKostnadBolag().filter(b => b.bolag && sieBolagMatchar(b.bolag, namn)).reduce((s, b) => s + ekonomiKoncernKostnadSumma(b), 0);
+}
+// Lönekostnad: bruttolön × (1 + semestertillägg) × (1 + arbetsgivaravgift) + pension × (1 + särskild löneskatt 24,26 %).
+function ekonomiLonKostnad(brutto, lon){
+  const ag = (parseFloat(lon.ag) || 0) / 100, sem = (parseFloat(lon.sem) || 0) / 100, pen = (parseFloat(lon.pension) || 0) / 100;
+  return brutto * (1 + sem) * (1 + ag) + brutto * pen * 1.2426;
+}
+function ekonomiLonTotal(lon){ return (lon.rader || []).reduce((s, r) => s + ekonomiLonKostnad(r.brutto || 0, lon), 0); }
+function renderEkonomiKoncernKostnader(){
+  const wrap = document.getElementById('ekoKoncernKostnaderWrap');
+  if(!wrap) return;
+  ekonomiKoncernRefreshPartList();
+  wrap.innerHTML = '';
+  const bolag = ekonomiKoncernKostnadBolag();
+  if(!bolag.length) wrap.innerHTML = '<p class="eko-sub">Inga bolag upplagda än. Klicka "+ Lägg till bolag" och välj t.ex. Solvinkeln Fastigheter, Prosavio eller en förening.</p>';
+  let totManad = 0;
+  bolag.forEach(b => {
+    if(!Array.isArray(b.poster)) b.poster = [];
+    const sec = document.createElement('div');
+    sec.className = 'eko-section'; sec.style.marginBottom = '22px';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px;';
+    const h = document.createElement('h3'); h.style.cssText = 'margin:0; font-family:\'Fraunces\',serif; font-size:17px; cursor:pointer;'; h.textContent = b.bolag || 'Bolag'; h.title = 'Klicka för att byta namn';
+    h.onclick = async () => { const nytt = prompt('Bolagets namn:', b.bolag || ''); if(nytt === null) return; b.bolag = nytt.trim() || b.bolag; await saveEkonomiKoncern(); renderEkonomiKoncernKostnader(); };
+    head.appendChild(h);
+    const isAktor = EKONOMI_KONCERN_AKTORER.some(a => sieBolagMatchar(a.namn, b.bolag));
+    const tag = document.createElement('span'); tag.className = 'eko-sub'; tag.style.margin = '0';
+    tag.textContent = isAktor ? 'Dras varje månad i koncernlikviditeten' : 'Visas här (ingen aktör i koncernlikviditeten)';
+    head.appendChild(tag);
+    const lonBtn = document.createElement('button'); lonBtn.type = 'button'; lonBtn.className = 'upload-btn'; lonBtn.textContent = '📄 Läs in bruttolönelista (Excel)'; lonBtn.style.marginLeft = 'auto';
+    lonBtn.onclick = () => { ekoKoncernLonTarget = b.id; document.getElementById('ekoKoncernLonInput').click(); };
+    head.appendChild(lonBtn);
+    const delB = document.createElement('button'); delB.type = 'button'; delB.className = 'remove-btn'; delB.textContent = '✕'; delB.title = 'Ta bort bolaget och dess kostnader';
+    delB.onclick = async () => { if(!confirm('Ta bort ' + (b.bolag || 'bolaget') + ' med alla kostnader?')) return; companyEkonomiData.koncern._kostnader = bolag.filter(x => x.id !== b.id); await saveEkonomiKoncern(); renderEkonomiKoncernKostnader(); };
+    head.appendChild(delB);
+    sec.appendChild(head);
+    const scroll = document.createElement('div'); scroll.className = 'table-scroll';
+    const table = document.createElement('table'); table.className = 'eko-compare-table'; table.style.width = '100%';
+    table.innerHTML = '<colgroup><col style="width:20%;"><col style="width:26%;"><col style="width:150px;"><col style="width:150px;"><col><col style="width:44px;"></colgroup><thead><tr><th style="text-align:left;">Kategori</th><th style="text-align:left;">Post</th><th>Kr/mån</th><th>Kr/år</th><th style="text-align:left;">Anteckning</th><th></th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    b.poster.forEach(post => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+      const sel = document.createElement('select'); sel.className = 'eko-inline-select';
+      sel.innerHTML = EKONOMI_KOSTNAD_KATEGORIER.map(k => '<option value="' + k + '">' + k + '</option>').join('');
+      sel.value = EKONOMI_KOSTNAD_KATEGORIER.includes(post.kategori) ? post.kategori : 'Övrigt';
+      sel.onchange = async () => { post.kategori = sel.value; await saveEkonomiKoncern(); };
+      tr.children[0].appendChild(sel);
+      ekonomiKoncernTextCell(tr.children[1], post.namn, async v => { post.namn = v; await saveEkonomiKoncern(); }, 'Beskrivning');
+      if(post.lon && post.lon.rader){
+        const sp = document.createElement('span'); sp.className = 'editable'; sp.style.cursor = 'pointer';
+        sp.textContent = formatKrFull(Math.round(post.belopp || 0));
+        sp.title = post.lon.rader.length + ' anställda · bruttolön ' + formatKrFull(post.lon.rader.reduce((s, r) => s + (r.brutto || 0), 0)) + ' · klicka för detaljer';
+        sp.onclick = () => showEkonomiKoncernLonPopup(b, post, null);
+        tr.children[2].appendChild(sp);
+        const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = post.lon.rader.length + ' anställda · inkl. AG ' + String(post.lon.ag).replace('.', ',') + ' %'; tr.children[2].appendChild(d);
+      } else {
+        likviditetsbudgetEditableCell(tr.children[2], post.belopp || null, async v => { post.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernKostnader(); });
+      }
+      tr.children[3].textContent = formatKrFull(Math.round((post.belopp || 0) * 12));
+      tr.children[3].style.color = 'var(--ink-soft)';
+      ekonomiKoncernTextCell(tr.children[4], post.anteckning, async v => { post.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
+      del.onclick = async () => { if(!confirm('Ta bort posten ' + (post.namn || post.kategori) + '?')) return; b.poster = b.poster.filter(x => x.id !== post.id); await saveEkonomiKoncern(); renderEkonomiKoncernKostnader(); };
+      tr.children[5].appendChild(del);
+      tbody.appendChild(tr);
+    });
+    const sum = ekonomiKoncernKostnadSumma(b); totManad += sum;
+    const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
+    tot.innerHTML = '<td>Summa ' + escapeHtml(b.bolag || '') + '</td><td></td><td>' + formatKrFull(Math.round(sum)) + '</td><td>' + formatKrFull(Math.round(sum * 12)) + '</td><td></td><td></td>';
+    tbody.appendChild(tot);
+    table.appendChild(tbody); scroll.appendChild(table); sec.appendChild(scroll);
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'add-inline-btn'; add.style.marginTop = '8px'; add.textContent = '+ Lägg till kostnad';
+    add.onclick = async () => { b.poster.push({ id: uid(), kategori: 'Övrigt', namn: '', belopp: 0, anteckning: '' }); await saveEkonomiKoncern(); renderEkonomiKoncernKostnader(); };
+    sec.appendChild(add);
+    wrap.appendChild(sec);
+  });
+  if(bolag.length > 1){
+    const t = document.createElement('p'); t.style.cssText = 'font-weight:700; margin-top:6px;';
+    t.textContent = 'Alla bolag: ' + formatKrFull(Math.round(totManad)) + ' per månad · ' + formatKrFull(Math.round(totManad * 12)) + ' per år';
+    wrap.appendChild(t);
+  }
+}
+let ekoKoncernLonTarget = null;
+document.getElementById('ekoKoncernKostnadAddBolag').onclick = async () => {
+  const namn = prompt('Bolag eller förening (t.ex. Solvinkeln Fastigheter, Prosavio, Brf Aktrisen):', '');
+  if(namn === null || !namn.trim()) return;
+  ekonomiKoncernKostnadBolag().push({ id: uid(), bolag: namn.trim(), poster: [] });
+  await saveEkonomiKoncern(); renderEkonomiKoncernKostnader();
+};
+// Bruttolönelista (Excel): kolumner med namn och bruttolön hittas automatiskt (rubrik "namn"/"lön"/"brutto",
+// annars första textkolumnen och första talkolumnen). Varje rad = en anställd.
+function parseLonelista(buf){
+  const wb = XLSX.read(buf, { type: 'array' });
+  const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: null, raw: true });
+  let nameCol = -1, lonCol = -1, start = 0;
+  for(let i = 0; i < Math.min(grid.length, 10); i++){
+    const row = (grid[i] || []).map(v => String(v == null ? '' : v).toLowerCase());
+    const nc = row.findIndex(v => /namn|anställd|person/.test(v));
+    const lc = row.findIndex(v => /brutto|lön|lon|salary/.test(v) && !/netto/.test(v));
+    if(nc >= 0 && lc >= 0 && nc !== lc){ nameCol = nc; lonCol = lc; start = i + 1; break; } // rubrikrad kräver både namn- och lönkolumn (en titelrad som "Bruttolönelista oktober" räknas inte)
+  }
+  const rows = [];
+  for(let i = start; i < grid.length; i++){
+    const row = grid[i] || [];
+    if(!row.some(v => v != null && v !== '')) continue;
+    let nc = nameCol, lc = lonCol;
+    if(nc < 0) nc = row.findIndex(v => typeof v === 'string' && v.trim() && isNaN(parseFloat(String(v).replace(/\s/g, '').replace(',', '.'))));
+    if(lc < 0) lc = row.findIndex((v, j) => j !== nc && v != null && v !== '' && !isNaN(parseFloat(String(v).replace(/\s/g, '').replace(',', '.'))));
+    const namn = nc >= 0 && row[nc] != null ? String(row[nc]).trim() : '';
+    const brutto = lc >= 0 ? parseFloat(String(row[lc]).replace(/\s/g, '').replace(',', '.')) : NaN;
+    if(/summa|total/i.test(namn)) continue;
+    if(!namn || isNaN(brutto) || brutto <= 0) continue;
+    rows.push({ namn, brutto: Math.round(brutto) });
+  }
+  return rows;
+}
+function showEkonomiKoncernLonPopup(b, post, nyaRader, filnamn){
+  const lon = post && post.lon ? Object.assign({ ag: 31.42, sem: 0, pension: 0, rader: [] }, post.lon) : { ag: 31.42, sem: 0, pension: 0, rader: [] };
+  if(nyaRader) { lon.rader = nyaRader; lon.fil = filnamn || ''; lon.datum = new Date().toISOString().slice(0, 10); }
+  const p = ekoPopup({ title: 'Anställda · ' + (b.bolag || ''), sub: 'Bruttolön per månad per anställd. Kostnaden räknas som bruttolön × (1 + semestertillägg) × (1 + arbetsgivaravgift) + pension × 1,2426 (särskild löneskatt). Ändra procentsatserna vid behov.', maxWidth: 760 });
+  const params = document.createElement('div'); params.style.cssText = 'display:flex; gap:14px; flex-wrap:wrap; margin-bottom:10px; font-size:12.5px;';
+  const mk = (label, key, step) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:6px; align-items:center;'; const i = document.createElement('input'); i.type = 'number'; i.step = step || '0.01'; i.value = lon[key]; i.style.cssText = 'width:80px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:3px 6px;'; i.onchange = () => { lon[key] = parseFloat(i.value.replace(',', '.')) || 0; render(); }; l.appendChild(document.createTextNode(label)); l.appendChild(i); l.appendChild(document.createTextNode('%')); params.appendChild(l); };
+  mk('Arbetsgivaravgift', 'ag'); mk('Semestertillägg', 'sem'); mk('Pension', 'pension');
+  p.body.appendChild(params);
+  const table = document.createElement('table'); table.className = 'eko-compare-table'; table.style.cssText = 'width:100%; table-layout:auto;';
+  table.innerHTML = '<thead><tr><th style="text-align:left;">Anställd</th><th>Bruttolön/mån</th><th>Kostnad/mån</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody'); table.appendChild(tbody);
+  const render = () => {
+    tbody.innerHTML = '';
+    lon.rader.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td style="text-align:left;"></td><td></td><td style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(Math.round(ekonomiLonKostnad(r.brutto || 0, lon))) + '</td><td class="row-actions"></td>';
+      const ni = document.createElement('input'); ni.type = 'text'; ni.value = r.namn; ni.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:3px 6px; font-size:12.5px;'; ni.onchange = () => { r.namn = ni.value.trim(); };
+      tr.children[0].appendChild(ni);
+      const bi = document.createElement('input'); bi.type = 'number'; bi.value = r.brutto; bi.style.cssText = 'width:110px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:3px 6px; font-size:12.5px;'; bi.onchange = () => { r.brutto = parseFloat(bi.value) || 0; render(); };
+      tr.children[1].appendChild(bi);
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.onclick = () => { lon.rader = lon.rader.filter(x => x !== r); render(); };
+      tr.children[3].appendChild(del);
+      tbody.appendChild(tr);
+    });
+    const brutto = lon.rader.reduce((s, r) => s + (r.brutto || 0), 0);
+    const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
+    tot.innerHTML = '<td style="text-align:left;">Summa ' + lon.rader.length + ' anställda</td><td style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(brutto) + '</td><td style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(Math.round(ekonomiLonTotal(lon))) + '</td><td></td>';
+    tbody.appendChild(tot);
+  };
+  render();
+  p.body.appendChild(table);
+  const addRow = ekoSmallBtn('+ Lägg till anställd', () => { lon.rader.push({ namn: '', brutto: 0 }); render(); });
+  addRow.style.marginTop = '8px'; p.body.appendChild(addRow);
+  if(lon.fil){ const f = document.createElement('p'); f.className = 'eko-sub'; f.style.marginTop = '8px'; f.textContent = 'Lönelista: ' + lon.fil + (lon.datum ? ' · ' + lon.datum : ''); p.body.appendChild(f); }
+  const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = post ? 'Spara' : 'Lägg upp som kostnad Anställda'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = async () => {
+    const total = Math.round(ekonomiLonTotal(lon));
+    if(!post){ post = { id: uid(), kategori: 'Anställda', namn: 'Löner inkl. arbetsgivaravgift', anteckning: '' }; b.poster.push(post); }
+    post.lon = lon; post.belopp = total;
+    await saveEkonomiKoncern(); p.close(); renderEkonomiKoncernKostnader();
+    showToast('Anställda: ' + formatKrFull(total) + ' per månad för ' + lon.rader.length + ' anställda.');
+  };
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
+document.getElementById('ekoKoncernLonInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const b = ekonomiKoncernKostnadBolag().find(x => x.id === ekoKoncernLonTarget);
+  try{
+    if(!b) throw new Error('Inget bolag valt.');
+    const rows = parseLonelista(await file.arrayBuffer());
+    if(!rows.length) throw new Error('Hittade inga rader med namn och bruttolön i filen.');
+    const existing = b.poster.find(p => p.lon && p.lon.rader);
+    if(existing && !confirm('Det finns redan en lönelista för ' + b.bolag + ' (' + existing.lon.rader.length + ' anställda). Ersätta den med filens ' + rows.length + ' rader?')) return;
+    showEkonomiKoncernLonPopup(b, existing || null, rows, file.name);
+  }catch(err){ showDebugError('Kunde inte läsa lönelistan', err); showToast('Kunde inte läsa lönelistan: ' + (err.message || err)); }
+  finally{ e.target.value = ''; }
+});
 document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
   ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
@@ -2100,6 +2284,7 @@ function setEkonomiSubView(view){
   ekonomiRenderSubTabs2(view, tabGroup);
   document.getElementById('ekonomiKoncernFordranView').style.display = view === 'koncernfordran' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernLanView').style.display = view === 'koncernlan' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernKostnaderView').style.display = view === 'koncernkostnader' ? 'block' : 'none';
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
@@ -2122,6 +2307,7 @@ function setEkonomiSubView(view){
   else if(view === 'koncern') renderEkonomiKoncern();
   else if(view === 'koncernfordran') renderEkonomiKoncernFordran();
   else if(view === 'koncernlan') renderEkonomiKoncernLan();
+  else if(view === 'koncernkostnader') renderEkonomiKoncernKostnader();
   else renderEkonomiNumberTab(view);
 }
 
@@ -2379,6 +2565,8 @@ async function renderEkonomiKoncern(){
       });
       addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
     });
+    // Kostnader (Koncern → Kostnader) för bolaget: samma belopp varje månad.
+    { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader (Kostnader-fliken)', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
     // Räntebetalningsplaner på koncernlån där aktören är låntagare: utbetalningar i aktörens likviditet.
     ekonomiKoncernLanForPart(a.namn).forEach(l => {
       const rp = ekonomiKoncernLanRantePlanPer(l, months);
