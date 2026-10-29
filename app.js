@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029142643';
+const APP_BUILD = '20261029142742';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1580,7 +1580,7 @@ async function ekonomiKoncernFordranSpara(f, oldPid){
 }
 // Parter i koncernen som ett lån kan vara utställt mot: bolagen (aktörerna) och föreningarna (projekten).
 // Övriga bolag i koncernen som kan vara part (moderbolag m.m.) utan att vara aktör i koncernlikviditeten.
-const EKONOMI_KONCERN_EXTRA_PARTER = ['Prosavio AB'];
+const EKONOMI_KONCERN_EXTRA_PARTER = [];
 function ekonomiKoncernParter(){
   const bolag = EKONOMI_KONCERN_AKTORER.map(a => a.namn).concat(EKONOMI_KONCERN_EXTRA_PARTER);
   const foreningar = ekonomiSortedProjects().map(p => p.name);
@@ -2352,7 +2352,9 @@ const EKONOMI_KONCERN_AKTORER = [
   { key: 'lanSolvinkeln', namn: 'Solvinkeln' },
   { key: 'lanDerome', namn: 'Derome' },
   { key: 'lanNBE', namn: 'NBE' },
-  { key: 'lanBORO', namn: 'BORO' }
+  { key: 'lanBORO', namn: 'BORO' },
+  // Moderbolag till Solvinkeln Fastigheter AB: egen kassa, egna poster, kostnader och lån, men inga lånefält i projekten.
+  { key: 'lanProsavio', namn: 'Prosavio AB' }
 ];
 // Koncerndata (delad): companyEkonomiData.koncern[aktorKey] = { ingaende: kr, poster: [{ id, namn, per: { 'YYYY-MM': kr } }] }
 function ekonomiKoncernRec(key){
