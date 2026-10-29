@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029131938';
+const APP_BUILD = '20261029133141';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1595,6 +1595,44 @@ function ekonomiKoncernPartCell(td, value, onSave){
   inp.onchange = () => onSave(inp.value.trim());
   td.appendChild(inp);
 }
+// Upplupen ränta på ett koncernlån: ackumulerat belopp per ett datum (anges i popupen, annars
+// 0 kr per 2026-10-01) plus daglig ränta på nuvarande saldo fram till idag (ränta % per år / 365).
+const EKONOMI_KONCERN_RANTA_START = '2026-10-01';
+function ekonomiKoncernLanRanta(l, perDatum){
+  const today = perDatum || new Date().toISOString().slice(0, 10);
+  const ack = l.rantaAck && l.rantaAck.datum ? l.rantaAck : { belopp: 0, datum: EKONOMI_KONCERN_RANTA_START };
+  const dagar = Math.max(0, Math.round((new Date(today + 'T00:00:00') - new Date(ack.datum + 'T00:00:00')) / 86400000));
+  const perDag = ekonomiKoncernLanSaldo(l) * ((parseFloat(l.ranta) || 0) / 100) / 365;
+  return { belopp: (ack.belopp || 0) + perDag * dagar, dagar, perDag, ack };
+}
+function showEkonomiKoncernLanRantaPopup(l){
+  const r = ekonomiKoncernLanRanta(l);
+  const p = ekoPopup({ title: 'Upplupen ränta · ' + (l.langivare || 'Lån') + (l.lantagare ? ' (' + l.lantagare + ')' : ''), sub: 'Ange hur mycket ränta som är ackumulerad per ett datum. Därefter räknas räntan upp dagligen på saldot med räntesatsen. Utan angivet belopp räknas från 0 kr den 1 oktober 2026.', maxWidth: 560 });
+  p.body.appendChild(ekoPopupLine('Saldo', formatKrFull(ekonomiKoncernLanSaldo(l))));
+  p.body.appendChild(ekoPopupLine('Ränta', (l.ranta != null && l.ranta !== '' ? String(l.ranta).replace('.', ',') : '–') + ' % per år · ' + formatKrFull(Math.round(r.perDag)) + ' per dag'));
+  p.body.appendChild(ekoPopupLine('Ackumulerat per ' + r.ack.datum, formatKrFull(Math.round(r.ack.belopp || 0)), { muted: true }));
+  p.body.appendChild(ekoPopupLine('+ ' + r.dagar + ' dagar sedan dess', formatKrFull(Math.round(r.perDag * r.dagar)), { muted: true }));
+  p.body.appendChild(ekoPopupLine('Upplupen ränta idag', formatKrFull(Math.round(r.belopp)), { bold: true }));
+  const form = document.createElement('div');
+  form.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:14px; flex-wrap:wrap;';
+  const date = document.createElement('input'); date.type = 'date'; date.value = new Date().toISOString().slice(0, 10);
+  date.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  const inp = document.createElement('input'); inp.type = 'number'; inp.placeholder = 'Ackumulerad ränta (kr)'; inp.value = Math.round(r.belopp) || '';
+  inp.style.cssText = 'width:200px; text-align:right; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  form.appendChild(date); form.appendChild(inp);
+  form.appendChild(ekoSmallBtn('Spara ackumulerad ränta', async () => {
+    if(!date.value){ showToast('Ange datum.'); return; }
+    l.rantaAck = { belopp: parseFloat(String(inp.value).replace(',', '.')) || 0, datum: date.value, by: myName || '', at: new Date().toISOString() };
+    await saveEkonomiKoncern(); p.close(); renderEkonomiKoncernLan();
+    showToast('Ackumulerad ränta ' + formatKrFull(l.rantaAck.belopp) + ' per ' + date.value + ' sparad.');
+  }));
+  form.appendChild(ekoSmallBtn('Ränta betald – nollställ', async () => {
+    if(!confirm('Sätta ackumulerad ränta till 0 kr per ' + date.value + '?')) return;
+    l.rantaAck = { belopp: 0, datum: date.value, by: myName || '', at: new Date().toISOString() };
+    await saveEkonomiKoncern(); p.close(); renderEkonomiKoncernLan();
+  }, true));
+  p.body.appendChild(form);
+}
 function renderEkonomiKoncernLan(){
   ekonomiKoncernRefreshPartList();
   const list = ekonomiKoncernList('_lan');
@@ -1603,7 +1641,7 @@ function renderEkonomiKoncernLan(){
   let sum = 0, sumRanta = 0;
   list.forEach(l => {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
     ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
     ekonomiKoncernPartCell(tr.children[1], l.lantagare, async v => { l.lantagare = v; await saveEkonomiKoncern(); });
     // Konto i låntagarens bokföring (t.ex. 2393) – kopplingen som SIE-inläsningen använder.
@@ -1623,19 +1661,33 @@ function renderEkonomiKoncernLan(){
     } else {
       likviditetsbudgetEditableCell(tr.children[3], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
     }
-    likviditetsbudgetEditableCell(tr.children[4], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
-    ekonomiKoncernDateCell(tr.children[5], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
-    ekonomiKoncernTextCell(tr.children[6], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    // Ränta i procent per år.
+    const rInp = document.createElement('input');
+    rInp.type = 'number'; rInp.step = '0.01'; rInp.className = 'eko-inline-input'; rInp.style.cssText = 'text-align:center; width:70px;'; rInp.placeholder = '%';
+    rInp.value = l.ranta != null && l.ranta !== '' ? l.ranta : '';
+    rInp.onchange = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+    tr.children[4].appendChild(rInp);
+    // Upplupen ränta: räknas dagligen, klick för att ange ackumulerat belopp per datum.
+    const ra = ekonomiKoncernLanRanta(l);
+    const raSp = document.createElement('span');
+    raSp.className = 'editable'; raSp.style.cursor = 'pointer';
+    raSp.textContent = (parseFloat(l.ranta) || l.rantaAck) ? formatKrFull(Math.round(ra.belopp)) : '—';
+    raSp.title = 'Ackumulerat ' + formatKrFull(Math.round(ra.ack.belopp || 0)) + ' per ' + ra.ack.datum + ' + ' + ra.dagar + ' dagar à ' + formatKrFull(Math.round(ra.perDag)) + ' · klicka för att ange';
+    raSp.onclick = () => showEkonomiKoncernLanRantaPopup(l);
+    tr.children[5].appendChild(raSp);
+    if(l.rantaAck && l.rantaAck.datum){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'ack. per ' + l.rantaAck.datum; tr.children[5].appendChild(d); }
+    ekonomiKoncernDateCell(tr.children[6], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[7], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
     del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[7].appendChild(del);
-    sum += ekonomiKoncernLanSaldo(l); sumRanta += l.rantebelopp || 0;
+    tr.children[8].appendChild(del);
+    sum += ekonomiKoncernLanSaldo(l); sumRanta += (parseFloat(l.ranta) || l.rantaAck) ? ekonomiKoncernLanRanta(l).belopp : 0;
     tbody.appendChild(tr);
   });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
 }
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
