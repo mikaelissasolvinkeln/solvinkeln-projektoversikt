@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029142018';
+const APP_BUILD = '20261029142643';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1499,6 +1499,7 @@ function ekonomiKoncernDateCell(td, value, onSave){
   td.appendChild(inp);
 }
 function renderEkonomiKoncernFordran(){
+  ekonomiKoncernRefreshPartList();
   // Solvinkelns fordringar mot projekten = saldot på Lån Solvinkeln i varje projekt (Lån-fliken).
   const pw = document.getElementById('ekoKoncernFordranProjekt');
   if(pw){
@@ -1536,7 +1537,7 @@ function renderEkonomiKoncernFordran(){
   list.forEach(f => {
     const tr = document.createElement('tr');
     tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
-    ekonomiKoncernTextCell(tr.children[0], f.motpart, async v => { f.motpart = v; await ekonomiKoncernFordranSpara(f, f.projektPid); }, 'Motpart');
+    ekonomiKoncernPartCell(tr.children[0], f.motpart, async v => { f.motpart = v; await ekonomiKoncernFordranSpara(f, f.projektPid); });
     // Projekt: en fordran mot ett bolag som i sin tur har fordran mot ett projekt bokas som
     // utökning av Lån Solvinkeln i projektet (och räknas därmed i IB, saldo, prognos och koncern).
     const sel = document.createElement('select');
@@ -1578,8 +1579,10 @@ async function ekonomiKoncernFordranSpara(f, oldPid){
   await saveEkonomiKoncern();
 }
 // Parter i koncernen som ett lån kan vara utställt mot: bolagen (aktörerna) och föreningarna (projekten).
+// Övriga bolag i koncernen som kan vara part (moderbolag m.m.) utan att vara aktör i koncernlikviditeten.
+const EKONOMI_KONCERN_EXTRA_PARTER = ['Prosavio AB'];
 function ekonomiKoncernParter(){
-  const bolag = EKONOMI_KONCERN_AKTORER.map(a => a.namn);
+  const bolag = EKONOMI_KONCERN_AKTORER.map(a => a.namn).concat(EKONOMI_KONCERN_EXTRA_PARTER);
   const foreningar = ekonomiSortedProjects().map(p => p.name);
   return bolag.concat(foreningar.filter(n => !bolag.includes(n)));
 }
