@@ -1783,9 +1783,36 @@ function renderEkonomiKoncernLan(){
     sum += ekonomiKoncernLanSaldo(l); sumRanta += (parseFloat(l.ranta) || l.rantaAck) ? ekonomiKoncernLanRanta(l).belopp : 0;
     tbody.appendChild(tr);
   });
+  // Projektens externa lån (Kameo, Sparbanken, Triol) följer med automatiskt: långivare = banken,
+  // låntagare = föreningen. Saldot kommer från projektets Lån-flik och ändras där. Lån från
+  // Solvinkeln, NBE, Derome och BORO tas inte med här (koncerninterna).
+  const EXTERNA_LAN = [['lanKameo', 'Kameo'], ['lanSparbanken', 'Sparbanken'], ['lanTriol', 'Triol']];
+  const idag = new Date().toISOString().slice(0, 10);
+  let autoN = 0;
+  ekonomiSortedProjects().forEach(p => {
+    const lanRec = companyEkonomiData.lan[p.id] || {};
+    EXTERNA_LAN.forEach(([key, namn]) => {
+      const d = ekonomiLanDetalj(p.id, key, false);
+      const saldo = d ? ekonomiLanSaldoPer(d, idag) : (lanRec[key] || 0);
+      if(!saldo) return;
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'background:var(--paper-soft, #f6f4ef); cursor:pointer;';
+      tr.title = 'Från projektets Lån-flik – klicka för att öppna';
+      tr.onclick = () => { if(typeof openEkonomiProjektLan === 'function') openEkonomiProjektLan(p); };
+      const forfall = lanRec[key + 'Forfallodatum'] || '';
+      const rantaTxt = d && d.ranta != null && d.ranta !== '' ? String(d.ranta).replace('.', ',') + ' %' : '—';
+      tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(namn) + '<div style="font-size:10px; color:var(--ink-soft);">projektets Lån-flik</div></td>' +
+        '<td style="text-align:left;">' + escapeHtml(p.name) + '</td><td></td>' +
+        '<td>' + formatKrFull(saldo) + '</td><td>' + rantaTxt + '</td><td>—</td>' +
+        '<td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>' +
+        '<td style="text-align:left; font-size:11px; color:var(--ink-soft);">Saldo enligt Lån-fliken' + (d ? ' · ' + d.tx.length + ' bokningar' : '') + '</td><td></td>';
+      tbody.appendChild(tr);
+      sum += saldo; autoN++;
+    });
+  });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + (list.length + autoN) + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
 }
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
