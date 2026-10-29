@@ -1603,23 +1603,39 @@ function renderEkonomiKoncernLan(){
   let sum = 0, sumRanta = 0;
   list.forEach(l => {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
     ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
     ekonomiKoncernPartCell(tr.children[1], l.lantagare, async v => { l.lantagare = v; await saveEkonomiKoncern(); });
-    likviditetsbudgetEditableCell(tr.children[2], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
-    likviditetsbudgetEditableCell(tr.children[3], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
-    ekonomiKoncernDateCell(tr.children[4], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
-    ekonomiKoncernTextCell(tr.children[5], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    // Konto i låntagarens bokföring (t.ex. 2393) – kopplingen som SIE-inläsningen använder.
+    const kontoInp = document.createElement('input');
+    kontoInp.type = 'text'; kontoInp.className = 'eko-inline-input'; kontoInp.style.cssText = 'text-align:center; width:70px;'; kontoInp.placeholder = 'konto'; kontoInp.value = l.konto || '';
+    kontoInp.title = 'Kontonummer hos låntagaren – SIE-filens rörelser på kontot bokas på lånet';
+    kontoInp.onchange = async () => { l.konto = kontoInp.value.trim(); await saveEkonomiKoncern(); };
+    tr.children[2].appendChild(kontoInp);
+    if(Array.isArray(l.tx) && l.tx.length || l.ib != null){
+      // Saldot styrs av SIE-rörelserna: visa det och öppna historiken vid klick.
+      const sp = document.createElement('span');
+      sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.textContent = formatKrFull(ekonomiKoncernLanSaldo(l));
+      sp.title = (l.tx || []).length + ' rörelser från SIE · klicka för historik';
+      sp.onclick = () => showEkonomiKoncernLanHistorik(l);
+      tr.children[3].appendChild(sp);
+      if(l.sie && l.sie.importerad){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'SIE ' + l.sie.importerad; tr.children[3].appendChild(d); }
+    } else {
+      likviditetsbudgetEditableCell(tr.children[3], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    }
+    likviditetsbudgetEditableCell(tr.children[4], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    ekonomiKoncernDateCell(tr.children[5], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[6], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
     del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[6].appendChild(del);
-    sum += l.belopp || 0; sumRanta += l.rantebelopp || 0;
+    tr.children[7].appendChild(del);
+    sum += ekonomiKoncernLanSaldo(l); sumRanta += l.rantebelopp || 0;
     tbody.appendChild(tr);
   });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
 }
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
@@ -1630,7 +1646,7 @@ function setEkonomiKoncernLanBrStatus(text, kind){
   el.textContent = text || '';
   el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
 }
-function showEkonomiKoncernLanBrPopup(rows, filename){
+function showEkonomiKoncernLanBrPopup(rows, filename, lantagarePrefill){
   const p = ekoPopup({ title: 'Lån från balansräkning', sub: 'Bocka i de konton som ska läggas upp som lån, ange långivare per rad och vilken part i koncernen (bolag eller förening) lånen är utställda mot. Skuldkonton (23xx/24xx, "lån", "kredit") är förbockade.', maxWidth: 900 });
   const top = document.createElement('div');
   top.style.cssText = 'display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;';
@@ -1640,6 +1656,7 @@ function showEkonomiKoncernLanBrPopup(rows, filename){
   part.style.cssText = 'width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
   const guess = ekonomiKoncernParter().find(n => (filename || '').toLowerCase().includes(n.toLowerCase().replace(/^brf /, '')));
   if(guess) part.value = guess;
+  if(lantagarePrefill) part.value = lantagarePrefill;
   top.appendChild(lbl); top.appendChild(part);
   p.body.appendChild(top);
   const table = document.createElement('table');
@@ -1652,7 +1669,7 @@ function showEkonomiKoncernLanBrPopup(rows, filename){
     const konto = String(r.konto || '').trim();
     const nr = (konto.match(/^\d{4}/) || [''])[0];
     const isLan = /^2[34]\d\d/.test(nr) || /lån|kredit|skuld.*(bank|kreditinstitut)|byggnadskredit/i.test(konto);
-    return { konto, belopp: Math.abs(r.belopp || 0), langivare: konto.replace(/^\d{4}\s*/, ''), valt: isLan && Math.abs(r.belopp || 0) > 0 };
+    return { konto, kontoNr: nr, belopp: Math.abs(r.belopp || 0), langivare: konto.replace(/^\d{4}\s*/, ''), valt: isLan && Math.abs(r.belopp || 0) > 0 };
   });
   const render = () => {
     tbody.innerHTML = '';
@@ -1685,7 +1702,7 @@ function showEkonomiKoncernLanBrPopup(rows, filename){
     if(!lantagare && !confirm('Ingen låntagare angiven. Lägga upp lånen utan part?')) return;
     const list = ekonomiKoncernList('_lan');
     const today = new Date().toISOString().slice(0, 10);
-    valda.forEach(s => list.push({ id: uid(), langivare: s.langivare || s.konto, lantagare, belopp: s.belopp, rantebelopp: 0, forfallodatum: '', anteckning: 'Från BR ' + (filename || '') + ' (' + today + ') · ' + s.konto }));
+    valda.forEach(s => list.push({ id: uid(), langivare: s.langivare || s.konto, lantagare, konto: s.kontoNr || '', belopp: s.belopp, rantebelopp: 0, forfallodatum: '', anteckning: 'Från BR ' + (filename || '') + ' (' + today + ') · ' + s.konto }));
     await saveEkonomiKoncern();
     p.close(); renderEkonomiKoncernLan();
     showToast(valda.length + ' lån upplagda' + (lantagare ? ' för ' + lantagare : '') + '.');
@@ -1717,6 +1734,179 @@ document.getElementById('ekoKoncernLanBrInput').addEventListener('change', async
     e.target.value = '';
   }
 });
+// ---------- SIE 4 (Fortnox): läs in lånerörelser till koncernens lån ----------
+// Varje lån kopplas till ett konto (t.ex. 2393) hos låntagaren. SIE-filen (en per bolag/förening
+// och räkenskapsår) ger ingående balans (#IB), utgående balans (#UB) och alla verifikationer
+// (#VER/#TRANS) på kontot. Skuldkonton: kredit (negativt i SIE) = skulden ökar, debet = amortering.
+// Saldot i appen visas som positiv skuld. Dubbletter undviks via serie + vernr + konto + belopp.
+const SIE_CP437 = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
+function sieDecode(buf){
+  const bytes = new Uint8Array(buf);
+  // UTF-8 om det går (nyare exporter), annars PC8/CP437 som SIE-standarden anger.
+  try{ const t = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if(!/#FORMAT\s+PC8/i.test(t) || !/[\x80-\xff]/.test(String.fromCharCode.apply(null, bytes.slice(0, 2000)))) return t; }catch(e){ /* inte utf-8 */ }
+  let s = '';
+  for(let i = 0; i < bytes.length; i++){ const b = bytes[i]; s += b < 0x80 ? String.fromCharCode(b) : SIE_CP437[b - 0x80]; }
+  return s;
+}
+// Delar upp en SIE-rad i fält: "citerade strängar", {objekt} och ord.
+function sieFields(line){
+  const out = []; let i = 0;
+  while(i < line.length){
+    const c = line[i];
+    if(c === ' ' || c === '\t'){ i++; continue; }
+    if(c === '"'){ let j = i + 1, s = ''; while(j < line.length && line[j] !== '"'){ if(line[j] === '\\' && line[j + 1] === '"'){ s += '"'; j += 2; continue; } s += line[j]; j++; } out.push(s); i = j + 1; continue; }
+    if(c === '{'){ const j = line.indexOf('}', i); out.push(line.slice(i, j < 0 ? line.length : j + 1)); i = j < 0 ? line.length : j + 1; continue; }
+    let j = i; while(j < line.length && line[j] !== ' ' && line[j] !== '\t') j++;
+    out.push(line.slice(i, j)); i = j;
+  }
+  return out;
+}
+function sieDate(s){ s = String(s || ''); return /^\d{8}$/.test(s) ? s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) : s; }
+function parseSie(text){
+  const res = { fnamn: '', orgnr: '', rar: null, konton: {}, ib: {}, ub: {}, trans: [] };
+  const lines = text.split(/\r?\n/);
+  let ver = null;
+  for(let li = 0; li < lines.length; li++){
+    const raw = lines[li].trim();
+    if(!raw) continue;
+    if(raw === '{'){ continue; }
+    if(raw === '}'){ ver = null; continue; }
+    const f = sieFields(raw);
+    const tag = (f[0] || '').toUpperCase();
+    if(tag === '#FNAMN') res.fnamn = f[1] || '';
+    else if(tag === '#ORGNR') res.orgnr = f[1] || '';
+    else if(tag === '#RAR' && f[1] === '0') res.rar = { start: sieDate(f[2]), slut: sieDate(f[3]) };
+    else if(tag === '#KONTO') res.konton[f[1]] = f[2] || '';
+    else if(tag === '#IB' && f[1] === '0') res.ib[f[2]] = parseFloat(f[3]) || 0;
+    else if(tag === '#UB' && f[1] === '0') res.ub[f[2]] = parseFloat(f[3]) || 0;
+    else if(tag === '#VER'){ ver = { serie: f[1] || '', vernr: f[2] || '', datum: sieDate(f[3]), text: f[4] || '' }; }
+    else if(tag === '#TRANS' && ver){
+      // #TRANS konto {objekt} belopp [transdat] [transtext]
+      let k = 2; if(f[k] && f[k][0] === '{') k++;
+      const belopp = parseFloat(f[k]) || 0;
+      const tdat = f[k + 1] && /^\d{8}$/.test(f[k + 1]) ? sieDate(f[k + 1]) : '';
+      const ttext = f[k + 1] && !/^\d{8}$/.test(f[k + 1]) ? f[k + 1] : (f[k + 2] || '');
+      res.trans.push({ konto: f[1], belopp, datum: tdat || ver.datum, text: ttext || ver.text, serie: ver.serie, vernr: ver.vernr, vertext: ver.text });
+    }
+  }
+  return res;
+}
+function sieNormName(s){ return String(s || '').toLowerCase().replace(/\b(brf|bostadsrättsföreningen|ab|fastigheter|holding)\b/g, '').replace(/[^a-z0-9åäö]/g, ''); }
+function sieBolagMatchar(lantagare, fnamn){
+  const a = sieNormName(lantagare), b = sieNormName(fnamn);
+  if(!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+function ekonomiKoncernLanSaldo(l){
+  if(Array.isArray(l.tx) && l.tx.length || l.ib != null){
+    const ib = l.ib || 0;
+    return ib - (l.tx || []).reduce((s, t) => s + (t.belopp || 0), 0);
+  }
+  return l.belopp || 0;
+}
+function setEkonomiKoncernLanSieStatus(text, kind){
+  const el = document.getElementById('ekoKoncernLanSieStatus');
+  if(!el) return;
+  el.textContent = text || '';
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+// Tillämpa en inläst SIE-fil på koncernens lån. Returnerar en sammanfattning per lån.
+function ekonomiKoncernLanApplySie(sie, filename){
+  const list = ekonomiKoncernList('_lan');
+  const result = { matched: [], nya: 0, unmatched: [] };
+  const konton = Object.keys(sie.ub).concat(Object.keys(sie.ib), sie.trans.map(t => t.konto)).filter((v, i, a) => v && a.indexOf(v) === i);
+  list.forEach(l => {
+    if(!l.konto) return;
+    const kontoNr = String(l.konto).trim();
+    if(!konton.includes(kontoNr)) return;
+    if(l.lantagare && sie.fnamn && !sieBolagMatchar(l.lantagare, sie.fnamn)) return; // annat bolag
+    if(!Array.isArray(l.tx)) l.tx = [];
+    const fore = ekonomiKoncernLanSaldo(l);
+    // IB från filen om lånet saknar IB eller om filens räkenskapsår börjar före lagrat IB-datum.
+    if(sie.ib[kontoNr] != null && (l.ib == null || !l.ibDatum || (sie.rar && sie.rar.start < l.ibDatum))){
+      l.ib = -sie.ib[kontoNr]; l.ibDatum = sie.rar ? sie.rar.start : '';
+      // Rörelser före det nya IB-datumet ingår i IB och tas bort.
+      if(l.ibDatum) l.tx = l.tx.filter(t => t.datum >= l.ibDatum);
+    }
+    let nya = 0;
+    sie.trans.filter(t => t.konto === kontoNr).forEach(t => {
+      const key = t.serie + ':' + t.vernr + ':' + t.konto + ':' + t.belopp;
+      if(l.tx.some(x => x.key === key)) return;
+      if(l.ibDatum && t.datum < l.ibDatum) return;
+      l.tx.push({ id: uid(), key, serie: t.serie, vernr: t.vernr, datum: t.datum, text: t.text || t.vertext || '', belopp: t.belopp, fil: filename });
+      nya++;
+    });
+    l.tx.sort((a, b) => a.datum.localeCompare(b.datum) || String(a.vernr).localeCompare(String(b.vernr), 'sv', { numeric: true }));
+    l.belopp = Math.round(ekonomiKoncernLanSaldo(l));
+    l.sie = { fnamn: sie.fnamn, rar: sie.rar, fil: filename, importerad: new Date().toISOString().slice(0, 10), ub: sie.ub[kontoNr] != null ? -sie.ub[kontoNr] : null };
+    if(!l.lantagare && sie.fnamn) l.lantagare = sie.fnamn;
+    if(!l.langivare && sie.konton[kontoNr]) l.langivare = sie.konton[kontoNr];
+    result.matched.push({ l, nya, fore, efter: l.belopp, ub: l.sie.ub });
+    result.nya += nya;
+  });
+  // Skuldkonton i filen som inte är kopplade till något lån (hos det här bolaget).
+  konton.filter(k => /^2[34]\d\d$/.test(k)).forEach(k => {
+    const bound = list.some(l => String(l.konto || '').trim() === k && (!l.lantagare || !sie.fnamn || sieBolagMatchar(l.lantagare, sie.fnamn)));
+    const ub = sie.ub[k] != null ? -sie.ub[k] : null;
+    if(!bound && ub) result.unmatched.push({ konto: k, namn: sie.konton[k] || '', ub });
+  });
+  return result;
+}
+function showEkonomiKoncernLanSieResultat(res, sie, filename){
+  const p = ekoPopup({ title: 'SIE-fil inläst: ' + (sie.fnamn || filename), sub: (sie.rar ? 'Räkenskapsår ' + sie.rar.start + ' – ' + sie.rar.slut + '. ' : '') + 'Saldot på varje kopplat lån räknas som ingående balans minus rörelserna på kontot. Klicka på beloppet i Lån-listan för att se historiken.', maxWidth: 820 });
+  if(!res.matched.length) p.body.appendChild(ekoPopupLine('<span style="color:var(--ink-soft);">Inget lån med matchande konto och låntagare. Koppla lånen till konto (kolumnen Konto) eller lägg upp dem nedan.</span>', ''));
+  res.matched.forEach(m => {
+    const diff = m.ub != null && Math.abs(m.ub - m.efter) > 0.5;
+    p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + escapeHtml(m.l.langivare || '—') + ' · konto ' + escapeHtml(m.l.konto) + ' (' + escapeHtml(m.l.lantagare || '') + ')</div><div style="font-size:11px; color:var(--ink-soft);">' + m.nya + ' nya rörelser · saldo före ' + formatKrFull(m.fore) + (diff ? ' · <span style="color:var(--danger);">UB i filen ' + formatKrFull(m.ub) + ' skiljer sig – kontrollera</span>' : '') + '</div>', formatKrFull(m.efter), { bold: true }));
+  });
+  if(res.unmatched.length){
+    const h = document.createElement('div'); h.style.cssText = 'margin-top:14px; font-weight:700; font-size:13px;'; h.textContent = 'Skuldkonton i filen utan kopplat lån';
+    p.body.appendChild(h);
+    const rows = res.unmatched.map(u => ({ konto: u.konto + ' ' + u.namn, belopp: -u.ub }));
+    res.unmatched.forEach(u => p.body.appendChild(ekoPopupLine('<span style="font-size:12.5px;">' + escapeHtml(u.konto + ' ' + u.namn) + '</span>', formatKrFull(u.ub), { muted: true })));
+    p.body.appendChild(ekoSmallBtn('Lägg upp som lån…', () => { p.close(); showEkonomiKoncernLanBrPopup(rows, sie.fnamn || filename, sie.fnamn); }));
+  }
+}
+document.getElementById('ekoKoncernLanSieBtn').onclick = () => { document.getElementById('ekoKoncernLanSieInput').click(); };
+document.getElementById('ekoKoncernLanSieInput').addEventListener('change', async (e) => {
+  const files = [...(e.target.files || [])];
+  if(!files.length) return;
+  const btn = document.getElementById('ekoKoncernLanSieBtn');
+  btn.disabled = true;
+  try{
+    let totNya = 0, totMatch = 0; let last = null;
+    for(const file of files){
+      setEkonomiKoncernLanSieStatus('Läser ' + file.name + '…');
+      const sie = parseSie(sieDecode(await file.arrayBuffer()));
+      if(!sie.trans.length && !Object.keys(sie.ub).length) throw new Error(file.name + ' ser inte ut som en SIE 4-fil (inga #VER/#UB-rader).');
+      const res = ekonomiKoncernLanApplySie(sie, file.name);
+      totNya += res.nya; totMatch += res.matched.length; last = { res, sie, file };
+    }
+    await saveEkonomiKoncern();
+    renderEkonomiKoncernLan();
+    setEkonomiKoncernLanSieStatus(files.length + ' fil' + (files.length > 1 ? 'er' : '') + ' inläst' + (files.length > 1 ? 'a' : '') + ' · ' + totMatch + ' lån uppdaterade · ' + totNya + ' nya rörelser.', 'ok');
+    if(last) showEkonomiKoncernLanSieResultat(last.res, last.sie, last.file.name);
+  }catch(err){
+    setEkonomiKoncernLanSieStatus('Kunde inte läsa SIE-filen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
+// Historik för ett lån: IB, alla rörelser från SIE och löpande saldo.
+function showEkonomiKoncernLanHistorik(l){
+  const p = ekoPopup({ title: (l.langivare || 'Lån') + (l.lantagare ? ' · ' + l.lantagare : ''), sub: 'Konto ' + (l.konto || '–') + (l.sie ? ' · senast inläst ' + l.sie.importerad + ' från ' + l.sie.fil : '') + '. Debet (plus i bokföringen) minskar skulden, kredit ökar den.', maxWidth: 760 });
+  let saldo = l.ib || 0;
+  p.body.appendChild(ekoPopupLine('Ingående balans' + (l.ibDatum ? ' ' + l.ibDatum : ''), formatKrFull(saldo), { bold: true }));
+  (l.tx || []).forEach(t => {
+    saldo -= t.belopp || 0;
+    const amort = (t.belopp || 0) > 0;
+    p.body.appendChild(ekoPopupLine('<div style="font-size:12.5px;">' + escapeHtml(t.datum) + ' · ' + escapeHtml(t.serie + t.vernr) + ' · ' + escapeHtml(t.text || '') + '</div>', '<span style="color:' + (amort ? 'var(--good, #2e7d32)' : 'var(--danger)') + ';">' + (amort ? '−' : '+') + formatKrFull(Math.abs(t.belopp || 0)) + '</span><span style="color:var(--ink-soft); min-width:120px; text-align:right; display:inline-block;">' + formatKrFull(saldo) + '</span>'));
+  });
+  if(!(l.tx || []).length) p.body.appendChild(ekoPopupLine('<span style="color:var(--ink-soft);">Inga rörelser inlästa än. Läs in en SIE-fil från Fortnox för ' + escapeHtml(l.lantagare || 'bolaget') + '.</span>', ''));
+  p.body.appendChild(ekoPopupLine('Saldo nu', formatKrFull(ekonomiKoncernLanSaldo(l)), { bold: true }));
+  if(l.sie && l.sie.ub != null && Math.abs(l.sie.ub - ekonomiKoncernLanSaldo(l)) > 0.5) p.body.appendChild(ekoPopupLine('<span style="color:var(--danger);">UB enligt SIE-filen</span>', formatKrFull(l.sie.ub)));
+}
 document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
   ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
