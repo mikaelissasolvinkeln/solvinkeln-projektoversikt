@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029135409';
+const APP_BUILD = '20261029141808';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1759,12 +1759,20 @@ function renderEkonomiKoncernLan(){
     } else {
       likviditetsbudgetEditableCell(tr.children[3], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
     }
-    // Ränta i procent per år.
-    const rInp = document.createElement('input');
-    rInp.type = 'number'; rInp.step = '0.01'; rInp.className = 'eko-inline-input'; rInp.style.cssText = 'text-align:center; width:70px;'; rInp.placeholder = '%';
-    rInp.value = l.ranta != null && l.ranta !== '' ? l.ranta : '';
-    rInp.onchange = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[4].appendChild(rInp);
+    // Ränta i procent per år: visas som "12 %", klick ger ett fält att skriva i.
+    const rSp = document.createElement('span');
+    rSp.className = 'editable'; rSp.style.cursor = 'pointer'; rSp.title = 'Klicka för att ange ränta % per år';
+    rSp.textContent = l.ranta != null && l.ranta !== '' ? String(l.ranta).replace('.', ',') + ' %' : '—';
+    rSp.onclick = () => {
+      const rInp = document.createElement('input');
+      rInp.type = 'number'; rInp.step = '0.01'; rInp.className = 'eko-inline-input'; rInp.style.cssText = 'text-align:center; width:70px;'; rInp.placeholder = '%';
+      rInp.value = l.ranta != null && l.ranta !== '' ? l.ranta : '';
+      const save = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+      rInp.onchange = save; rInp.onblur = () => { if(document.body.contains(rInp)) renderEkonomiKoncernLan(); };
+      rInp.onkeydown = e => { if(e.key === 'Enter') rInp.blur(); };
+      tr.children[4].innerHTML = ''; tr.children[4].appendChild(rInp); rInp.focus(); rInp.select();
+    };
+    tr.children[4].appendChild(rSp);
     // Upplupen ränta: räknas dagligen, klick för att ange ackumulerat belopp per datum.
     const ra = ekonomiKoncernLanRanta(l);
     const raSp = document.createElement('span');
