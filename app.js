@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261019150833';
+const APP_BUILD = '20261029121017';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1577,37 +1577,152 @@ async function ekonomiKoncernFordranSpara(f, oldPid){
   try{ await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }catch(e){ showDebugError('Kunde inte spara lånet', e); }
   await saveEkonomiKoncern();
 }
+// Parter i koncernen som ett lån kan vara utställt mot: bolagen (aktörerna) och föreningarna (projekten).
+function ekonomiKoncernParter(){
+  const bolag = EKONOMI_KONCERN_AKTORER.map(a => a.namn);
+  const foreningar = ekonomiSortedProjects().map(p => p.name);
+  return bolag.concat(foreningar.filter(n => !bolag.includes(n)));
+}
+function ekonomiKoncernRefreshPartList(){
+  const dl = document.getElementById('ekoKoncernPartList');
+  if(dl) dl.innerHTML = ekonomiKoncernParter().map(n => '<option value="' + escapeHtml(n) + '"></option>').join('');
+}
+function ekonomiKoncernPartCell(td, value, onSave){
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'eko-inline-input'; inp.style.textAlign = 'left';
+  inp.setAttribute('list', 'ekoKoncernPartList');
+  inp.value = value || ''; inp.placeholder = 'Bolag/förening';
+  inp.onchange = () => onSave(inp.value.trim());
+  td.appendChild(inp);
+}
 function renderEkonomiKoncernLan(){
+  ekonomiKoncernRefreshPartList();
   const list = ekonomiKoncernList('_lan');
   const tbody = document.getElementById('ekoKoncernLanBody');
   tbody.innerHTML = '';
   let sum = 0, sumRanta = 0;
   list.forEach(l => {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
     ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
-    likviditetsbudgetEditableCell(tr.children[1], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
-    likviditetsbudgetEditableCell(tr.children[2], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
-    ekonomiKoncernDateCell(tr.children[3], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
-    ekonomiKoncernTextCell(tr.children[4], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    ekonomiKoncernPartCell(tr.children[1], l.lantagare, async v => { l.lantagare = v; await saveEkonomiKoncern(); });
+    likviditetsbudgetEditableCell(tr.children[2], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    likviditetsbudgetEditableCell(tr.children[3], l.rantebelopp || null, async v => { l.rantebelopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+    ekonomiKoncernDateCell(tr.children[4], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[5], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
     del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[5].appendChild(del);
+    tr.children[6].appendChild(del);
     sum += l.belopp || 0; sumRanta += l.rantebelopp || 0;
     tbody.appendChild(tr);
   });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + list.length + ')</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(sumRanta) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
 }
+// Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
+// som ska bli lån, anger långivare per rad och vilken part i koncernen lånet är utställt mot.
+function setEkonomiKoncernLanBrStatus(text, kind){
+  const el = document.getElementById('ekoKoncernLanBrStatus');
+  if(!el) return;
+  el.textContent = text || '';
+  el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
+}
+function showEkonomiKoncernLanBrPopup(rows, filename){
+  const p = ekoPopup({ title: 'Lån från balansräkning', sub: 'Bocka i de konton som ska läggas upp som lån, ange långivare per rad och vilken part i koncernen (bolag eller förening) lånen är utställda mot. Skuldkonton (23xx/24xx, "lån", "kredit") är förbockade.', maxWidth: 900 });
+  const top = document.createElement('div');
+  top.style.cssText = 'display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;';
+  const lbl = document.createElement('label'); lbl.style.cssText = 'font-size:12.5px; color:var(--ink-soft);'; lbl.textContent = 'Låntagare (part i koncernen):';
+  const part = document.createElement('input');
+  part.type = 'text'; part.setAttribute('list', 'ekoKoncernPartList'); part.placeholder = 'Bolag/förening';
+  part.style.cssText = 'width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px;';
+  const guess = ekonomiKoncernParter().find(n => (filename || '').toLowerCase().includes(n.toLowerCase().replace(/^brf /, '')));
+  if(guess) part.value = guess;
+  top.appendChild(lbl); top.appendChild(part);
+  p.body.appendChild(top);
+  const table = document.createElement('table');
+  table.className = 'eko-compare-table';
+  table.style.cssText = 'width:100%; table-layout:auto;';
+  table.innerHTML = '<thead><tr><th style="width:36px;"></th><th style="text-align:left;">Konto i BR</th><th style="text-align:left;">Långivare</th><th>Belopp</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  const state = rows.map(r => {
+    const konto = String(r.konto || '').trim();
+    const nr = (konto.match(/^\d{4}/) || [''])[0];
+    const isLan = /^2[34]\d\d/.test(nr) || /lån|kredit|skuld.*(bank|kreditinstitut)|byggnadskredit/i.test(konto);
+    return { konto, belopp: Math.abs(r.belopp || 0), langivare: konto.replace(/^\d{4}\s*/, ''), valt: isLan && Math.abs(r.belopp || 0) > 0 };
+  });
+  const render = () => {
+    tbody.innerHTML = '';
+    state.forEach(s => {
+      const tr = document.createElement('tr');
+      if(!s.valt) tr.style.opacity = '0.55';
+      tr.innerHTML = '<td style="text-align:center;"></td><td style="text-align:left; font-size:12.5px;">' + escapeHtml(s.konto) + '</td><td style="text-align:left;"></td><td style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(s.belopp) + '</td>';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = s.valt;
+      cb.onchange = () => { s.valt = cb.checked; render(); };
+      tr.children[0].appendChild(cb);
+      const li = document.createElement('input'); li.type = 'text'; li.value = s.langivare; li.placeholder = 'Långivare';
+      li.style.cssText = 'width:100%; box-sizing:border-box; border:1px solid var(--line-soft); border-radius:5px; padding:3px 6px; font-size:12.5px;';
+      li.onchange = () => { s.langivare = li.value.trim(); };
+      tr.children[2].appendChild(li);
+      tbody.appendChild(tr);
+    });
+    const valda = state.filter(s => s.valt);
+    const sumTr = document.createElement('tr'); sumTr.className = 'eko-row-resultat';
+    sumTr.innerHTML = '<td></td><td style="text-align:left;">Valda: ' + valda.length + ' konton</td><td></td><td style="font-family:\'JetBrains Mono\',monospace;">' + formatKrFull(valda.reduce((a, s) => a + s.belopp, 0)) + '</td>';
+    tbody.appendChild(sumTr);
+  };
+  render();
+  p.body.appendChild(table);
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Lägg upp valda som lån'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
+  btn.onclick = async () => {
+    const valda = state.filter(s => s.valt);
+    if(!valda.length){ showToast('Bocka i minst ett konto.'); return; }
+    const lantagare = part.value.trim();
+    if(!lantagare && !confirm('Ingen låntagare angiven. Lägga upp lånen utan part?')) return;
+    const list = ekonomiKoncernList('_lan');
+    const today = new Date().toISOString().slice(0, 10);
+    valda.forEach(s => list.push({ id: uid(), langivare: s.langivare || s.konto, lantagare, belopp: s.belopp, rantebelopp: 0, forfallodatum: '', anteckning: 'Från BR ' + (filename || '') + ' (' + today + ') · ' + s.konto }));
+    await saveEkonomiKoncern();
+    p.close(); renderEkonomiKoncernLan();
+    showToast(valda.length + ' lån upplagda' + (lantagare ? ' för ' + lantagare : '') + '.');
+  };
+  p.actions.insertBefore(btn, p.actions.firstChild);
+}
+document.getElementById('ekoKoncernLanBrBtn').onclick = () => { document.getElementById('ekoKoncernLanBrInput').click(); };
+document.getElementById('ekoKoncernLanBrInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  if(file.size > CONTRACT_MAX_BYTES){ setEkonomiKoncernLanBrStatus('Filen är för stor (max 8 MB).', 'err'); e.target.value = ''; return; }
+  const btn = document.getElementById('ekoKoncernLanBrBtn');
+  btn.disabled = true;
+  setEkonomiKoncernLanBrStatus('Läser balansräkningen…');
+  try{
+    const pdfBase64 = await fileToBase64(file);
+    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+    const { data, error } = await sb.functions.invoke('extract-br', { body: { pdfBase64, filename: file.name } });
+    if(error) throw error;
+    const rows = (data && data.rows) || [];
+    if(!rows.length) throw new Error('Inga kontorader hittades i filen.');
+    setEkonomiKoncernLanBrStatus(rows.length + ' kontorader inlästa – välj vilka som ska bli lån.', 'ok');
+    showEkonomiKoncernLanBrPopup(rows, file.name);
+  }catch(err){
+    setEkonomiKoncernLanBrStatus('Kunde inte läsa balansräkningen: ' + (err.message || err), 'err');
+  }finally{
+    btn.disabled = false;
+    e.target.value = '';
+  }
+});
 document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
   ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
 };
 document.getElementById('ekoKoncernLanAdd').onclick = async () => {
-  ekonomiKoncernList('_lan').push({ id: uid(), langivare: '', belopp: 0, rantebelopp: 0, forfallodatum: '', anteckning: '' });
+  ekonomiKoncernList('_lan').push({ id: uid(), langivare: '', lantagare: '', belopp: 0, rantebelopp: 0, forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernLan();
 };
 
