@@ -1759,12 +1759,20 @@ function renderEkonomiKoncernLan(){
     } else {
       likviditetsbudgetEditableCell(tr.children[3], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
     }
-    // Ränta i procent per år.
-    const rInp = document.createElement('input');
-    rInp.type = 'number'; rInp.step = '0.01'; rInp.className = 'eko-inline-input'; rInp.style.cssText = 'text-align:center; width:70px;'; rInp.placeholder = '%';
-    rInp.value = l.ranta != null && l.ranta !== '' ? l.ranta : '';
-    rInp.onchange = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[4].appendChild(rInp);
+    // Ränta i procent per år: visas som "12 %", klick ger ett fält att skriva i.
+    const rSp = document.createElement('span');
+    rSp.className = 'editable'; rSp.style.cursor = 'pointer'; rSp.title = 'Klicka för att ange ränta % per år';
+    rSp.textContent = l.ranta != null && l.ranta !== '' ? String(l.ranta).replace('.', ',') + ' %' : '—';
+    rSp.onclick = () => {
+      const rInp = document.createElement('input');
+      rInp.type = 'number'; rInp.step = '0.01'; rInp.className = 'eko-inline-input'; rInp.style.cssText = 'text-align:center; width:70px;'; rInp.placeholder = '%';
+      rInp.value = l.ranta != null && l.ranta !== '' ? l.ranta : '';
+      const save = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+      rInp.onchange = save; rInp.onblur = () => { if(document.body.contains(rInp)) renderEkonomiKoncernLan(); };
+      rInp.onkeydown = e => { if(e.key === 'Enter') rInp.blur(); };
+      tr.children[4].innerHTML = ''; tr.children[4].appendChild(rInp); rInp.focus(); rInp.select();
+    };
+    tr.children[4].appendChild(rSp);
     // Upplupen ränta: räknas dagligen, klick för att ange ackumulerat belopp per datum.
     const ra = ekonomiKoncernLanRanta(l);
     const raSp = document.createElement('span');
@@ -1818,7 +1826,7 @@ function renderEkonomiKoncernLan(){
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
 // som ska bli lån, anger långivare per rad och vilken part i koncernen lånet är utställt mot.
 function setEkonomiKoncernLanBrStatus(text, kind){
-  const el = document.getElementById('ekoKoncernLanBrStatus');
+  const el = document.getElementById('ekoKoncernLanFilStatus');
   if(!el) return;
   el.textContent = text || '';
   el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
@@ -1886,31 +1894,20 @@ function showEkonomiKoncernLanBrPopup(rows, filename, lantagarePrefill){
   };
   p.actions.insertBefore(btn, p.actions.firstChild);
 }
-document.getElementById('ekoKoncernLanBrBtn').onclick = () => { document.getElementById('ekoKoncernLanBrInput').click(); };
-document.getElementById('ekoKoncernLanBrInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if(!file) return;
-  if(file.size > CONTRACT_MAX_BYTES){ setEkonomiKoncernLanBrStatus('Filen är för stor (max 8 MB).', 'err'); e.target.value = ''; return; }
-  const btn = document.getElementById('ekoKoncernLanBrBtn');
-  btn.disabled = true;
-  setEkonomiKoncernLanBrStatus('Läser balansräkningen…');
-  try{
-    const pdfBase64 = await fileToBase64(file);
-    const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
-    if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
-    const { data, error } = await sb.functions.invoke('extract-br', { body: { pdfBase64, filename: file.name } });
-    if(error) throw error;
-    const rows = (data && data.rows) || [];
-    if(!rows.length) throw new Error('Inga kontorader hittades i filen.');
-    setEkonomiKoncernLanBrStatus(rows.length + ' kontorader inlästa – välj vilka som ska bli lån.', 'ok');
-    showEkonomiKoncernLanBrPopup(rows, file.name);
-  }catch(err){
-    setEkonomiKoncernLanBrStatus('Kunde inte läsa balansräkningen: ' + (err.message || err), 'err');
-  }finally{
-    btn.disabled = false;
-    e.target.value = '';
-  }
-});
+// Balansräkning (PDF): kontoraderna läses med extract-br och visas i popupen för val av lån.
+async function ekonomiKoncernLanLasBr(file){
+  if(file.size > CONTRACT_MAX_BYTES){ setEkonomiKoncernLanBrStatus(file.name + ' är för stor (max 8 MB).', 'err'); return; }
+  setEkonomiKoncernLanBrStatus('Läser balansräkningen ' + file.name + '…');
+  const pdfBase64 = await fileToBase64(file);
+  const sb = window.DB && window.DB.hasSupabase ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+  if(!sb) throw new Error('Kräver att Supabase är påkopplat (fungerar inte i lokalt testläge)');
+  const { data, error } = await sb.functions.invoke('extract-br', { body: { pdfBase64, filename: file.name } });
+  if(error) throw error;
+  const rows = (data && data.rows) || [];
+  if(!rows.length) throw new Error('Inga kontorader hittades i ' + file.name + '.');
+  setEkonomiKoncernLanBrStatus(rows.length + ' kontorader inlästa – välj vilka som ska bli lån.', 'ok');
+  showEkonomiKoncernLanBrPopup(rows, file.name);
+}
 // ---------- SIE 4 (Fortnox): läs in lånerörelser till koncernens lån ----------
 // Varje lån kopplas till ett konto (t.ex. 2393) hos låntagaren. SIE-filen (en per bolag/förening
 // och räkenskapsår) ger ingående balans (#IB), utgående balans (#UB) och alla verifikationer
@@ -1982,7 +1979,7 @@ function ekonomiKoncernLanSaldo(l){
   return l.belopp || 0;
 }
 function setEkonomiKoncernLanSieStatus(text, kind){
-  const el = document.getElementById('ekoKoncernLanSieStatus');
+  const el = document.getElementById('ekoKoncernLanFilStatus');
   if(!el) return;
   el.textContent = text || '';
   el.className = 'contract-upload-status' + (kind ? ' ' + kind : '');
@@ -2044,27 +2041,34 @@ function showEkonomiKoncernLanSieResultat(res, sie, filename){
     p.body.appendChild(ekoSmallBtn('Lägg upp som lån…', () => { p.close(); showEkonomiKoncernLanBrPopup(rows, sie.fnamn || filename, sie.fnamn); }));
   }
 }
-document.getElementById('ekoKoncernLanSieBtn').onclick = () => { document.getElementById('ekoKoncernLanSieInput').click(); };
-document.getElementById('ekoKoncernLanSieInput').addEventListener('change', async (e) => {
+async function ekonomiKoncernLanLasSie(files){
+  let totNya = 0, totMatch = 0; let last = null;
+  for(const file of files){
+    setEkonomiKoncernLanSieStatus('Läser ' + file.name + '…');
+    const sie = parseSie(sieDecode(await file.arrayBuffer()));
+    if(!sie.trans.length && !Object.keys(sie.ub).length) throw new Error(file.name + ' ser inte ut som en SIE 4-fil (inga #VER/#UB-rader).');
+    const res = ekonomiKoncernLanApplySie(sie, file.name);
+    totNya += res.nya; totMatch += res.matched.length; last = { res, sie, file };
+  }
+  await saveEkonomiKoncern();
+  renderEkonomiKoncernLan();
+  setEkonomiKoncernLanSieStatus(files.length + ' fil' + (files.length > 1 ? 'er' : '') + ' inläst' + (files.length > 1 ? 'a' : '') + ' · ' + totMatch + ' lån uppdaterade · ' + totNya + ' nya rörelser.', 'ok');
+  if(last) showEkonomiKoncernLanSieResultat(last.res, last.sie, last.file.name);
+}
+// En knapp för båda: PDF = balansräkning, övrigt (.se/.si/.sie/.txt) = SIE 4 från Fortnox. Flera filer går bra.
+document.getElementById('ekoKoncernLanFilBtn').onclick = () => { document.getElementById('ekoKoncernLanFilInput').click(); };
+document.getElementById('ekoKoncernLanFilInput').addEventListener('change', async (e) => {
   const files = [...(e.target.files || [])];
   if(!files.length) return;
-  const btn = document.getElementById('ekoKoncernLanSieBtn');
+  const btn = document.getElementById('ekoKoncernLanFilBtn');
   btn.disabled = true;
   try{
-    let totNya = 0, totMatch = 0; let last = null;
-    for(const file of files){
-      setEkonomiKoncernLanSieStatus('Läser ' + file.name + '…');
-      const sie = parseSie(sieDecode(await file.arrayBuffer()));
-      if(!sie.trans.length && !Object.keys(sie.ub).length) throw new Error(file.name + ' ser inte ut som en SIE 4-fil (inga #VER/#UB-rader).');
-      const res = ekonomiKoncernLanApplySie(sie, file.name);
-      totNya += res.nya; totMatch += res.matched.length; last = { res, sie, file };
-    }
-    await saveEkonomiKoncern();
-    renderEkonomiKoncernLan();
-    setEkonomiKoncernLanSieStatus(files.length + ' fil' + (files.length > 1 ? 'er' : '') + ' inläst' + (files.length > 1 ? 'a' : '') + ' · ' + totMatch + ' lån uppdaterade · ' + totNya + ' nya rörelser.', 'ok');
-    if(last) showEkonomiKoncernLanSieResultat(last.res, last.sie, last.file.name);
+    const pdfs = files.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+    const sies = files.filter(f => !pdfs.includes(f));
+    if(sies.length) await ekonomiKoncernLanLasSie(sies);
+    for(const f of pdfs) await ekonomiKoncernLanLasBr(f);
   }catch(err){
-    setEkonomiKoncernLanSieStatus('Kunde inte läsa SIE-filen: ' + (err.message || err), 'err');
+    setEkonomiKoncernLanSieStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
   }finally{
     btn.disabled = false;
     e.target.value = '';
