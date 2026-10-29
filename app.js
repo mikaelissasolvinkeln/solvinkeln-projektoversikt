@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029133634';
+const APP_BUILD = '20261029134620';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1801,11 +1801,11 @@ function renderEkonomiKoncernLan(){
       tr.onclick = () => { if(typeof openEkonomiProjektLan === 'function') openEkonomiProjektLan(p); };
       const forfall = lanRec[key + 'Forfallodatum'] || '';
       const rantaTxt = d && d.ranta != null && d.ranta !== '' ? String(d.ranta).replace('.', ',') + ' %' : '—';
-      tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(namn) + '<div style="font-size:10px; color:var(--ink-soft);">projektets Lån-flik</div></td>' +
+      tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(namn) + '</td>' +
         '<td style="text-align:left;">' + escapeHtml(p.name) + '</td><td></td>' +
         '<td>' + formatKrFull(saldo) + '</td><td>' + rantaTxt + '</td><td>—</td>' +
         '<td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>' +
-        '<td style="text-align:left; font-size:11px; color:var(--ink-soft);">Saldo enligt Lån-fliken' + (d ? ' · ' + d.tx.length + ' bokningar' : '') + '</td><td></td>';
+        '<td></td><td></td>';
       tbody.appendChild(tr);
       sum += saldo; autoN++;
     });
