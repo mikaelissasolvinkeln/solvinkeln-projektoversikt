@@ -5365,7 +5365,7 @@ function ekonomiPrognosInbetalningar(pid, start, months){
       d.tx.forEach(t => {
         const m = String(t.datum || '').slice(0, 7);
         if(!monthSet.has(m)) return;
-        add(m, t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), { datum: t.datum, typ: t.typ, belopp: t.belopp || 0, text: t.text || '', kalla: t.kalla, jvKassa: !!t.jvKassa });
+        add(m, t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0), { id: t.id, datum: t.datum, typ: t.typ, belopp: t.belopp || 0, text: t.text || '', kalla: t.kalla, jvKassa: !!t.jvKassa });
       });
     } else {
       // Inga bokningar: fältets belopp är lånets saldo och räknas som IB.
@@ -5725,7 +5725,19 @@ function showEkonomiInsatserPopup(pid, title, items){
         dTd.innerHTML = pre ? '<span style="color:var(--ink-soft);">Prel. ' + escapeHtml(pre) + '</span>' : '<span style="color:var(--ink-soft);">Inget datum</span>';
       }
       if(paid){
-        amtTd.textContent = formatKrFull(it.belopp);
+        // Belopp på markerad inbetalning: ändras direkt (sparas på lägenheten som slutbetalt belopp).
+        const paidAmt = document.createElement('input');
+        paidAmt.type = 'number'; paidAmt.value = it.belopp; paidAmt.title = 'Inbetalt belopp – ändra om det blev fel vid markeringen';
+        paidAmt.style.cssText = 'width:120px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+        paidAmt.onchange = async () => {
+          const b = parseFloat(String(paidAmt.value).replace(',', '.'));
+          if(!b || b <= 0){ showToast('Ange belopp.'); paidAmt.value = it.belopp; return; }
+          apt.slutbetald.amount = String(Math.round(b)); it.belopp = Math.round(b);
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          showToast('LGH ' + (apt.lgh || '') + ' inbetalt belopp ' + formatKrFull(Math.round(b)));
+          render(); renderEkonomiPrognos();
+        };
+        amtTd.appendChild(paidAmt);
         const st = document.createElement('span');
         st.style.cssText = 'color:var(--good, #2e7d32); margin-right:8px;';
         st.textContent = 'Inbetald';
@@ -5802,8 +5814,39 @@ function showEkonomiLanManadPopup(pid, l, m){
   const plan = l.planerade[m] || [];
   if(!items.length && !plan.length) p.body.innerHTML = '<p class="eko-sub">Inga rörelser den här månaden.</p>';
   items.forEach(it => {
-    p.body.appendChild(ekoPopupLine('<div style="font-size:13px;">' + (it.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + ' ' + escapeHtml(it.datum || '') + '</div><div style="font-size:11px; color:var(--ink-soft);">' + escapeHtml(it.text || '') + (it.kalla ? ' · från ' + escapeHtml(it.kalla) : '') + (isFl ? ' · genomförd' : ' · Lån-fliken') + '</div>',
-      (it.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(it.belopp)));
+    const left = '<div style="font-size:13px;">' + (it.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + ' ' + escapeHtml(it.datum || '') + '</div><div style="font-size:11px; color:var(--ink-soft);">' + escapeHtml(it.text || '') + (it.kalla ? ' · från ' + escapeHtml(it.kalla) : '') + (isFl ? ' · genomförd' : ' · Lån-fliken') + (it.id ? ' · belopp och datum kan ändras' : '') + '</div>';
+    if(!it.id){ p.body.appendChild(ekoPopupLine(left, (it.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(it.belopp))); return; }
+    // Råkade du klarmarkera med fel belopp eller datum? Ändra här – sparas direkt i Lån-fliken / prognosen.
+    const right = document.createElement('div');
+    right.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;';
+    const sign = document.createElement('span'); sign.textContent = it.typ === 'aterbetalning' ? '−' : '+'; right.appendChild(sign);
+    const amt = document.createElement('input');
+    amt.type = 'number'; amt.value = it.belopp; amt.title = 'Belopp (kr)';
+    amt.style.cssText = 'width:130px; text-align:right; border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+    const dat = document.createElement('input');
+    dat.type = 'date'; dat.value = it.datum || ''; dat.title = 'Datum';
+    dat.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px;';
+    const spara = async () => {
+      const b = parseFloat(String(amt.value).replace(',', '.'));
+      if(!b || b <= 0){ showToast('Ange belopp.'); return; }
+      if(!dat.value){ showToast('Ange datum.'); return; }
+      try{
+        if(isFl){
+          const st = ekonomiPrognosCustomStore(ekonomiPrognosRec(pid), l.key);
+          const k = st && st.klart.find(x => x.id === it.id);
+          if(k){ k.belopp = it.typ === 'aterbetalning' ? -Math.round(b) : Math.round(b); k.datum = dat.value; await saveEkonomiPrognos(); }
+        } else {
+          const d = ekonomiLanDetalj(pid, l.key, false);
+          const tx = d && d.tx.find(x => x.id === it.id);
+          if(tx){ tx.belopp = Math.round(b); tx.datum = dat.value; await DB.setPersonalData(EKONOMI_KEYS.lan, JSON.stringify(companyEkonomiData.lan)); }
+        }
+        showToast('Bokningen ändrad till ' + formatKrFull(Math.round(b)) + ' ' + dat.value);
+        p.close(); renderEkonomiPrognos(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+      }catch(e){ showDebugError('Kunde inte spara', e); }
+    };
+    amt.onchange = spara; dat.onchange = spara;
+    right.appendChild(amt); right.appendChild(dat);
+    p.body.appendChild(ekoPopupLine(left, right));
   });
   const prog = ekonomiPrognosRec(pid);
   const jvPartner = !isFl && ekonomiProjektAgande(pid).partner;
