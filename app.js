@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261103114300';
+const APP_BUILD = '20261103121536';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1604,10 +1604,27 @@ const EKONOMI_KONCERN_RANTA_START = '2026-10-01';
 function ekonomiKoncernLanRanta(l, perDatum){
   const today = perDatum || new Date().toISOString().slice(0, 10);
   const ack = l.rantaAck && l.rantaAck.datum ? l.rantaAck : { belopp: 0, datum: EKONOMI_KONCERN_RANTA_START };
-  const dagar = Math.max(0, Math.round((new Date(today + 'T00:00:00') - new Date(ack.datum + 'T00:00:00')) / 86400000));
-  const perDag = ekonomiKoncernLanSaldo(l) * ((parseFloat(l.ranta) || 0) / 100) / 365;
-  return { belopp: (ack.belopp || 0) + perDag * dagar, dagar, perDag, ack };
+  const r = (parseFloat(l.ranta) || 0) / 100;
+  const perDag = ekonomiKoncernLanSaldo(l) * r / 365;
+  if(today <= ack.datum) return { belopp: ack.belopp || 0, dagar: 0, perDag, ack };
+  // Dag för dag: saldot vid ackumuleringsdatumet, sedan påverkar varje SIE-rörelse (amortering/utökning)
+  // saldot från sitt datum – precis som för projektlånen.
+  const tx = (l.tx || []).slice().sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
+  let saldo = (l.ib != null || tx.length) ? (l.ib || 0) - tx.filter(t => t.datum <= ack.datum).reduce((s2, t) => s2 + (t.belopp || 0), 0) : (l.belopp || 0);
+  let ti = tx.findIndex(t => t.datum > ack.datum); if(ti < 0) ti = tx.length;
+  let acc = 0, dagar = 0;
+  const dt = new Date(ack.datum + 'T00:00:00Z'); const end = new Date(today + 'T00:00:00Z');
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  while(dt <= end){
+    const iso = dt.toISOString().slice(0, 10);
+    while(ti < tx.length && tx[ti].datum <= iso){ saldo -= tx[ti++].belopp || 0; }
+    acc += saldo * r / 365;
+    dagar++;
+    dt.setUTCDate(dt.getUTCDate() + 1);
+  }
+  return { belopp: (ack.belopp || 0) + acc, dagar, perDag, ack };
 }
+
 // Räntebetalningsplan på ett koncernlån: l.rantePlan = [{ id, manad, belopp, klart, datum, betaltBelopp }].
 // Planerade poster ligger preliminärt (rött) i sin månad; betalda i betalmånaden med faktiskt belopp.
 function ekonomiKoncernLanRantePlan(l){ if(!Array.isArray(l.rantePlan)) l.rantePlan = []; return l.rantePlan; }
@@ -2573,6 +2590,20 @@ async function renderEkonomiKoncern(){
         return el;
       });
       addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
+    });
+    // Ränteintäkter: räntan projekten betalar på aktörens lån (ur projektens likviditetsprognos)
+    // samt räntebetalningsplaner på koncernlån där aktören är långivare. Rött = preliminärt.
+    ekonomiSortedProjects().forEach(p => {
+      const r = ekonomiPrognosRanta(p.id, a.key, months);
+      if(!r.any || !months.some(m => r.per[m])) return;
+      const cells = months.map(m => { const v = r.per[m] || 0; sum[m] += v; const sp = sumCell(v); if(v && r.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Ränta enligt ' + p.name + 's likviditetsprognos'; return sp; });
+      addRow('Ränta från ' + p.name, ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (r.per[m] || 0), 0))]), { indent: 18 });
+    });
+    ekonomiKoncernList('_lan').filter(l => l.langivare && sieBolagMatchar(l.langivare, a.namn) && ekonomiKoncernLanRantePlan(l).length).forEach(l => {
+      const rp = ekonomiKoncernLanRantePlanPer(l, months);
+      if(!Object.keys(rp.per).length) return;
+      const cells = months.map(m => { const v = rp.per[m] || 0; sum[m] += v; const sp = sumCell(v); if(v && rp.prelim[m]) sp.style.color = 'var(--danger)'; return sp; });
+      addRow('Ränta från ' + (l.lantagare || 'låntagare') + ' (betalningsplan)', ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (rp.per[m] || 0), 0))]), { indent: 18 });
     });
     // Kostnader (Koncern → Kostnader) för bolaget: samma belopp varje månad.
     { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader (Kostnader-fliken)', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
@@ -5697,8 +5728,21 @@ function showEkonomiInsatserPopup(pid, title, items){
         amtTd.textContent = formatKrFull(it.belopp);
         const st = document.createElement('span');
         st.style.cssText = 'color:var(--good, #2e7d32); margin-right:8px;';
-        st.textContent = 'Inbetald ' + (apt.slutbetald.date || '');
+        st.textContent = 'Inbetald';
         stTd.appendChild(st);
+        // Fel datum? Ändra här – beloppet flyttar till rätt månad i prognosen.
+        const di = document.createElement('input');
+        di.type = 'date'; di.value = apt.slutbetald.date || '';
+        di.title = 'Ändra inbetalningsdatum';
+        di.style.cssText = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:11px; margin-right:6px;';
+        di.onchange = async () => {
+          if(!di.value){ showToast('Ange datum.'); di.value = apt.slutbetald.date || ''; return; }
+          apt.slutbetald.date = di.value;
+          await ekonomiSaveApartments(pid, ekonomiPrognosAptsCache[pid]);
+          showToast('LGH ' + (apt.lgh || '') + ' inbetald ' + di.value);
+          render(); renderEkonomiPrognos();
+        };
+        stTd.appendChild(di);
         stTd.appendChild(ekoSmallBtn('Ångra', async () => {
           if(!confirm('Ta bort markeringen "inbetald" för LGH ' + (apt.lgh || '') + '?')) return;
           apt.slutbetald.done = false; apt.slutbetald.by = ''; apt.slutbetald.at = ''; apt.slutbetald.date = '';
