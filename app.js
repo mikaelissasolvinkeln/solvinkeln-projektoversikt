@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261029142742';
+const APP_BUILD = '20261103114300';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -4993,11 +4993,29 @@ function renderEkonomiLanDetaljPanel(){
     running += t.typ === 'aterbetalning' ? -(t.belopp || 0) : (t.belopp || 0);
     const tr = document.createElement('tr');
     tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(t.datum || '') + '</td>' +
-      '<td style="text-align:left;">' + (t.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + (t.kalla ? '<div style="font-size:10px; color:var(--ink-soft);">från ' + escapeHtml(t.kalla) + '</div>' : '') + '</td>' +
-      '<td style="text-align:left;">' + escapeHtml(t.text || '') + '</td>' +
+      '<td style="text-align:left;">' + (t.typ === 'aterbetalning' ? 'Återbetalning' : 'Utökning') + '</td>' +
+      '<td style="text-align:left;"></td>' +
       '<td style="color:' + (t.typ === 'aterbetalning' ? 'var(--danger)' : 'var(--ink)') + ';">' + (t.typ === 'aterbetalning' ? '−' : '+') + formatKrFull(t.belopp || 0) + '</td>' +
-      '<td>' + (t.ranta != null && t.ranta !== '' ? t.ranta + ' %' : '') + '</td>' +
+      '<td></td>' +
       '<td>' + formatKrFull(running) + '</td><td></td>';
+    // Text och ränta kan ändras direkt i raden (även för inlästa bokningar).
+    const txt = document.createElement('input');
+    txt.type = 'text'; txt.className = 'eko-inline-input'; txt.style.textAlign = 'left'; txt.value = t.text || ''; txt.placeholder = 'Text';
+    txt.onchange = async () => { t.text = txt.value.trim(); await saveEkonomiLan(); };
+    tr.children[2].appendChild(txt);
+    const rSp = document.createElement('span');
+    rSp.className = 'editable'; rSp.style.cursor = 'pointer'; rSp.title = 'Klicka för att ange ränta % för den här bokningen (tomt = lånets ränta)';
+    rSp.textContent = t.ranta != null && t.ranta !== '' ? String(t.ranta).replace('.', ',') + ' %' : '—';
+    rSp.onclick = () => {
+      const ri = document.createElement('input');
+      ri.type = 'number'; ri.step = '0.01'; ri.className = 'eko-inline-input'; ri.style.cssText = 'text-align:center; width:70px;'; ri.placeholder = '%';
+      ri.value = t.ranta != null && t.ranta !== '' ? t.ranta : '';
+      ri.onchange = async () => { t.ranta = ri.value === '' ? null : parseFloat(ri.value.replace(',', '.')) || 0; await saveEkonomiLan(); };
+      ri.onblur = () => { if(document.body.contains(ri)) renderEkonomiLanDetaljPanel(); };
+      ri.onkeydown = e => { if(e.key === 'Enter') ri.blur(); };
+      tr.children[4].innerHTML = ''; tr.children[4].appendChild(ri); ri.focus(); ri.select();
+    };
+    tr.children[4].appendChild(rSp);
     const del = document.createElement('button');
     del.type = 'button'; del.textContent = '✕'; del.title = 'Ta bort bokningen';
     del.style.cssText = 'background:none; border:none; color:var(--ink-soft); cursor:pointer;';
