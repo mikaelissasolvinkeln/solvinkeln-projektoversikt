@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261103121852';
+const APP_BUILD = '20261104094546';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2590,20 +2590,6 @@ async function renderEkonomiKoncern(){
         return el;
       });
       addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
-    });
-    // Ränteintäkter: räntan projekten betalar på aktörens lån (ur projektens likviditetsprognos)
-    // samt räntebetalningsplaner på koncernlån där aktören är långivare. Rött = preliminärt.
-    ekonomiSortedProjects().forEach(p => {
-      const r = ekonomiPrognosRanta(p.id, a.key, months);
-      if(!r.any || !months.some(m => r.per[m])) return;
-      const cells = months.map(m => { const v = r.per[m] || 0; sum[m] += v; const sp = sumCell(v); if(v && r.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Ränta enligt ' + p.name + 's likviditetsprognos'; return sp; });
-      addRow('Ränta från ' + p.name, ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (r.per[m] || 0), 0))]), { indent: 18 });
-    });
-    ekonomiKoncernList('_lan').filter(l => l.langivare && sieBolagMatchar(l.langivare, a.namn) && ekonomiKoncernLanRantePlan(l).length).forEach(l => {
-      const rp = ekonomiKoncernLanRantePlanPer(l, months);
-      if(!Object.keys(rp.per).length) return;
-      const cells = months.map(m => { const v = rp.per[m] || 0; sum[m] += v; const sp = sumCell(v); if(v && rp.prelim[m]) sp.style.color = 'var(--danger)'; return sp; });
-      addRow('Ränta från ' + (l.lantagare || 'låntagare') + ' (betalningsplan)', ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (rp.per[m] || 0), 0))]), { indent: 18 });
     });
     // Kostnader (Koncern → Kostnader) för bolaget: samma belopp varje månad.
     { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader (Kostnader-fliken)', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
