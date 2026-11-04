@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261104102003';
+const APP_BUILD = '20261104105903';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1751,15 +1751,43 @@ function showEkonomiKoncernLanRantaPopup(l){
   planBox.appendChild(gen); planBox.appendChild(hint);
   p.body.appendChild(planBox);
 }
+// Byggnadskreditiv (BK): ett lån kan markeras som BK (kolumnen BK, klicka för att växla). Med
+// "Visa byggnadskreditiv" avbockat döljs BK-lånen i listan och i summan. Projektens automatiska
+// lånerader kan också markeras; de sparas i koncern._lanBk['pid:key'].
+function ekonomiKoncernLanBkToggleCell(td, isBk, onToggle, stop){
+  const sp = document.createElement('span');
+  sp.className = 'editable'; sp.style.cursor = 'pointer';
+  sp.textContent = isBk ? 'BK' : '—';
+  sp.style.cssText += isBk ? ' color:var(--blue); font-weight:700;' : ' color:var(--ink-soft);';
+  sp.title = isBk ? 'Byggnadskreditiv · klicka för att ta bort markeringen' : 'Klicka för att markera som byggnadskreditiv';
+  sp.onclick = (e) => { if(stop) e.stopPropagation(); onToggle(); };
+  td.appendChild(sp);
+}
 function renderEkonomiKoncernLan(){
   ekonomiKoncernRefreshPartList();
-  const list = ekonomiKoncernList('_lan');
+  const visaBk = uiPrefs.koncernLanVisaBk !== false;
+  const alla = ekonomiKoncernList('_lan');
+  const list = alla.filter(l => visaBk || !l.bk);
+  if(!companyEkonomiData.koncern._lanBk || typeof companyEkonomiData.koncern._lanBk !== 'object') companyEkonomiData.koncern._lanBk = {};
+  const bkAuto = companyEkonomiData.koncern._lanBk;
   const tbody = document.getElementById('ekoKoncernLanBody');
   tbody.innerHTML = '';
-  let sum = 0, sumRanta = 0;
+  // Växel "Visa byggnadskreditiv" i raden ovanför tabellen (skapas en gång).
+  let tog = document.getElementById('ekoKoncernLanBkToggle');
+  if(!tog){
+    tog = document.createElement('label');
+    tog.id = 'ekoKoncernLanBkToggle';
+    tog.style.cssText = 'display:inline-flex; align-items:center; gap:6px; font-size:12.5px; margin-left:auto; cursor:pointer; white-space:nowrap;';
+    tog.innerHTML = '<input type="checkbox"> <span></span>';
+    document.getElementById('ekoKoncernLanFilBtn').parentElement.appendChild(tog);
+    tog.querySelector('input').onchange = async (e) => { uiPrefs.koncernLanVisaBk = e.target.checked; await saveUiPrefs(); renderEkonomiKoncernLan(); };
+  }
+  tog.querySelector('input').checked = visaBk;
+  let sum = 0, sumRanta = 0, doldaBk = alla.length - list.length;
   list.forEach(l => {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+    ekonomiKoncernLanBkToggleCell(tr.children[3], !!l.bk, async () => { l.bk = !l.bk; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
     ekonomiKoncernTextCell(tr.children[0], l.langivare, async v => { l.langivare = v; await saveEkonomiKoncern(); }, 'Långivare');
     ekonomiKoncernPartCell(tr.children[1], l.lantagare, async v => { l.lantagare = v; await saveEkonomiKoncern(); });
     // Konto i låntagarens bokföring (t.ex. 2393) – kopplingen som SIE-inläsningen använder.
@@ -1774,10 +1802,10 @@ function renderEkonomiKoncernLan(){
       sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.textContent = formatKrFull(ekonomiKoncernLanSaldo(l));
       sp.title = (l.tx || []).length + ' rörelser från SIE · klicka för historik';
       sp.onclick = () => showEkonomiKoncernLanHistorik(l);
-      tr.children[3].appendChild(sp);
-      if(l.sie && l.sie.importerad){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'SIE ' + l.sie.importerad; tr.children[3].appendChild(d); }
+      tr.children[4].appendChild(sp);
+      if(l.sie && l.sie.importerad){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'SIE ' + l.sie.importerad; tr.children[4].appendChild(d); }
     } else {
-      likviditetsbudgetEditableCell(tr.children[3], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
+      likviditetsbudgetEditableCell(tr.children[4], l.belopp || null, async v => { l.belopp = v || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); });
     }
     // Ränta i procent per år: visas som "12 %", klick ger ett fält att skriva i.
     const rSp = document.createElement('span');
@@ -1790,9 +1818,9 @@ function renderEkonomiKoncernLan(){
       const save = async () => { l.ranta = rInp.value === '' ? null : parseFloat(rInp.value.replace(',', '.')) || 0; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
       rInp.onchange = save; rInp.onblur = () => { if(document.body.contains(rInp)) renderEkonomiKoncernLan(); };
       rInp.onkeydown = e => { if(e.key === 'Enter') rInp.blur(); };
-      tr.children[4].innerHTML = ''; tr.children[4].appendChild(rInp); rInp.focus(); rInp.select();
+      tr.children[5].innerHTML = ''; tr.children[5].appendChild(rInp); rInp.focus(); rInp.select();
     };
-    tr.children[4].appendChild(rSp);
+    tr.children[5].appendChild(rSp);
     // Upplupen ränta: räknas dagligen, klick för att ange ackumulerat belopp per datum.
     const ra = ekonomiKoncernLanRanta(l);
     const raSp = document.createElement('span');
@@ -1800,14 +1828,14 @@ function renderEkonomiKoncernLan(){
     raSp.textContent = (parseFloat(l.ranta) || l.rantaAck) ? formatKrFull(Math.round(ra.belopp)) : '—';
     raSp.title = 'Ackumulerat ' + formatKrFull(Math.round(ra.ack.belopp || 0)) + ' per ' + ra.ack.datum + ' + ' + ra.dagar + ' dagar à ' + formatKrFull(Math.round(ra.perDag)) + ' · klicka för att ange';
     raSp.onclick = () => showEkonomiKoncernLanRantaPopup(l);
-    tr.children[5].appendChild(raSp);
-    if(l.rantaAck && l.rantaAck.datum){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'ack. per ' + l.rantaAck.datum; tr.children[5].appendChild(d); }
-    ekonomiKoncernDateCell(tr.children[6], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
-    ekonomiKoncernTextCell(tr.children[7], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
+    tr.children[6].appendChild(raSp);
+    if(l.rantaAck && l.rantaAck.datum){ const d = document.createElement('div'); d.style.cssText = 'font-size:10px; color:var(--ink-soft);'; d.textContent = 'ack. per ' + l.rantaAck.datum; tr.children[6].appendChild(d); }
+    ekonomiKoncernDateCell(tr.children[7], l.forfallodatum, async v => { l.forfallodatum = v; await saveEkonomiKoncern(); });
+    ekonomiKoncernTextCell(tr.children[8], l.anteckning, async v => { l.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
-    del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = list.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
-    tr.children[8].appendChild(del);
+    del.onclick = async () => { if(!confirm('Ta bort lånet från ' + (l.langivare || '—') + '?')) return; companyEkonomiData.koncern._lan = alla.filter(x => x.id !== l.id); await saveEkonomiKoncern(); renderEkonomiKoncernLan(); };
+    tr.children[9].appendChild(del);
     sum += ekonomiKoncernLanSaldo(l); sumRanta += (parseFloat(l.ranta) || l.rantaAck) ? ekonomiKoncernLanRanta(l).belopp : 0;
     tbody.appendChild(tr);
   });
@@ -1823,6 +1851,8 @@ function renderEkonomiKoncernLan(){
       const d = ekonomiLanDetalj(p.id, key, false);
       const saldo = d ? ekonomiLanSaldoPer(d, idag) : (lanRec[key] || 0);
       if(!saldo) return;
+      const bkKey = p.id + ':' + key;
+      if(!visaBk && bkAuto[bkKey]){ doldaBk++; return; }
       const tr = document.createElement('tr');
       tr.style.cssText = 'background:var(--paper-soft, #f6f4ef); cursor:pointer;';
       tr.title = 'Från projektets Lån-flik – klicka för att öppna';
@@ -1830,19 +1860,22 @@ function renderEkonomiKoncernLan(){
       const forfall = lanRec[key + 'Forfallodatum'] || '';
       const rantaTxt = d && d.ranta != null && d.ranta !== '' ? String(d.ranta).replace('.', ',') + ' %' : '—';
       tr.innerHTML = '<td style="text-align:left;">' + escapeHtml(namn) + '</td>' +
-        '<td style="text-align:left;">' + escapeHtml(p.name) + '</td><td></td>' +
+        '<td style="text-align:left;">' + escapeHtml(p.name) + '</td><td></td><td></td>' +
         '<td>' + formatKrFull(saldo) + '</td><td>' + rantaTxt + '</td><td>—</td>' +
         '<td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>' +
         '<td></td><td></td>';
+      ekonomiKoncernLanBkToggleCell(tr.children[3], !!bkAuto[bkKey], async () => { if(bkAuto[bkKey]) delete bkAuto[bkKey]; else bkAuto[bkKey] = true; await saveEkonomiKoncern(); renderEkonomiKoncernLan(); }, true);
       tbody.appendChild(tr);
       sum += saldo; autoN++;
     });
   });
   const tot = document.createElement('tr');
   tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td>Summa (' + (list.length + autoN) + ')</td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
+  tot.innerHTML = '<td>Summa (' + (list.length + autoN) + ')</td><td></td><td></td><td></td><td>' + formatKrFull(sum) + '</td><td></td><td>' + formatKrFull(Math.round(sumRanta)) + '</td><td></td><td></td><td></td>';
   tbody.appendChild(tot);
+  tog.querySelector('span').textContent = 'Visa byggnadskreditiv' + (doldaBk ? ' (' + doldaBk + ' dolda)' : '');
 }
+
 // Läs in lån från en balansräkning (PDF): kontoraderna visas i en lista där man bockar i vilka
 // som ska bli lån, anger långivare per rad och vilken part i koncernen lånet är utställt mot.
 function setEkonomiKoncernLanBrStatus(text, kind){
