@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261104094546';
+const APP_BUILD = '20261104102003';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2565,8 +2565,8 @@ async function renderEkonomiKoncern(){
     });
     if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
     rec.poster.forEach(post => {
-      // Egna poster gäller bara sin aktör; visas flera aktörer tas posten bara med om den är markerad "flera aktörer".
-      if(valda.length > 1 && !post.flera) return;
+      // Aktörens egna poster visas alltid under aktören. "Flera aktörer" betyder dessutom att posten
+      // räknas som gemensam post (JV-kassan) under Gemensamma projekt.
       const name = document.createElement('span');
       name.textContent = post.namn || 'Egen post';
       name.className = 'editable'; name.style.cursor = 'pointer'; name.title = 'Klicka för att byta namn';
@@ -2604,7 +2604,7 @@ async function renderEkonomiKoncern(){
     addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
 
     addBtn.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
-    addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; const flera = confirm('Ska posten även räknas med när flera aktörer visas tillsammans? OK = ja, gäller flera aktörer. Avbryt = nej, bara ' + a.namn + '.'); rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {}, flera }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+    addBtn.onclick = async () => { const namn = prompt('Namn på posten (t.ex. Löner, Hyra, Utdelning):', 'Egen post'); if(namn === null) return; const flera = valda.length > 1 ? confirm('Ska posten också räknas som gemensam post (JV-kassan under Gemensamma projekt)? OK = ja. Avbryt = nej, bara ' + a.namn + '.') : false; rec.poster.push({ id: uid(), namn: namn.trim() || 'Egen post', per: {}, flera }); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
     addRow(addBtn, ['', ''].concat(blanks, ['']), { indent: 18 });
     months.forEach(m => { total[m] += sum[m]; });
     totalIngaende += rec.ingaende || 0; totalFordranIb += fordranIb;
