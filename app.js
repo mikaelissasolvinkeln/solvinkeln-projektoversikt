@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261104111517';
+const APP_BUILD = '20261104142626';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1499,38 +1499,63 @@ function ekonomiKoncernDateCell(td, value, onSave){
   inp.onclick = () => { try{ if(inp.showPicker) inp.showPicker(); }catch(e){} };
   td.appendChild(inp);
 }
+// Koncern → Fordran visar ett bolag i taget: Solvinkeln (har lånefält i projekten) eller Prosavio AB.
+// Valet sparas i uiPrefs.koncernFordranBolag. Övriga fordringar märks med bolag (f.bolag, default Solvinkeln).
+const EKONOMI_FORDRAN_BOLAG = [{ key: 'lanSolvinkeln', namn: 'Solvinkeln', projektLan: true }, { key: 'lanProsavio', namn: 'Prosavio AB', projektLan: false }];
+function ekonomiKoncernFordranBolag(){ return EKONOMI_FORDRAN_BOLAG.find(b => b.key === uiPrefs.koncernFordranBolag) || EKONOMI_FORDRAN_BOLAG[0]; }
 function renderEkonomiKoncernFordran(){
   ekonomiKoncernRefreshPartList();
-  // Solvinkelns fordringar mot projekten = saldot på Lån Solvinkeln i varje projekt (Lån-fliken).
+  const bolag = ekonomiKoncernFordranBolag();
+  const genitiv = bolag.namn + (/AB$/.test(bolag.namn) ? ':s' : 's');
+  const bsel = document.getElementById('ekoKoncernFordranBolag');
+  if(bsel){
+    if(!bsel.options.length){ bsel.innerHTML = EKONOMI_FORDRAN_BOLAG.map(b => '<option value="' + b.key + '">' + escapeHtml(b.namn) + '</option>').join(''); bsel.onchange = async () => { uiPrefs.koncernFordranBolag = bsel.value; await saveUiPrefs(); renderEkonomiKoncernFordran(); }; }
+    bsel.value = bolag.key;
+  }
+  const h1 = document.getElementById('ekoKoncernFordranRubrik1'); if(h1) h1.textContent = genitiv + ' fordringar mot projekt och bolag';
+  const s1 = document.getElementById('ekoKoncernFordranSub1'); if(s1) s1.textContent = (bolag.projektLan ? 'Saldot på Lån ' + bolag.namn + ' i varje projekt enligt Lån-fliken, samt ' : 'Koncernlån där ' + bolag.namn + ' är långivare (Koncern → Lån)') + (bolag.projektLan ? 'koncernlån där ' + bolag.namn + ' är långivare (Koncern → Lån)' : '') + ', med upplupen ränta och förfallodatum. Klicka på en rad för att se lånet.';
+  const s2 = document.getElementById('ekoKoncernFordranSub2'); if(s2) s2.textContent = bolag.projektLan ? 'Fordringar via andra bolag, t.ex. mot Solvinkeln Invest 11 AB som i sin tur har fordran mot ett projekt. Väljer du projekt bokas beloppet som utökning av Lån Solvinkeln där och räknas i IB, saldo, likviditetsprognos och koncernlikviditet.' : 'Övriga fordringar som ' + bolag.namn + ' har mot bolag eller personer utanför lånelistan.';
+  // Fordringar mot projekten = saldot på bolagets lånefält i varje projekt (Lån-fliken), plus koncernlån där bolaget är långivare.
   const pw = document.getElementById('ekoKoncernFordranProjekt');
   if(pw){
     pw.innerHTML = '';
     const t = document.createElement('table');
     t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
-    t.innerHTML = '<thead><tr><th style="text-align:left;">Projekt</th><th style="text-align:left;">Status</th><th>Fordran (saldo idag)</th><th>Upplupen ränta</th><th>Ränta</th><th style="text-align:left;">Förfallodatum</th></tr></thead>';
+    t.innerHTML = '<thead><tr><th style="text-align:left;">Projekt / låntagare</th><th style="text-align:left;">Status</th><th>Fordran (saldo idag)</th><th>Upplupen ränta</th><th>Ränta</th><th style="text-align:left;">Förfallodatum</th></tr></thead>';
     const tb = document.createElement('tbody');
     let sum = 0, sumR = 0, n = 0;
-    ekonomiSortedProjects().forEach(p => {
-      const saldo = ekonomiLanSaldo(p.id, 'lanSolvinkeln');
-      const d = ekonomiLanDetalj(p.id, 'lanSolvinkeln', false);
+    ekonomiKoncernList('_lan').filter(l => l.langivare && sieBolagMatchar(l.langivare, bolag.namn)).forEach(l => {
+      const saldo = ekonomiKoncernLanSaldo(l);
+      const ra = (parseFloat(l.ranta) || l.rantaAck) ? ekonomiKoncernLanRanta(l).belopp : 0;
+      sum += saldo; sumR += ra; n++;
+      const tr = document.createElement('tr');
+      tr.className = 'home-list-row';
+      tr.innerHTML = '<td class="home-list-name">' + escapeHtml(l.lantagare || '—') + '</td><td style="text-align:left; font-size:11px; color:var(--ink-soft);">Koncernlån</td><td style="font-weight:600;">' + formatKrFull(saldo) + '</td><td>' + formatKrFull(Math.round(ra)) + '</td><td>' + (l.ranta != null && l.ranta !== '' ? String(l.ranta).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(l.forfallodatum || '—') + '</td>';
+      tr.onclick = () => setEkonomiSubView('koncernlan');
+      tb.appendChild(tr);
+    });
+    if(bolag.projektLan) ekonomiSortedProjects().forEach(p => {
+      const saldo = ekonomiLanSaldo(p.id, bolag.key);
+      const d = ekonomiLanDetalj(p.id, bolag.key, false);
       if(!saldo && !(d && d.tx.length)) return;
       const upp = d ? ekonomiLanUpplupen(d) : { belopp: 0, ranta: 0 };
-      const forfall = (companyEkonomiData.lan[p.id] || {}).lanSolvinkelnForfallodatum || '';
+      const forfall = (companyEkonomiData.lan[p.id] || {})[bolag.key + 'Forfallodatum'] || '';
       sum += saldo; sumR += upp.belopp; n++;
       const tr = document.createElement('tr');
       tr.className = 'home-list-row';
       tr.innerHTML = '<td class="home-list-name">' + escapeHtml(p.name) + '</td><td style="text-align:left;">' + homeStatusPillHtml(p.status || 'Pågående') + '</td><td style="font-weight:600;">' + formatKrFull(saldo) + '</td><td>' + formatKrFull(Math.round(upp.belopp)) + '</td><td>' + (upp.ranta ? upp.ranta + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(forfall || '—') + '</td>';
-      tr.onclick = () => { currentEkonomiLanKey = 'lanSolvinkeln'; openEkonomiProjektLan(p); };
+      tr.onclick = () => { currentEkonomiLanKey = bolag.key; openEkonomiProjektLan(p); };
       tb.appendChild(tr);
     });
     const tot = document.createElement('tr');
     tot.className = 'eko-row-resultat';
-    tot.innerHTML = '<td style="text-align:left;">Summa (' + n + ' projekt)</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(Math.round(sumR)) + '</td><td></td><td></td>';
+    tot.innerHTML = '<td style="text-align:left;">Summa (' + n + ')</td><td></td><td>' + formatKrFull(sum) + '</td><td>' + formatKrFull(Math.round(sumR)) + '</td><td></td><td></td>';
     tb.appendChild(tot);
     t.appendChild(tb);
     pw.appendChild(t);
   }
-  const list = ekonomiKoncernList('_fordringar');
+  const alla = ekonomiKoncernList('_fordringar');
+  const list = alla.filter(f => (f.bolag || 'lanSolvinkeln') === bolag.key);
   const tbody = document.getElementById('ekoKoncernFordranBody');
   tbody.innerHTML = '';
   let sum = 0;
@@ -1545,6 +1570,7 @@ function renderEkonomiKoncernFordran(){
     sel.className = 'eko-inline-select'; sel.style.width = '100%';
     sel.innerHTML = '<option value="">– Inget projekt –</option>' + projOpts;
     sel.value = f.projektPid || '';
+    if(!bolag.projektLan){ sel.disabled = true; sel.title = bolag.namn + ' har inget lånefält i projekten'; }
     sel.onchange = async () => { const old = f.projektPid || null; f.projektPid = sel.value || null; await ekonomiKoncernFordranSpara(f, old); renderEkonomiKoncernFordran(); };
     tr.children[1].appendChild(sel);
     likviditetsbudgetEditableCell(tr.children[2], f.belopp || null, async v => { f.belopp = v || 0; await ekonomiKoncernFordranSpara(f, f.projektPid); renderEkonomiKoncernFordran(); });
@@ -1553,7 +1579,7 @@ function renderEkonomiKoncernFordran(){
     ekonomiKoncernTextCell(tr.children[5], f.anteckning, async v => { f.anteckning = v; await saveEkonomiKoncern(); }, 'Anteckning');
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort';
-    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?' + (f.projektPid ? ' Bokningen på Lån Solvinkeln i projektet tas också bort.' : ''))) return; companyEkonomiData.koncern._fordringar = list.filter(x => x.id !== f.id); await ekonomiKoncernFordranSpara({ id: f.id, projektPid: null }, f.projektPid); renderEkonomiKoncernFordran(); };
+    del.onclick = async () => { if(!confirm('Ta bort fordran på ' + (f.motpart || '—') + '?' + (f.projektPid ? ' Bokningen på Lån Solvinkeln i projektet tas också bort.' : ''))) return; companyEkonomiData.koncern._fordringar = alla.filter(x => x.id !== f.id); await ekonomiKoncernFordranSpara({ id: f.id, projektPid: null }, f.projektPid); renderEkonomiKoncernFordran(); };
     tr.children[6].appendChild(del);
     sum += f.belopp || 0;
     tbody.appendChild(tr);
@@ -2439,7 +2465,7 @@ document.getElementById('ekoKoncernLonInput').addEventListener('change', async (
   finally{ e.target.value = ''; }
 });
 document.getElementById('ekoKoncernFordranAdd').onclick = async () => {
-  ekonomiKoncernList('_fordringar').push({ id: uid(), motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
+  ekonomiKoncernList('_fordringar').push({ id: uid(), bolag: ekonomiKoncernFordranBolag().key, motpart: '', projektPid: null, belopp: 0, datum: new Date().toISOString().slice(0, 10), forfallodatum: '', anteckning: '' });
   await saveEkonomiKoncern(); renderEkonomiKoncernFordran();
 };
 document.getElementById('ekoKoncernLanAdd').onclick = async () => {
@@ -3018,7 +3044,7 @@ async function ekonomiKoncernPdf(opts){
     if(opts.fordran){
       if(ekonomiSubView !== 'koncernfordran'){ renderEkonomiKoncernFordran(); }
       nySida();
-      let y = ekonomiPdfHeader(doc, 'Fordran', 'Solvinkelns fordringar mot projekten · skapad ' + datum, logo, logoW, logoH);
+      let y = ekonomiPdfHeader(doc, 'Fordran', ekonomiKoncernFordranBolag().namn + ' · fordringar · skapad ' + datum, logo, logoW, logoH);
       const pt = document.querySelector('#ekoKoncernFordranProjekt table');
       if(pt){ const P = ekonomiPdfRowsFromTable(pt); y = ekonomiPdfTable(doc, y, P.head, P.rows, { fontSize: 8, firstWidth: 70 }) + 8; }
       const ot = document.querySelector('#ekoKoncernFordranBody') ? document.getElementById('ekoKoncernFordranBody').closest('table') : null;
