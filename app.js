@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261104142626';
+const APP_BUILD = '20261106173703';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -1689,8 +1689,8 @@ function ekonomiKoncernLanRantePlanRows(pid, months){
   if(!p) return [];
   const out = [];
   ekonomiKoncernLanForPart(p.name).forEach(l => {
-    out.push(Object.assign({ key: 'klan:' + l.id, namn: 'Ränta ' + (l.langivare || 'koncernlån') + ' (betalningsplan)', any: true }, ekonomiKoncernLanRantePlanPer(l, months)));
-    out.push(Object.assign({ key: 'kamort:' + l.id, namn: 'Amortering ' + (l.langivare || 'koncernlån') + ' (plan)', any: true }, ekonomiKoncernLanAmortPlanPer(l, months)));
+    out.push(Object.assign({ key: 'klan:' + l.id, namn: 'Ränta ' + (l.langivare || 'koncernlån'), any: true }, ekonomiKoncernLanRantePlanPer(l, months)));
+    out.push(Object.assign({ key: 'kamort:' + l.id, namn: 'Amortering ' + (l.langivare || 'koncernlån'), any: true }, ekonomiKoncernLanAmortPlanPer(l, months)));
   });
   return out.filter(r => Object.keys(r.per).length);
 }
@@ -2679,6 +2679,13 @@ async function renderEkonomiKoncern(){
       perAktor[d.key].push({ p, l: { key: d.key, namn: 'Utdelning', per: {}, items: {}, planerade: {} }, flow, ib: 0, utdelning: true });
     });
   }
+  // Vinst-raden läggs direkt under sitt projekt hos aktören (ljus text "Vinst"), inte sist i listan.
+  Object.keys(perAktor).forEach(k => {
+    const rows0 = perAktor[k]; const out = []; const placed = new Set();
+    rows0.filter(r => !r.utdelning).forEach(r => { out.push(r); rows0.filter(u => u.utdelning && u.p.id === r.p.id && !placed.has(u)).forEach(u => { u.underProjekt = true; placed.add(u); out.push(u); }); });
+    rows0.filter(u => u.utdelning && !placed.has(u)).forEach(u => out.push(u));
+    perAktor[k] = out;
+  });
   const table = document.createElement('table');
   table.className = 'eko-compare-table';
   table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
@@ -2732,7 +2739,7 @@ async function renderEkonomiKoncern(){
         return sp;
       });
       // Summa = fordran vid periodens slut: IB − rörelserna (utökning ökar fordran, återbetalning minskar).
-      if(r.utdelning){ cells.forEach(sp => { if(sp.textContent) sp.style.color = 'var(--danger)'; sp.title = 'Preliminär utdelning vid slutförande'; }); addRow(r.p.name + ' · utdelning vid slutförande', ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 }); }
+      if(r.utdelning){ cells.forEach(sp => { if(sp.textContent) sp.style.color = 'var(--danger)'; sp.title = 'Preliminär utdelning vid slutförande'; }); addRow(r.underProjekt ? 'Vinst' : 'Vinst ' + r.p.name, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + r.flow[m], 0))]), { indent: r.underProjekt ? 32 : 18, small: true }); }
       else addRow(r.p.name, [sumCell(r.ib), ''].concat(cells, [sumCell(r.ib - months.reduce((s, m) => s + r.flow[m], 0))]), { indent: 18 });
     });
     if(!rows.length) addRow('Inga lånerörelser i perioden', ['', ''].concat(blanks, ['']), { small: true, indent: 18 });
@@ -2764,18 +2771,18 @@ async function renderEkonomiKoncern(){
       addRow(lblEl, ['', ''].concat(cells, [sumCell(months.reduce((s, m) => s + ((post.per || {})[m] || 0), 0))]), { indent: 18 });
     });
     // Kostnader (Koncern → Kostnader) för bolaget: samma belopp varje månad.
-    { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader (Kostnader-fliken)', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
+    { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
     // Ränte- och amorteringsplaner på koncernlån där aktören är låntagare: utbetalningar i aktörens likviditet.
     ekonomiKoncernLanForPart(a.namn).forEach(l => {
       const rp = ekonomiKoncernLanRantePlanPer(l, months);
       if(Object.keys(rp.per).length){
         const cells = months.map(m => { const v = rp.per[m] || 0; sum[m] -= v; const sp = sumCell(-v); if(v && rp.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Räntebetalningsplan · klicka på upplupen ränta under Lån för att ändra'; return sp; });
-        addRow('Ränta ' + (l.langivare || 'koncernlån') + ' (betalningsplan)', ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (rp.per[m] || 0), 0))]), { indent: 18 });
+        addRow('Ränta ' + (l.langivare || 'koncernlån'), ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (rp.per[m] || 0), 0))]), { indent: 18 });
       }
       const ap = ekonomiKoncernLanAmortPlanPer(l, months);
       if(Object.keys(ap.per).length){
         const cells = months.map(m => { const v = ap.per[m] || 0; sum[m] -= v; const sp = sumCell(-v); if(v && ap.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Amorteringsplan · klicka på Amorteringsplan under Lån för att ändra'; return sp; });
-        addRow('Amortering ' + (l.langivare || 'koncernlån') + ' (plan)', ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (ap.per[m] || 0), 0))]), { indent: 18 });
+        addRow('Amortering ' + (l.langivare || 'koncernlån'), ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (ap.per[m] || 0), 0))]), { indent: 18 });
       }
     });
     // Amorteringsplaner på lån där aktören är långivare: pengar in.
@@ -2783,7 +2790,7 @@ async function renderEkonomiKoncern(){
       const ap = ekonomiKoncernLanAmortPlanPer(l, months);
       if(!Object.keys(ap.per).length) return;
       const cells = months.map(m => { const v = ap.per[m] || 0; sum[m] += v; const sp = sumCell(v); if(v && ap.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = 'Amorteringsplan på utlånat belopp (Koncern → Lån)'; return sp; });
-      addRow('Amortering från ' + (l.lantagare || 'låntagare') + ' (plan)', ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (ap.per[m] || 0), 0))]), { indent: 18 });
+      addRow('Amortering från ' + (l.lantagare || 'låntagare'), ['', ''].concat(cells, [sumCell(months.reduce((s2, m) => s2 + (ap.per[m] || 0), 0))]), { indent: 18 });
     });
     const addBtn = document.createElement('button');
     addBtn.type = 'button'; addBtn.textContent = '+ Egen post';
