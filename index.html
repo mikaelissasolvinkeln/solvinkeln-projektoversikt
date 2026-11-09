@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261109170738">
+<meta name="app-build" content="20261109174733">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -491,6 +491,41 @@
     text-align:right; color:var(--ink);
   }
   .eko-inline-input:hover, .eko-inline-input:focus{ border-color: var(--line-soft); background:#fff; }
+  /* ---------- Koncernschema (koncernträd) ---------- */
+  .ktrad-scroll{ overflow-x:auto; padding:14px 4px 18px; }
+  .ktrad ul{ padding-top:22px; position:relative; display:flex; justify-content:center; margin:0; padding-left:0; }
+  .ktrad ul.ktrad-rot{ padding-top:0; }
+  .ktrad li{ list-style:none; text-align:center; position:relative; padding:22px 8px 0; }
+  .ktrad li::before, .ktrad li::after{ content:''; position:absolute; top:0; right:50%; border-top:2px solid var(--line); width:50%; height:22px; }
+  .ktrad li::after{ right:auto; left:50%; border-left:2px solid var(--line); }
+  .ktrad li:only-child::after, .ktrad li:only-child::before{ display:none; }
+  .ktrad li:only-child{ padding-top:0; }
+  .ktrad li:first-child::before, .ktrad li:last-child::after{ border:0 none; }
+  .ktrad li:last-child::before{ border-right:2px solid var(--line); border-radius:0 8px 0 0; }
+  .ktrad li:first-child::after{ border-radius:8px 0 0 0; }
+  .ktrad ul ul::before{ content:''; position:absolute; top:0; left:50%; border-left:2px solid var(--line); width:0; height:22px; }
+  .knod{ display:inline-block; position:relative; border:1px solid var(--line); border-radius:12px; padding:10px 14px 9px; background:#fff; min-width:150px; max-width:220px; text-align:center; box-shadow:0 1px 0 rgba(34,25,15,0.04); }
+  .knod.moder{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .knod.moder .knod-sub{ color:rgba(255,255,255,0.7); }
+  .knod.dotter{ border-color:var(--good); }
+  .knod.intresse{ border-color:var(--amber); }
+  .knod.ovrigt{ border-color:var(--line); border-style:dashed; }
+  .knod-proc{ position:absolute; top:-11px; left:50%; transform:translateX(-50%); font-size:10.5px; font-weight:700; background:var(--paper); border:1px solid var(--line); border-radius:999px; padding:1px 8px; font-family:'JetBrains Mono', monospace; color:var(--ink); white-space:nowrap; }
+  .knod.dotter .knod-proc{ border-color:var(--good); color:var(--good); }
+  .knod.intresse .knod-proc{ border-color:var(--amber); color:var(--amber); }
+  .knod-namn{ font-family:'Fraunces', serif; font-size:14.5px; font-weight:600; line-height:1.2; }
+  .knod-sub{ font-size:10.5px; color:var(--ink-soft); margin-top:3px; }
+  .knod-tal{ font-size:10.5px; margin-top:5px; font-family:'JetBrains Mono', monospace; color:var(--ink-soft); }
+  .knod.moder .knod-tal{ color:rgba(255,255,255,0.8); }
+  .ktrad-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--ink-soft); margin-top:6px; align-items:center; }
+  .knod-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; border:2px solid var(--line); margin-right:4px; vertical-align:middle; background:#fff; }
+  .knod-dot.moder{ background:var(--ink); border-color:var(--ink); }
+  .knod-dot.dotter{ border-color:var(--good); }
+  .knod-dot.intresse{ border-color:var(--amber); }
+  .knod-dot.ovrigt{ border-style:dashed; }
+  .portal-tabs{ display:flex; gap:6px; margin-top:12px; }
+  .portal-tab{ font-size:12.5px; padding:6px 14px; border:1px solid var(--line-soft); background:var(--paper); border-radius:999px; cursor:pointer; color:var(--ink-soft); }
+  .portal-tab.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
   /* ---------- Ägarportal (Prosavio) ---------- */
   .portal{ min-height:100vh; background:var(--bg); color:var(--ink); font-family:Inter, system-ui, sans-serif; }
   .portal-wrap{ max-width:1180px; margin:0 auto; padding:28px 24px 60px; }
@@ -1307,14 +1342,23 @@
       <div id="ekoBolagList">
         <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
           <h3 style="margin:0 0 4px;">Bolag i koncernen</h3>
-          <button type="button" id="ekoBolagPortalBtn" class="upload-btn" style="margin-left:auto;" title="Publicera en ögonblicksbild till Prosavios ägare">📤 Ägarrapport…</button>
+          <button type="button" id="ekoBolagBrBtn" class="upload-btn" style="margin-left:auto;" title="Balansrapport (PDF) från Prosavio – läser andelar i koncernföretag (13xx)">📄 Läs in balansrapport (andelar)</button>
+          <button type="button" id="ekoBolagPortalBtn" class="upload-btn" title="Publicera en ögonblicksbild till Prosavios ägare">📤 Ägarrapport…</button>
           <button id="ekoBolagAdd" class="add-inline-btn">+ Lägg till bolag</button>
         </div>
         <div class="table-scroll" id="ekoBolagListTable"></div>
+        <div id="ekoBolagAndelarWrap"></div>
       </div>
       <div id="ekoBolagDetail" style="display:none;"></div>
       <input type="file" id="ekoBolagImportInput" accept=".xlsx,.xls,.csv" style="display:none;">
       <input type="file" id="ekoBolagKontoInput" accept=".pdf,application/pdf" multiple style="display:none;">
+      <input type="file" id="ekoBolagBrInput" accept=".pdf,application/pdf" style="display:none;">
+    </div>
+
+    <div id="ekonomiKoncernSchemaView" style="display:none;">
+      <h3 style="margin:0 0 4px;">Koncernschema</h3>
+      <p class="eko-sub" style="margin:0 0 12px;">Fyll i vem som äger vad så ritas koncernträdet nedan. Samma träd visas i ägarportalen och i delningslänkarna.</p>
+      <div id="ekoSchemaWrap"></div>
     </div>
 
     <div id="ekonomiKoncernKostnaderView" style="display:none;">
@@ -2705,7 +2749,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261109170738"></script>
-<script src="app.js?v=20261109170738"></script>
+<script src="db.js?v=20261109174733"></script>
+<script src="app.js?v=20261109174733"></script>
 </body>
 </html>
