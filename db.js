@@ -1,4 +1,12 @@
-// ---------------------------------------------------------------------------
+JSON.parse(localGet('nya-projekt')?.value || '[]').filter(r => !(r.data && r.data.typ === 'bolagsrapport'));
+(data || []).filter(r => !(r.data && r.data.typ === 'bolagsrapport')); // bolagsrapporter (delningslänkar) hör inte hemma i listan
+  }
+  async function getNyaProjektRow(id){
+    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]').find(r => r.id === id) || null;
+    const { data, error } = await withCacheRetry(() => sb.from('nya_projekt').select('*').eq('id', id).maybeSingle());
+    if(error) throw error;
+    return data || null;
+  }// ---------------------------------------------------------------------------
 // db.js - datalager för Projektöversikt.
 //
 // Ersätter den gamla artefakt-lagringen (window.storage, scopad till en enskild
@@ -298,6 +306,7 @@
     updateNyaProjekt,
     deleteNyaProjekt,
     getPublicNyaProjekt,
+    getNyaProjektRow,
     getPortalUser,
     listPortalUsers,
     getPortalRapport,
