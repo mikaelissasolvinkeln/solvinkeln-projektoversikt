@@ -1,12 +1,4 @@
-JSON.parse(localGet('nya-projekt')?.value || '[]').filter(r => !(r.data && r.data.typ === 'bolagsrapport'));
-(data || []).filter(r => !(r.data && r.data.typ === 'bolagsrapport')); // bolagsrapporter (delningslänkar) hör inte hemma i listan
-  }
-  async function getNyaProjektRow(id){
-    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]').find(r => r.id === id) || null;
-    const { data, error } = await withCacheRetry(() => sb.from('nya_projekt').select('*').eq('id', id).maybeSingle());
-    if(error) throw error;
-    return data || null;
-  }// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // db.js - datalager för Projektöversikt.
 //
 // Ersätter den gamla artefakt-lagringen (window.storage, scopad till en enskild
@@ -153,11 +145,19 @@ JSON.parse(localGet('nya-projekt')?.value || '[]').filter(r => !(r.data && r.dat
   // (utan inloggning) via getPublicNyaProjekt när den delas som
   // investeringspropå. ----------
   async function listNyaProjekt(){
-    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]');
+    // Bolagsrapporter (delningslänkar för Koncern → Bolag) ligger i samma tabell men hör inte hemma i listan.
+    const ejRapport = r => !(r && r.data && r.data.typ === 'bolagsrapport');
+    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]').filter(ejRapport);
     const { data, error } = await withCacheRetry(() => sb.from('nya_projekt')
       .select('*').order('created_at', { ascending: false }));
     if(error) throw error;
-    return data || [];
+    return (data || []).filter(ejRapport);
+  }
+  async function getNyaProjektRow(id){
+    if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]').find(r => r.id === id) || null;
+    const { data, error } = await withCacheRetry(() => sb.from('nya_projekt').select('*').eq('id', id).maybeSingle());
+    if(error) throw error;
+    return data || null;
   }
   async function insertNyaProjekt(row){
     if(!hasSupabase){

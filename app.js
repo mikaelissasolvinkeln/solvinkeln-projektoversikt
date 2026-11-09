@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261109115758';
+const APP_BUILD = '20261109121050';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -10010,8 +10010,10 @@ async function renderPublicNyaProjektView(shareId){
       root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Den här länken är inte längre giltig.</div>';
       return;
     }
+    if(candidate.data && candidate.data.typ === 'bolagsrapport'){ renderPublicBolagView(root, candidate); return; }
     document.title = candidate.name + ' · Investeringspropå';
     root.innerHTML = buildPropaHtml(candidate);
+
     wirePropaTabs(root);
   }catch(e){
     root.innerHTML = '<div style="max-width:600px;margin:120px auto;text-align:center;font-family:Inter,sans-serif;color:var(--ink-soft);">Kunde inte läsa in sidan.</div>';
@@ -14841,7 +14843,12 @@ function renderEkonomiBolagDetalj(b){
   const h = document.createElement('h3'); h.style.cssText = 'margin:0; font-family:\'Fraunces\',serif; font-size:20px; cursor:pointer;'; h.textContent = b.namn || 'Bolag'; h.title = 'Klicka för att byta namn';
   h.onclick = async () => { const nytt = prompt('Bolagets namn:', b.namn || ''); if(nytt === null) return; b.namn = nytt.trim() || b.namn; await save(); };
   top.appendChild(h);
-  const impBtn = document.createElement('button'); impBtn.type = 'button'; impBtn.className = 'upload-btn'; impBtn.textContent = '📄 Läs in budget (Excel)'; impBtn.style.marginLeft = 'auto';
+  const delaBtn = document.createElement('button'); delaBtn.type = 'button'; delaBtn.className = 'add-inline-btn'; delaBtn.textContent = '🔗 Dela länk'; delaBtn.style.marginLeft = 'auto';
+  delaBtn.title = 'Skapa en länk som visar bolagets rapport utan inloggning';
+  delaBtn.onclick = () => showEkonomiBolagDelaPopup(b);
+  top.appendChild(delaBtn);
+  const impBtn = document.createElement('button'); impBtn.type = 'button'; impBtn.className = 'upload-btn'; impBtn.textContent = '📄 Läs in budget (Excel)';
+
   impBtn.title = 'Excel med en flik där raderna är poster och kolumnerna månader (t.ex. Budget-fliken: Post | Källa | månader, med INTÄKTER och KOSTNADER som avsnitt)';
   impBtn.onclick = () => { ekoBolagImportTarget = b.id; document.getElementById('ekoBolagImportInput').click(); };
   top.appendChild(impBtn);
@@ -15109,7 +15116,10 @@ async function ekonomiPortalSnapshot(){
     projektFordran.push({ namn: p.name, status: p.status || 'Pågående', saldo, upplupen: Math.round(upp.belopp), ranta: upp.ranta || null, forfall: (companyEkonomiData.lan[p.id] || {}).lanSolvinkelnForfallodatum || '' });
   });
   const lan = ekonomiKoncernList('_lan').map(l => ({ langivare: l.langivare || '', lantagare: l.lantagare || '', saldo: ekonomiKoncernLanSaldo(l), ranta: l.ranta != null && l.ranta !== '' ? l.ranta : null, upplupen: (parseFloat(l.ranta) || l.rantaAck) ? Math.round(ekonomiKoncernLanRanta(l).belopp) : 0, forfall: l.forfallodatum || '', bk: !!l.bk, langivareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)).key : null, lantagareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)).key : null }));
-  const bolag = ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).map(b => {
+  const bolag = ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).map(b => ekonomiPortalBolagData(b));
+  return { publiceradAt: new Date().toISOString(), publiceradAv: myName || myEmail || '', idag, koncern, fordran: { projekt: projektFordran, lan }, bolag, aktorInfo: PORTAL_AKTORER.reduce((o, a) => { o[a.key] = { namn: a.namn, beskrivning: ekonomiPortalInfo(a.key).beskrivning || '' }; return o; }, {}) };
+}
+function ekonomiPortalBolagData(b){
     ekonomiBolagNormalisera(b);
     const r = ekonomiBolagBerakna(b);
     const sum = o => r.manader.reduce((s, m) => s + (o[m] || 0), 0);
@@ -15118,9 +15128,46 @@ async function ekonomiPortalSnapshot(){
       intakter: b.intakter.map(x => ({ namn: x.namn, per: x.per || {} })), kostnader: b.kostnader.map(x => ({ namn: x.namn, per: x.per || {}, ejKassa: !!x.ejKassa })),
       serie: { intakt: r.intakt, kostnad: r.kostnad, resultat: r.resultat, inbet: r.inbet, kostnadKassa: r.kostnadKassa, tillskott: r.tillskott, tillskottPrelim: r.tillskottPrelim, kassaflode: r.kassaflode, kassa: r.kassa, behov: r.behov, kassaEfter: r.kassaEfter },
       nyckeltal: { lagstaKassa: r.lagstaKassa, lagstaManad: r.lagstaManad, behovTotalt: r.behovTotalt, sumIntakt: sum(r.intakt), sumKostnad: sum(r.kostnad), resultat: sum(r.resultat), positivFran } };
-  });
-  return { publiceradAt: new Date().toISOString(), publiceradAv: myName || myEmail || '', idag, koncern, fordran: { projekt: projektFordran, lan }, bolag, aktorInfo: PORTAL_AKTORER.reduce((o, a) => { o[a.key] = { namn: a.namn, beskrivning: ekonomiPortalInfo(a.key).beskrivning || '' }; return o; }, {}) };
 }
+// Delningslänk för ett enskilt bolag (utan inloggning): en ögonblicksbild sparas som en publik rad i
+// nya_projekt (typ 'bolagsrapport', samma delningsmekanism som investeringspropån) och visas med
+// portalens bolagsvy via ?propa=<share_id>. Raden syns inte i listan över nya projekt.
+async function showEkonomiBolagDelaPopup(b){
+  const id = 'bolag-' + b.id;
+  const p = ekoPopup({ title: 'Dela ' + (b.namn || 'bolaget'), sub: 'Länken visar bolagets nyckeltal, kassakurva, likviditet och budget som de ser ut just nu – utan inloggning. Uppdatera länken när siffrorna ändrats, eller sluta dela så slutar länken fungera.', maxWidth: 620 });
+  const status = document.createElement('p'); status.className = 'eko-sub'; status.textContent = 'Skapar länk…'; p.body.appendChild(status);
+  const box = document.createElement('div'); box.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;'; p.body.appendChild(box);
+  const inp = document.createElement('input'); inp.type = 'text'; inp.readOnly = true; inp.style.cssText = 'flex:1; min-width:280px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:12.5px; background:#fff;';
+  box.appendChild(inp);
+  const copy = ekoSmallBtn('Kopiera', async () => { try{ await navigator.clipboard.writeText(inp.value); showToast('Länken kopierad.'); }catch(e){ inp.select(); document.execCommand('copy'); showToast('Länken kopierad.'); } });
+  box.appendChild(copy);
+  const actions = document.createElement('div'); actions.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;'; p.body.appendChild(actions);
+  const publicera = async () => {
+    status.textContent = 'Sparar dagens siffror…';
+    const data = { typ: 'bolagsrapport', bolag: ekonomiPortalBolagData(b), idag: new Date().toISOString().slice(0, 10), publiceradAt: new Date().toISOString(), publiceradAv: myName || '' };
+    let row = null; try{ row = await DB.getNyaProjektRow(id); }catch(e){ row = null; }
+    if(row){ await DB.updateNyaProjekt(id, { data, name: b.namn, is_public: true }); row.data = data; row.is_public = true; }
+    else row = await DB.insertNyaProjekt({ id, share_id: uid() + uid() + uid(), name: b.namn, data, is_public: true, status: 'candidate', created_by: myPersonId, created_by_name: myName });
+    inp.value = location.origin + location.pathname + '?propa=' + row.share_id;
+    status.textContent = 'Länken är aktiv · siffror från ' + new Date(data.publiceradAt).toLocaleString('sv-SE').slice(0, 16) + '.';
+    return row;
+  };
+  try{ await publicera(); }catch(e){ status.textContent = 'Kunde inte skapa länken: ' + (e.message || e); return; }
+  actions.appendChild(ekoSmallBtn('Uppdatera länken med dagens siffror', async () => { try{ await publicera(); showToast('Länken uppdaterad.'); }catch(e){ showDebugError('Kunde inte uppdatera', e); } }));
+  actions.appendChild(ekoSmallBtn('Öppna länken', () => window.open(inp.value, '_blank')));
+  actions.appendChild(ekoSmallBtn('Sluta dela', async () => { if(!confirm('Sluta dela ' + (b.namn || 'bolaget') + '? Länken slutar fungera.')) return; try{ await DB.updateNyaProjekt(id, { is_public: false }); showToast('Delningen är avslutad.'); p.close(); }catch(e){ showDebugError('Kunde inte avsluta delningen', e); } }, true));
+}
+// Publik bolagsrapport (öppnas via ?propa=<share_id>, ingen inloggning).
+function renderPublicBolagView(root, candidate){
+  const d = candidate.data; const b = d.bolag;
+  document.title = (b.namn || 'Bolag') + ' · Rapport';
+  root.className = 'portal';
+  const data = { bolag: [b], idag: d.idag || new Date().toISOString().slice(0, 10), fordran: { projekt: [], lan: [] }, koncern: { rows: [], months: [] }, aktorInfo: {} };
+  const html = portalDetaljHtml(data, b.id, {}).replace(/^<button[^>]*data-portal-home>[^<]*<\/button>/, '');
+  root.innerHTML = '<div class="portal-wrap"><header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Bolagsrapport</div><h1 class="portal-title">' + escapeHtml(b.namn || '') + '</h1></div><div class="portal-user"><div>Siffror per ' + portalFmt.datum(d.publiceradAt) + (d.publiceradAv ? ' · ' + escapeHtml(d.publiceradAv) : '') + '</div></div></header>' + html + '</div>';
+  root.querySelectorAll('[data-portal-toggle]').forEach(el => { el.onclick = () => { const t = root.querySelector('#' + el.dataset.portalToggle); const open = t.style.display !== 'none'; t.style.display = open ? 'none' : 'block'; el.textContent = (open ? 'Visa ' : 'Dölj ') + el.dataset.portalLabel; }; });
+}
+
 // Admin-popup: kort info om Prosavio/Solvinkeln, ägarna som har tillgång, publicera och förhandsgranska.
 async function showEkonomiPortalPopup(){
   const p = ekoPopup({ title: 'Ägarrapport till Prosavios ägare', sub: 'Ägarna loggar in med egna konton och ser den senast publicerade rapporten: en överblick med kort per bolag och detaljer per bolag. Publicera igen när siffrorna ändrats.', maxWidth: 640 });
