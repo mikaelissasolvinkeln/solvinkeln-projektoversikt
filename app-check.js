@@ -1455,7 +1455,7 @@ async function openCompanyEkonomi(){
 // Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
 const EKONOMI_TAB_GROUPS = {
   projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
-  koncern: [['koncern', 'Koncernlikviditet'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']]
+  koncern: [['koncern', 'Koncernlikviditet'], ['koncernbolag', 'Bolag'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']]
 };
 function ekonomiTabGroupOf(view){
   return Object.keys(EKONOMI_TAB_GROUPS).find(g => EKONOMI_TAB_GROUPS[g].some(x => x[0] === view)) || null;
@@ -2481,6 +2481,7 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiKoncernFordranView').style.display = view === 'koncernfordran' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernLanView').style.display = view === 'koncernlan' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernKostnaderView').style.display = view === 'koncernkostnader' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernBolagView').style.display = view === 'koncernbolag' ? 'block' : 'none';
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
@@ -2504,6 +2505,7 @@ function setEkonomiSubView(view){
   else if(view === 'koncernfordran') renderEkonomiKoncernFordran();
   else if(view === 'koncernlan') renderEkonomiKoncernLan();
   else if(view === 'koncernkostnader') renderEkonomiKoncernKostnader();
+  else if(view === 'koncernbolag') renderEkonomiKoncernBolag();
   else renderEkonomiNumberTab(view);
 }
 
@@ -2772,6 +2774,11 @@ async function renderEkonomiKoncern(){
     });
     // Kostnader (Koncern → Kostnader) för bolaget: samma belopp varje månad.
     { const kost = ekonomiKoncernKostnadPerManad(a.namn); if(kost){ months.forEach(m => { sum[m] -= kost; }); addRow('Kostnader', ['', ''].concat(months.map(() => sumCell(-kost)), [sumCell(-kost * months.length)]), { indent: 18 }); } }
+    // Portföljbolag (Koncern → Bolag) som aktören finansierar: registrerade tillskott och beräknat kapitalbehov = pengar ut.
+    ekonomiBolagKoncernRows(a.key, months).forEach(br => {
+      const cells = months.map(m => { const v = br.per[m] || 0; sum[m] -= v; const sp = sumCell(-v); if(v && br.prelim[m]) sp.style.color = 'var(--danger)'; sp.title = (br.typ === 'behov' ? 'Beräknat kapitalbehov enligt bolagets budget (Koncern → Bolag)' : 'Kapitaltillskott registrerat under Koncern → Bolag'); sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.onclick = () => { currentEkonomiBolagId = br.b.id; setEkonomiSubView('koncernbolag'); }; return sp; });
+      addRow(br.namn, ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (br.per[m] || 0), 0))]), { indent: 18 });
+    });
     // Ränte- och amorteringsplaner på koncernlån där aktören är låntagare: utbetalningar i aktörens likviditet.
     ekonomiKoncernLanForPart(a.namn).forEach(l => {
       const rp = ekonomiKoncernLanRantePlanPer(l, months);
@@ -14712,6 +14719,348 @@ function wireRemoteSync(){
     }
   });
 }
+
+// ---------- Koncern: Bolag (portföljbolag under Prosavio) ----------
+// Varje bolag har egen budget (intäkter och kostnader per månad), ingående kassa, säkerhets-
+// marginal och kredittid. Ur det räknas kassaflöde, kassa och kapitalbehov – dvs hur mycket
+// finansiären (Prosavio eller Solvinkeln) behöver skjuta till för att kassan inte ska gå under
+// marginalen. Behovet och registrerade tillskott syns som utbetalningar i finansiärens
+// koncernlikviditet. Budgeten kan läsas in från Excel (flik med Post | Källa | månader).
+// koncern._bolag = [{ id, namn, beskrivning, agarandel, kontakt, finansiar, start, antalManader,
+//   ingaendeKassa, marginal, kredittid, intakter: [{id, namn, per}], kostnader: [{id, namn, per, ejKassa}],
+//   tillskott: [{id, manad, belopp, typ, klart, datum, anteckning}], importerad: {fil, datum} }]
+const EKONOMI_BOLAG_TILLSKOTT_TYPER = ['Aktieägartillskott', 'Lån', 'Nyemission'];
+let currentEkonomiBolagId = null;
+let ekoBolagImportTarget = null;
+function ekonomiBolagList(){ return ekonomiKoncernList('_bolag'); }
+function ekonomiBolagNormalisera(b){
+  if(!Array.isArray(b.intakter)) b.intakter = [];
+  if(!Array.isArray(b.kostnader)) b.kostnader = [];
+  if(!Array.isArray(b.tillskott)) b.tillskott = [];
+  if(!b.start) b.start = new Date().toISOString().slice(0, 7);
+  if(!b.antalManader) b.antalManader = 24;
+  if(!b.finansiar) b.finansiar = 'lanProsavio';
+  return b;
+}
+function ekonomiBolagManader(b){ ekonomiBolagNormalisera(b); return ekonomiPrognosMonths(b.start, Math.min(60, Math.max(1, b.antalManader))); }
+// Beräkning per månad för ett bolag. Kundfordringar: intäkten blir pengar först efter kredittiden
+// (avrundat till hela månader). Kostnader märkta "ej kassa" (t.ex. avskrivningar) räknas i resultatet
+// men inte i kassaflödet. Kapitalbehov = det som krävs för att kassan ska hålla säkerhetsmarginalen.
+function ekonomiBolagBerakna(b, months){
+  ekonomiBolagNormalisera(b);
+  months = months || ekonomiBolagManader(b);
+  const alla = ekonomiBolagManader(b);
+  const sumRows = (rows, m, filter) => rows.filter(r => !filter || filter(r)).reduce((s, r) => s + ((r.per || {})[m] || 0), 0);
+  const shift = Math.max(0, Math.round((parseFloat(b.kredittid) || 0) / 30));
+  const r = { intakt: {}, kostnad: {}, kostnadKassa: {}, resultat: {}, inbet: {}, tillskott: {}, tillskottPrelim: {}, kassaflode: {}, kassa: {}, behov: {}, kassaEfter: {} };
+  let kassa = b.ingaendeKassa || 0, cumBehov = 0;
+  alla.forEach((m, i) => {
+    r.intakt[m] = sumRows(b.intakter, m);
+    r.kostnad[m] = sumRows(b.kostnader, m);
+    r.kostnadKassa[m] = sumRows(b.kostnader, m, k => !k.ejKassa);
+    r.resultat[m] = r.intakt[m] - r.kostnad[m];
+    const src = i - shift; r.inbet[m] = src >= 0 ? sumRows(b.intakter, alla[src]) : 0;
+    r.tillskott[m] = 0; r.tillskottPrelim[m] = false;
+    b.tillskott.forEach(t => { const tm = t.klart && t.datum ? t.datum.slice(0, 7) : t.manad; if(tm === m){ r.tillskott[m] += t.belopp || 0; if(!t.klart) r.tillskottPrelim[m] = true; } });
+    r.kassaflode[m] = r.inbet[m] - r.kostnadKassa[m] + r.tillskott[m];
+    kassa += r.kassaflode[m]; r.kassa[m] = kassa;
+    const beh = Math.max(0, (b.marginal || 0) - (kassa + cumBehov)); cumBehov += beh; r.behov[m] = Math.round(beh);
+    r.kassaEfter[m] = kassa + cumBehov;
+  });
+  r.lagstaKassa = alla.length ? Math.min(...alla.map(m => r.kassa[m])) : 0;
+  r.lagstaManad = alla.find(m => r.kassa[m] === r.lagstaKassa) || '';
+  r.behovTotalt = alla.reduce((s, m) => s + r.behov[m], 0);
+  r.manader = alla;
+  return r;
+}
+// Rader till finansiärens koncernlikviditet: registrerade tillskott (rött = ej genomfört) och
+// beräknat kapitalbehov (alltid preliminärt, rött). Negativa belopp = pengar ut.
+function ekonomiBolagForFinansiar(aktorKey){ return ekonomiBolagList().filter(b => (ekonomiBolagNormalisera(b).finansiar || 'lanProsavio') === aktorKey); }
+function ekonomiBolagKoncernRows(aktorKey, months){
+  const out = [];
+  ekonomiBolagForFinansiar(aktorKey).forEach(b => {
+    const r = ekonomiBolagBerakna(b);
+    const t = {}, tp = {}, beh = {}; let anyT = false, anyB = false;
+    months.forEach(m => { t[m] = r.tillskott[m] || 0; tp[m] = !!r.tillskottPrelim[m]; beh[m] = r.behov[m] || 0; if(t[m]) anyT = true; if(beh[m]) anyB = true; });
+    if(anyT) out.push({ b, namn: 'Kapitaltillskott ' + b.namn, per: t, prelim: tp, typ: 'tillskott' });
+    if(anyB) out.push({ b, namn: 'Kapitalbehov ' + b.namn, per: beh, prelim: months.reduce((o, m) => { o[m] = true; return o; }, {}), typ: 'behov' });
+  });
+  return out;
+}
+function ekonomiBolagFinansiarNamn(key){ const a = EKONOMI_KONCERN_AKTORER.find(x => x.key === key); return a ? a.namn : key; }
+function renderEkonomiKoncernBolag(){
+  const listWrap = document.getElementById('ekoBolagList'), det = document.getElementById('ekoBolagDetail');
+  if(!listWrap || !det) return;
+  const b = currentEkonomiBolagId ? ekonomiBolagList().find(x => x.id === currentEkonomiBolagId) : null;
+  listWrap.style.display = b ? 'none' : 'block';
+  det.style.display = b ? 'block' : 'none';
+  if(b) renderEkonomiBolagDetalj(b); else renderEkonomiBolagLista();
+}
+function renderEkonomiBolagLista(){
+  const wrap = document.getElementById('ekoBolagListTable');
+  wrap.innerHTML = '';
+  const list = ekonomiBolagList();
+  if(!list.length){ wrap.innerHTML = '<p class="eko-sub">Inga bolag upplagda än. Klicka "+ Lägg till bolag" (t.ex. Brickley, Taggr, Reda, Oqto) och läs in budgeten från Excel eller fyll i den för hand.</p>'; return; }
+  const idag = new Date().toISOString().slice(0, 7);
+  const t = document.createElement('table');
+  t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
+  t.style.width = '100%';
+  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th style="text-align:left;">Beskrivning</th><th>Ägarandel</th><th style="text-align:left;">Finansieras av</th><th>Kassa ' + ekonomiPrognosShortLabel(idag) + '</th><th>Lägsta kassa</th><th>Kapitalbehov</th><th style="text-align:left;">Budgetperiod</th><th></th></tr></thead>';
+  const tb = document.createElement('tbody');
+  let totBehov = 0;
+  list.slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).forEach(b => {
+    ekonomiBolagNormalisera(b);
+    const r = ekonomiBolagBerakna(b);
+    totBehov += r.behovTotalt;
+    const tr = document.createElement('tr');
+    tr.className = 'home-list-row';
+    const kassaNu = r.kassa[idag];
+    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(b.namn || 'Bolag') + '</td><td style="text-align:left; font-size:12px; color:var(--ink-soft); max-width:320px; white-space:normal;">' + escapeHtml(b.beskrivning || '') + '</td><td>' + (b.agarandel != null && b.agarandel !== '' ? String(b.agarandel).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(ekonomiBolagFinansiarNamn(b.finansiar)) + '</td><td>' + (kassaNu != null ? formatKrFull(Math.round(kassaNu)) : '—') + '</td><td' + (r.lagstaKassa < 0 ? ' style="color:var(--danger);"' : '') + '>' + formatKrFull(Math.round(r.lagstaKassa)) + (r.lagstaManad ? '<div style="font-size:10px; color:var(--ink-soft);">' + ekonomiPrognosShortLabel(r.lagstaManad) + '</div>' : '') + '</td><td' + (r.behovTotalt ? ' style="color:var(--danger); font-weight:600;"' : '') + '>' + formatKrFull(r.behovTotalt) + '</td><td style="text-align:left; font-size:12px;">' + ekonomiPrognosShortLabel(r.manader[0]) + ' – ' + ekonomiPrognosShortLabel(r.manader[r.manader.length - 1]) + (b.importerad ? '<div style="font-size:10px; color:var(--ink-soft);">Excel ' + escapeHtml(b.importerad.datum || '') + '</div>' : '') + '</td><td class="row-actions"></td>';
+    tr.onclick = () => { currentEkonomiBolagId = b.id; renderEkonomiKoncernBolag(); };
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort bolaget';
+    del.onclick = async (e) => { e.stopPropagation(); if(!confirm('Ta bort ' + (b.namn || 'bolaget') + ' med budget och tillskott?')) return; companyEkonomiData.koncern._bolag = list.filter(x => x.id !== b.id); await saveEkonomiKoncern(); renderEkonomiKoncernBolag(); };
+    tr.lastChild.appendChild(del);
+    tb.appendChild(tr);
+  });
+  const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
+  tot.innerHTML = '<td style="text-align:left;">Summa (' + list.length + ' bolag)</td><td></td><td></td><td></td><td></td><td></td><td>' + formatKrFull(totBehov) + '</td><td></td><td></td>';
+  tb.appendChild(tot);
+  t.appendChild(tb);
+  wrap.appendChild(t);
+}
+function renderEkonomiBolagDetalj(b){
+  ekonomiBolagNormalisera(b);
+  const det = document.getElementById('ekoBolagDetail');
+  det.innerHTML = '';
+  const save = async (rerender) => { await saveEkonomiKoncern(); if(rerender !== false) renderEkonomiBolagDetalj(b); if(ekonomiSubView === 'koncern') renderEkonomiKoncern(); };
+  const top = document.createElement('div');
+  top.style.cssText = 'display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;';
+  const back = document.createElement('button'); back.type = 'button'; back.className = 'add-inline-btn'; back.textContent = '← Alla bolag';
+  back.onclick = () => { currentEkonomiBolagId = null; renderEkonomiKoncernBolag(); };
+  top.appendChild(back);
+  const h = document.createElement('h3'); h.style.cssText = 'margin:0; font-family:\'Fraunces\',serif; font-size:20px; cursor:pointer;'; h.textContent = b.namn || 'Bolag'; h.title = 'Klicka för att byta namn';
+  h.onclick = async () => { const nytt = prompt('Bolagets namn:', b.namn || ''); if(nytt === null) return; b.namn = nytt.trim() || b.namn; await save(); };
+  top.appendChild(h);
+  const impBtn = document.createElement('button'); impBtn.type = 'button'; impBtn.className = 'upload-btn'; impBtn.textContent = '📄 Läs in budget (Excel)'; impBtn.style.marginLeft = 'auto';
+  impBtn.title = 'Excel med en flik där raderna är poster och kolumnerna månader (t.ex. Budget-fliken: Post | Källa | månader, med INTÄKTER och KOSTNADER som avsnitt)';
+  impBtn.onclick = () => { ekoBolagImportTarget = b.id; document.getElementById('ekoBolagImportInput').click(); };
+  top.appendChild(impBtn);
+  const st = document.createElement('span'); st.id = 'ekoBolagImportStatus'; st.className = 'contract-upload-status'; top.appendChild(st);
+  det.appendChild(top);
+  // Kort info + antaganden
+  const info = document.createElement('div');
+  info.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px 18px; margin-bottom:16px; font-size:13px;';
+  const field = (label, el, hint) => { const w = document.createElement('label'); w.style.cssText = 'display:flex; flex-direction:column; gap:3px;'; const l = document.createElement('span'); l.style.cssText = 'font-size:11px; color:var(--ink-soft); letter-spacing:0.5px; text-transform:uppercase;'; l.textContent = label; w.appendChild(l); w.appendChild(el); if(hint){ const hh = document.createElement('span'); hh.style.cssText = 'font-size:10.5px; color:var(--ink-soft);'; hh.textContent = hint; w.appendChild(hh); } info.appendChild(w); return el; };
+  const inpCss = 'border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; background:#fff;';
+  const mkInp = (type, val, onchange, extra) => { const i = document.createElement('input'); i.type = type; i.value = val == null ? '' : val; i.style.cssText = inpCss + (extra || ''); i.onchange = onchange; return i; };
+  field('Beskrivning (kort info)', mkInp('text', b.beskrivning, async e => { b.beskrivning = e.target.value.trim(); await save(false); }));
+  field('Ägarandel %', mkInp('number', b.agarandel, async e => { b.agarandel = e.target.value === '' ? null : parseFloat(e.target.value.replace(',', '.')); await save(false); }, ' width:110px;'));
+  field('Kontaktperson', mkInp('text', b.kontakt, async e => { b.kontakt = e.target.value.trim(); await save(false); }));
+  const fin = document.createElement('select'); fin.className = 'eko-inline-select'; fin.style.cssText = inpCss;
+  fin.innerHTML = EKONOMI_KONCERN_AKTORER.map(a => '<option value="' + a.key + '">' + escapeHtml(a.namn) + '</option>').join('');
+  fin.value = b.finansiar; fin.onchange = async () => { b.finansiar = fin.value; await save(); };
+  field('Finansieras av', fin, 'Kapitalbehov och tillskott syns i denna aktörs koncernlikviditet');
+  field('Budget från månad', mkInp('month', b.start, async e => { if(e.target.value){ b.start = e.target.value; await save(); } }, ' width:150px;'));
+  const ant = document.createElement('select'); ant.className = 'eko-inline-select'; ant.style.cssText = inpCss;
+  [12, 18, 24, 30, 36, 48].concat([b.antalManader]).filter((v, i, a) => a.indexOf(v) === i).sort((x, y) => x - y).forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n + ' månader'; ant.appendChild(o); });
+  ant.value = b.antalManader; ant.onchange = async () => { b.antalManader = parseInt(ant.value, 10); await save(); };
+  field('Period', ant);
+  field('Ingående kassa (kr)', mkInp('number', b.ingaendeKassa, async e => { b.ingaendeKassa = parseFloat(e.target.value.replace(',', '.')) || 0; await save(); }), 'Kassa vid periodens början');
+  field('Säkerhetsmarginal (kr)', mkInp('number', b.marginal, async e => { b.marginal = parseFloat(e.target.value.replace(',', '.')) || 0; await save(); }), 'Kassan ska aldrig gå under detta');
+  field('Kredittid kunder (dagar)', mkInp('number', b.kredittid, async e => { b.kredittid = parseFloat(e.target.value.replace(',', '.')) || 0; await save(); }, ' width:110px;'), 'Intäkten blir pengar efter kredittiden');
+  det.appendChild(info);
+  // Nyckeltal
+  const r = ekonomiBolagBerakna(b);
+  const months = r.manader;
+  const kpi = document.createElement('div');
+  kpi.style.cssText = 'display:flex; gap:22px; flex-wrap:wrap; margin-bottom:14px; font-size:13px;';
+  const kp = (l, v, red) => { const d = document.createElement('div'); d.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px;">' + l + '</div><div style="font-family:\'JetBrains Mono\',monospace; font-size:15px; font-weight:600;' + (red ? ' color:var(--danger);' : '') + '">' + v + '</div>'; kpi.appendChild(d); };
+  kp('Lägsta kassa', formatKrFull(Math.round(r.lagstaKassa)) + (r.lagstaManad ? ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + ekonomiPrognosShortLabel(r.lagstaManad) + '</span>' : ''), r.lagstaKassa < 0);
+  kp('Kapitalbehov i perioden', formatKrFull(r.behovTotalt), r.behovTotalt > 0);
+  kp('Summa intäkter', formatKrFull(Math.round(months.reduce((s, m) => s + r.intakt[m], 0))));
+  kp('Summa kostnader', formatKrFull(Math.round(months.reduce((s, m) => s + r.kostnad[m], 0))));
+  kp('Resultat', formatKrFull(Math.round(months.reduce((s, m) => s + r.resultat[m], 0))), months.reduce((s, m) => s + r.resultat[m], 0) < 0);
+  const first = months.find(m => r.kassaflode[m] > 0 && months.indexOf(m) > 0 && months.slice(months.indexOf(m)).every(mm => r.kassaflode[mm] >= 0));
+  kp('Positivt kassaflöde från', first ? ekonomiPrognosShortLabel(first) : '—');
+  det.appendChild(kpi);
+  // Budgettabellen (tkr)
+  const scroll = document.createElement('div'); scroll.className = 'table-scroll';
+  const table = document.createElement('table'); table.className = 'eko-compare-table';
+  table.style.cssText = 'width:auto; min-width:100%; table-layout:auto; white-space:nowrap;';
+  table.innerHTML = '<thead><tr><th style="text-align:left; position:sticky; left:0; background:var(--paper, #fff); z-index:2;">Post (tkr)</th>' + months.map(m => '<th style="text-align:center;">' + ekonomiPrognosShortLabel(m) + '</th>').join('') + '<th style="text-align:center;">Summa</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody'); table.appendChild(tbody);
+  const mono = "font-family:'JetBrains Mono',monospace; text-align:right; font-size:12px;";
+  const tkr = v => { const x = Math.round((v || 0) / 1000); return x === 0 ? '' : x.toLocaleString('sv-SE'); };
+  const cellOpts = { fmt: v => { const x = Math.round(v / 1000); return x === 0 ? '0' : x.toLocaleString('sv-SE'); }, scale: 1000 };
+  const addRow = (label, cells, opts) => {
+    const tr = document.createElement('tr'); if(opts && opts.cls) tr.className = opts.cls;
+    const td0 = document.createElement('td');
+    td0.style.cssText = 'font-size:12.5px; text-align:left; padding-left:' + ((opts && opts.indent) || 6) + 'px; position:sticky; left:0; background:' + ((opts && opts.bg) || 'var(--paper, #fff)') + '; z-index:1;' + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.small ? ' font-size:11.5px; color:var(--ink-soft);' : '');
+    if(typeof label === 'string') td0.textContent = label; else td0.appendChild(label);
+    tr.appendChild(td0);
+    cells.forEach(c => { const td = document.createElement('td'); td.style.cssText = mono + (opts && opts.bold ? ' font-weight:700;' : '') + (opts && opts.red ? ' color:var(--danger);' : ''); if(c && c.nodeType) td.appendChild(c); else td.textContent = c == null ? '' : c; tr.appendChild(td); });
+    const act = document.createElement('td'); act.className = 'row-actions'; if(opts && opts.action) act.appendChild(opts.action); tr.appendChild(act);
+    if(opts && opts.bg) tr.style.background = opts.bg;
+    tbody.appendChild(tr); return tr;
+  };
+  const sectionRow = (txt) => { const tr = addRow(txt, months.map(() => '').concat(['']), { bold: true, bg: 'var(--paper-soft, #f6f4ef)' }); tr.firstChild.style.cssText += ' font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); padding-top:10px;'; return tr; };
+  const postRows = (rows, kind) => {
+    rows.forEach(post => {
+      if(!post.per) post.per = {};
+      const name = document.createElement('div'); name.style.cssText = 'display:flex; align-items:center; gap:6px;';
+      const nm = document.createElement('span'); nm.className = 'editable'; nm.style.cursor = 'pointer'; nm.textContent = post.namn || (kind === 'intakt' ? 'Intäkt' : 'Kostnad'); nm.title = 'Klicka för att byta namn';
+      nm.onclick = async () => { const nytt = prompt('Postens namn:', post.namn || ''); if(nytt === null) return; post.namn = nytt.trim() || post.namn; await save(); };
+      name.appendChild(nm);
+      if(kind === 'kostnad'){
+        const ej = document.createElement('span'); ej.style.cssText = 'font-size:10px; cursor:pointer; border:1px solid var(--line-soft); border-radius:999px; padding:0 6px; color:' + (post.ejKassa ? 'var(--blue)' : 'var(--ink-soft)') + ';';
+        ej.textContent = post.ejKassa ? 'ej kassa' : 'kassa'; ej.title = post.ejKassa ? 'Räknas i resultatet men inte i kassaflödet (t.ex. avskrivning). Klicka för att ändra.' : 'Påverkar kassan. Klicka om posten inte är kassapåverkande (t.ex. avskrivning).';
+        ej.onclick = async () => { post.ejKassa = !post.ejKassa; await save(); };
+        name.appendChild(ej);
+      }
+      const cells = months.map(m => { const d = document.createElement('div'); d.style.minWidth = '54px'; likviditetsbudgetEditableCell(d, post.per[m] != null ? post.per[m] : null, async v => { if(v == null) delete post.per[m]; else post.per[m] = Math.round(v); await save(); }, cellOpts); if(!post.per[m]) d.firstChild.textContent = '·'; return d; });
+      const sum = months.reduce((s, m) => s + (post.per[m] || 0), 0);
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort raden';
+      del.onclick = async () => { if(!confirm('Ta bort ' + (post.namn || 'raden') + '?')) return; if(kind === 'intakt') b.intakter = b.intakter.filter(x => x.id !== post.id); else b.kostnader = b.kostnader.filter(x => x.id !== post.id); await save(); };
+      addRow(name, cells.concat([tkr(sum)]), { indent: 18, action: del });
+    });
+    const add = document.createElement('button'); add.type = 'button'; add.textContent = kind === 'intakt' ? '+ Intäktsrad' : '+ Kostnadsrad';
+    add.style.cssText = 'font-size:11px; padding:2px 8px; border:1px solid var(--line-soft); background:#fff; border-radius:5px; cursor:pointer; color:var(--ink-soft);';
+    add.onclick = async () => { const namn = prompt('Namn på posten:', kind === 'intakt' ? 'Intäkt' : 'Kostnad'); if(namn === null) return; const row = { id: uid(), namn: namn.trim() || (kind === 'intakt' ? 'Intäkt' : 'Kostnad'), per: {} }; if(kind === 'intakt') b.intakter.push(row); else { row.ejKassa = /avskriv/i.test(row.namn); b.kostnader.push(row); } await save(); };
+    addRow(add, months.map(() => '').concat(['']), { indent: 18 });
+  };
+  sectionRow('Intäkter');
+  postRows(b.intakter, 'intakt');
+  addRow('Summa intäkter', months.map(m => tkr(r.intakt[m])).concat([tkr(months.reduce((s, m) => s + r.intakt[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+  sectionRow('Kostnader');
+  postRows(b.kostnader, 'kostnad');
+  addRow('Summa kostnader', months.map(m => tkr(-r.kostnad[m])).concat([tkr(-months.reduce((s, m) => s + r.kostnad[m], 0))]), { bold: true, cls: 'eko-row-resultat' });
+  addRow('Resultat', months.map(m => tkr(r.resultat[m])).concat([tkr(months.reduce((s, m) => s + r.resultat[m], 0))]), { bold: true });
+  sectionRow('Likviditet');
+  const shiftTxt = Math.round((parseFloat(b.kredittid) || 0) / 30);
+  addRow('Inbetalningar' + (shiftTxt ? ' (kredittid ' + b.kredittid + ' dagar)' : ''), months.map(m => tkr(r.inbet[m])).concat([tkr(months.reduce((s, m) => s + r.inbet[m], 0))]), { indent: 18 });
+  addRow('Utbetalningar (kassapåverkande kostnader)', months.map(m => tkr(-r.kostnadKassa[m])).concat([tkr(-months.reduce((s, m) => s + r.kostnadKassa[m], 0))]), { indent: 18 });
+  // Kapitaltillskott: klicka för att registrera (planerat = rött, genomfört = svart)
+  const tsLabel = document.createElement('span'); tsLabel.className = 'editable'; tsLabel.style.cursor = 'pointer'; tsLabel.textContent = 'Kapitaltillskott från ' + ekonomiBolagFinansiarNamn(b.finansiar); tsLabel.title = 'Klicka för att registrera eller ändra tillskott';
+  tsLabel.onclick = () => showEkonomiBolagTillskottPopup(b);
+  addRow(tsLabel, months.map(m => { const sp = document.createElement('span'); sp.textContent = tkr(r.tillskott[m]); if(r.tillskottPrelim[m]) sp.style.color = 'var(--danger)'; sp.className = 'editable'; sp.style.cursor = 'pointer'; sp.onclick = () => showEkonomiBolagTillskottPopup(b, m); return sp; }).concat([tkr(months.reduce((s, m) => s + r.tillskott[m], 0))]), { indent: 18 });
+  addRow('Kassaflöde', months.map(m => tkr(r.kassaflode[m])).concat([tkr(months.reduce((s, m) => s + r.kassaflode[m], 0))]), { bold: true });
+  addRow('Kassa vid månadens slut', months.map(m => { const sp = document.createElement('span'); sp.textContent = tkr(r.kassa[m]) || '0'; if(r.kassa[m] < (b.marginal || 0)) sp.style.color = 'var(--danger)'; return sp; }).concat(['']), { bold: true, cls: 'eko-row-resultat' });
+  addRow('Kapitalbehov för att hålla marginalen ' + formatKrFull(b.marginal || 0), months.map(m => tkr(r.behov[m])).concat([tkr(r.behovTotalt)]), { indent: 18, red: true });
+  if(r.behovTotalt) addRow('Kassa efter kapitalbehov', months.map(m => tkr(r.kassaEfter[m]) || '0').concat(['']), { small: true, indent: 18 });
+  scroll.appendChild(table);
+  det.appendChild(scroll);
+  const hint = document.createElement('p'); hint.className = 'eko-sub'; hint.style.marginTop = '8px';
+  hint.textContent = 'Belopp i tkr. Klicka i en cell för att ändra. Kapitalbehovet är det som ' + ekonomiBolagFinansiarNamn(b.finansiar) + ' behöver skjuta till varje månad för att kassan inte ska gå under säkerhetsmarginalen – det syns rött i ' + ekonomiBolagFinansiarNamn(b.finansiar) + 's koncernlikviditet tills du registrerar tillskottet.';
+  det.appendChild(hint);
+}
+function showEkonomiBolagTillskottPopup(b, manad){
+  ekonomiBolagNormalisera(b);
+  const p = ekoPopup({ title: 'Kapitaltillskott · ' + (b.namn || 'Bolag'), sub: 'Planerade tillskott ligger rött i bolagets kassa och i ' + ekonomiBolagFinansiarNamn(b.finansiar) + 's koncernlikviditet. Markera genomfört med datum så blir de svarta.', maxWidth: 620 });
+  const inpCss = 'border:1px solid var(--line-soft); border-radius:5px; padding:2px 4px; font-size:12px;';
+  const listEl = document.createElement('div');
+  const refresh = async () => { await saveEkonomiKoncern(); renderEkonomiKoncernBolag(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern(); };
+  const render = () => {
+    listEl.innerHTML = '';
+    if(!b.tillskott.length) listEl.innerHTML = '<p class="eko-sub">Inga tillskott registrerade.</p>';
+    b.tillskott.slice().sort((x, y) => String(x.manad).localeCompare(String(y.manad))).forEach(t => {
+      const left = document.createElement('div'); left.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+      const mon = document.createElement('input'); mon.type = 'month'; mon.value = t.manad || ''; mon.style.cssText = inpCss; mon.disabled = !!t.klart; mon.onchange = async () => { t.manad = mon.value; await refresh(); render(); };
+      const typ = document.createElement('select'); typ.className = 'eko-inline-select'; typ.innerHTML = EKONOMI_BOLAG_TILLSKOTT_TYPER.map(x => '<option>' + x + '</option>').join(''); typ.value = EKONOMI_BOLAG_TILLSKOTT_TYPER.includes(t.typ) ? t.typ : EKONOMI_BOLAG_TILLSKOTT_TYPER[0]; typ.onchange = async () => { t.typ = typ.value; await refresh(); };
+      left.appendChild(mon); left.appendChild(typ);
+      const tag = document.createElement('span'); tag.style.cssText = 'font-size:11px; color:' + (t.klart ? 'var(--good, #2e7d32)' : 'var(--danger)') + ';'; tag.textContent = t.klart ? 'Genomfört ' + (t.datum || '') : 'Planerat'; left.appendChild(tag);
+      const right = document.createElement('div'); right.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;';
+      const amt = document.createElement('input'); amt.type = 'number'; amt.value = t.belopp || ''; amt.placeholder = 'Belopp (kr)'; amt.style.cssText = 'width:130px; text-align:right; ' + inpCss; amt.onchange = async () => { t.belopp = Math.round(parseFloat(String(amt.value).replace(',', '.')) || 0); await refresh(); render(); };
+      right.appendChild(amt);
+      if(!t.klart){
+        const date = document.createElement('input'); date.type = 'date'; date.style.cssText = inpCss; const today = new Date().toISOString().slice(0, 10); date.value = t.manad && t.manad > today.slice(0, 7) ? t.manad + '-01' : today; right.appendChild(date);
+        right.appendChild(ekoSmallBtn('Markera genomfört', async () => { if(!date.value){ showToast('Ange datum.'); return; } t.klart = true; t.datum = date.value; t.by = myName || ''; await refresh(); render(); }));
+      } else {
+        right.appendChild(ekoSmallBtn('Ångra', async () => { t.klart = false; t.datum = ''; await refresh(); render(); }));
+      }
+      right.appendChild(ekoSmallBtn('Ta bort', async () => { if(!confirm('Ta bort tillskottet?')) return; b.tillskott = b.tillskott.filter(x => x !== t); await refresh(); render(); }, true));
+      listEl.appendChild(ekoPopupLine(left, right));
+    });
+  };
+  render();
+  p.body.appendChild(listEl);
+  const r = ekonomiBolagBerakna(b);
+  const gen = document.createElement('div'); gen.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap;';
+  gen.appendChild(ekoSmallBtn('+ Lägg till tillskott', async () => { b.tillskott.push({ id: uid(), manad: manad || r.manader.find(m => r.behov[m]) || r.manader[0], belopp: manad && r.behov[manad] ? r.behov[manad] : 0, typ: EKONOMI_BOLAG_TILLSKOTT_TYPER[0], klart: false, datum: '' }); await refresh(); render(); }));
+  if(r.behovTotalt) gen.appendChild(ekoSmallBtn('Skapa planerade tillskott från kapitalbehovet (' + formatKrFull(r.behovTotalt) + ')', async () => { r.manader.forEach(m => { if(r.behov[m]) b.tillskott.push({ id: uid(), manad: m, belopp: r.behov[m], typ: EKONOMI_BOLAG_TILLSKOTT_TYPER[0], klart: false, datum: '' }); }); await refresh(); p.close(); showEkonomiBolagTillskottPopup(b); }));
+  p.body.appendChild(gen);
+}
+// Excel-import: hittar fliken med INTÄKTER/KOSTNADER (t.ex. "Budget"), månader ur rubrikraden
+// (Excel-datum), rader = poster. "Summa"-rader och allt från RESULTAT/NYCKELTAL hoppas över.
+// Läser även Kredittid, Ingående kassa och Säkerhetsmarginal om de finns (t.ex. i fliken Likviditet).
+function ekonomiBolagParseBudget(wb){
+  const serialToMonth = v => { if(typeof v !== 'number' || v < 30000 || v > 80000) return null; const d = XLSX.SSF.parse_date_code(v); return d ? d.y + '-' + String(d.m).padStart(2, '0') : null; };
+  const txtToMonth = v => { const s = String(v || '').trim(); let m = s.match(/^(\d{4})-(\d{2})/); if(m) return m[1] + '-' + m[2]; m = s.match(/^([a-zåäö]{3})[a-zåäö]*\.?\s*(\d{2,4})$/i); if(m){ const idx = MONTH_NAMES.findIndex(n => n.slice(0, 3).toLowerCase() === m[1].toLowerCase()); if(idx >= 0){ const y = m[2].length === 2 ? 2000 + parseInt(m[2], 10) : parseInt(m[2], 10); return y + '-' + String(idx + 1).padStart(2, '0'); } } return null; };
+  let best = null;
+  wb.SheetNames.forEach(n => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '' });
+    const hasInt = rows.some(r => /^intäkter$/i.test(String(r[0]).trim())), hasKost = rows.some(r => /^kostnader$/i.test(String(r[0]).trim()));
+    let headIdx = -1, cols = [];
+    rows.forEach((r, i) => { if(headIdx >= 0) return; const c = []; r.forEach((v, j) => { const m = serialToMonth(v) || txtToMonth(v); if(m) c.push({ j, m }); }); if(c.length >= 6){ headIdx = i; cols = c; } });
+    if(headIdx < 0) return;
+    const score = (hasInt ? 2 : 0) + (hasKost ? 2 : 0) + (/budget/i.test(n) ? 1 : 0);
+    if(!best || score > best.score) best = { n, rows, headIdx, cols, score, hasInt, hasKost };
+  });
+  if(!best) throw new Error('Hittade ingen flik med månader i rubrikraden.');
+  const intakter = [], kostnader = []; let section = best.hasInt || best.hasKost ? null : 'intakt';
+  for(let i = best.headIdx + 1; i < best.rows.length; i++){
+    const r = best.rows[i]; const name = String(r[0] || '').trim();
+    if(!name) continue;
+    if(/^intäkter$/i.test(name)){ section = 'intakt'; continue; }
+    if(/^kostnader$/i.test(name)){ section = 'kostnad'; continue; }
+    if(/^(resultat|nyckeltal|ebitda|likviditet)/i.test(name)) break;
+    if(/^summa/i.test(name) || !section) continue;
+    const per = {}; let any = false;
+    best.cols.forEach(({ j, m }) => { const v = r[j]; if(typeof v === 'number' && v){ per[m] = Math.round(v); any = true; } });
+    if(!any) continue;
+    const row = { id: uid(), namn: name, per };
+    if(section === 'intakt') intakter.push(row); else { row.ejKassa = /avskriv/i.test(name); kostnader.push(row); }
+  }
+  const months = best.cols.map(c => c.m).sort();
+  // Antaganden från valfri flik: etikett i kolumn A, värde i kolumn B
+  const ant = {};
+  wb.SheetNames.forEach(n => { XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '' }).forEach(r => { const l = String(r[0] || '').toLowerCase(); const v = typeof r[1] === 'number' ? r[1] : null; if(v == null) return; if(/kredittid/.test(l) && ant.kredittid == null) ant.kredittid = v; if(/ingående kassa/.test(l) && ant.ingaendeKassa == null) ant.ingaendeKassa = v; if(/säkerhetsmarginal/.test(l) && ant.marginal == null) ant.marginal = v; }); });
+  return { flik: best.n, intakter, kostnader, start: months[0], antalManader: months.length, ant };
+}
+async function ekonomiBolagImportExcel(b, file){
+  const st = document.getElementById('ekoBolagImportStatus');
+  const set = (t, k) => { if(st){ st.textContent = t; st.className = 'contract-upload-status' + (k ? ' ' + k : ''); } };
+  set('Läser ' + file.name + '…');
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const res = ekonomiBolagParseBudget(wb);
+  if(!res.intakter.length && !res.kostnader.length) throw new Error('Inga intäkts- eller kostnadsrader hittades i fliken ' + res.flik + '.');
+  if((b.intakter.length || b.kostnader.length) && !confirm('Ersätta nuvarande budget (' + b.intakter.length + ' intäktsrader, ' + b.kostnader.length + ' kostnadsrader) med ' + res.intakter.length + ' + ' + res.kostnader.length + ' rader från ' + file.name + ' (fliken ' + res.flik + ')?')){ set('Importen avbröts.'); return; }
+  b.intakter = res.intakter; b.kostnader = res.kostnader;
+  b.start = res.start; b.antalManader = Math.min(60, res.antalManader);
+  if(res.ant.kredittid != null) b.kredittid = res.ant.kredittid;
+  if(res.ant.ingaendeKassa != null) b.ingaendeKassa = res.ant.ingaendeKassa;
+  if(res.ant.marginal != null) b.marginal = res.ant.marginal;
+  b.importerad = { fil: file.name, datum: new Date().toISOString().slice(0, 10), flik: res.flik };
+  await saveEkonomiKoncern();
+  renderEkonomiKoncernBolag();
+  showToast(res.intakter.length + ' intäktsrader och ' + res.kostnader.length + ' kostnadsrader inlästa från ' + file.name + ' (' + ekonomiPrognosShortLabel(res.start) + ' – ' + ekonomiPrognosShortLabel(ekonomiPrognosMonths(res.start, res.antalManader)[res.antalManader - 1]) + ').');
+}
+document.getElementById('ekoBolagAdd').onclick = async () => {
+  const namn = prompt('Bolagets namn (t.ex. Brickley, Taggr, Reda, Oqto):', '');
+  if(namn === null || !namn.trim()) return;
+  const b = ekonomiBolagNormalisera({ id: uid(), namn: namn.trim(), beskrivning: '', agarandel: null, kontakt: '', finansiar: 'lanProsavio', ordning: ekonomiBolagList().length + 1, ingaendeKassa: 0, marginal: 0, kredittid: 30 });
+  ekonomiBolagList().push(b);
+  await saveEkonomiKoncern();
+  currentEkonomiBolagId = b.id;
+  renderEkonomiKoncernBolag();
+};
+document.getElementById('ekoBolagImportInput').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  const b = ekonomiBolagList().find(x => x.id === ekoBolagImportTarget);
+  if(!file || !b) return;
+  try{ await ekonomiBolagImportExcel(b, file); }
+  catch(err){ const st = document.getElementById('ekoBolagImportStatus'); if(st){ st.textContent = 'Kunde inte läsa filen: ' + (err.message || err); st.className = 'contract-upload-status err'; } }
+});
 
 async function startApp(){
   await init();
