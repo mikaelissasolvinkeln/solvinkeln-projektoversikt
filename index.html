@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261106173703">
+<meta name="app-build" content="20261109113208">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1247,6 +1247,19 @@
         </table>
       </div>
       <button id="ekoKoncernLanAdd" class="add-inline-btn" style="margin-top:8px;">+ Lägg till lån</button>
+    </div>
+
+    <div id="ekonomiKoncernBolagView" style="display:none;">
+      <div id="ekoBolagList">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+          <h3 style="margin:0 0 4px;">Bolag i koncernen</h3>
+          <button id="ekoBolagAdd" class="add-inline-btn" style="margin-left:auto;">+ Lägg till bolag</button>
+        </div>
+        <p class="eko-sub" style="margin:0 0 10px;">Varje bolag har sin egen budget och likviditet. Kapitalbehovet – det finansiären behöver skjuta till för att kassan ska hålla säkerhetsmarginalen – syns rött i finansiärens koncernlikviditet. Klicka på ett bolag för budget, likviditet och tillskott.</p>
+        <div class="table-scroll" id="ekoBolagListTable"></div>
+      </div>
+      <div id="ekoBolagDetail" style="display:none;"></div>
+      <input type="file" id="ekoBolagImportInput" accept=".xlsx,.xls,.csv" style="display:none;">
     </div>
 
     <div id="ekonomiKoncernKostnaderView" style="display:none;">
@@ -2636,7 +2649,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261106173703"></script>
-<script src="app.js?v=20261106173703"></script>
+<script src="db.js?v=20261109113208"></script>
+<script src="app.js?v=20261109113208"></script>
 </body>
 </html>
