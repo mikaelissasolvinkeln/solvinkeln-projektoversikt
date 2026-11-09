@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261109115526';
+const APP_BUILD = '20261109115758';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -14805,7 +14805,7 @@ function renderEkonomiBolagLista(){
   const t = document.createElement('table');
   t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
   t.style.width = '100%';
-  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th style="text-align:left;">Beskrivning</th><th>Ägarandel</th><th style="text-align:left;">Finansieras av</th><th>Kassa ' + ekonomiPrognosShortLabel(idag) + '</th><th>Lägsta kassa</th><th>Kapitalbehov</th><th style="text-align:left;">Budgetperiod</th><th></th></tr></thead>';
+  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th style="text-align:left;">Beskrivning</th><th>Ägarandel</th><th style="text-align:left;">Finansieras av</th><th>Kassa ' + ekonomiPrognosShortLabel(idag) + '</th><th>Kapitalbehov</th><th style="text-align:left;">Budgetperiod</th><th></th></tr></thead>';
   const tb = document.createElement('tbody');
   let totBehov = 0;
   list.slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).forEach(b => {
@@ -14815,7 +14815,7 @@ function renderEkonomiBolagLista(){
     const tr = document.createElement('tr');
     tr.className = 'home-list-row';
     const kassaNu = r.kassa[idag];
-    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(b.namn || 'Bolag') + '</td><td style="text-align:left; font-size:12px; color:var(--ink-soft); max-width:320px; white-space:normal;">' + escapeHtml(b.beskrivning || '') + '</td><td>' + (b.agarandel != null && b.agarandel !== '' ? String(b.agarandel).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(ekonomiBolagFinansiarNamn(b.finansiar)) + '</td><td>' + (kassaNu != null ? formatKrFull(Math.round(kassaNu)) : '—') + '</td><td' + (r.lagstaKassa < 0 ? ' style="color:var(--danger);"' : '') + '>' + formatKrFull(Math.round(r.lagstaKassa)) + (r.lagstaManad ? '<div style="font-size:10px; color:var(--ink-soft);">' + ekonomiPrognosShortLabel(r.lagstaManad) + '</div>' : '') + '</td><td' + (r.behovTotalt ? ' style="color:var(--danger); font-weight:600;"' : '') + '>' + formatKrFull(r.behovTotalt) + '</td><td style="text-align:left; font-size:12px;">' + ekonomiPrognosShortLabel(r.manader[0]) + ' – ' + ekonomiPrognosShortLabel(r.manader[r.manader.length - 1]) + (b.importerad ? '<div style="font-size:10px; color:var(--ink-soft);">Excel ' + escapeHtml(b.importerad.datum || '') + '</div>' : '') + '</td><td class="row-actions"></td>';
+    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(b.namn || 'Bolag') + '</td><td style="text-align:left; font-size:12px; color:var(--ink-soft); max-width:320px; white-space:normal;">' + escapeHtml(b.beskrivning || '') + '</td><td>' + (b.agarandel != null && b.agarandel !== '' ? String(b.agarandel).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(ekonomiBolagFinansiarNamn(b.finansiar)) + '</td><td>' + (kassaNu != null ? formatKrFull(Math.round(kassaNu)) : '—') + '</td><td' + (r.behovTotalt ? ' style="color:var(--danger); font-weight:600;"' : '') + '>' + formatKrFull(r.behovTotalt) + '</td><td style="text-align:left; font-size:12px;">' + ekonomiPrognosShortLabel(r.manader[0]) + ' – ' + ekonomiPrognosShortLabel(r.manader[r.manader.length - 1]) + (b.importerad ? '<div style="font-size:10px; color:var(--ink-soft);">Excel ' + escapeHtml(b.importerad.datum || '') + '</div>' : '') + '</td><td class="row-actions"></td>';
     tr.onclick = () => { currentEkonomiBolagId = b.id; renderEkonomiKoncernBolag(); };
     const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort bolaget';
     del.onclick = async (e) => { e.stopPropagation(); if(!confirm('Ta bort ' + (b.namn || 'bolaget') + ' med budget och tillskott?')) return; companyEkonomiData.koncern._bolag = list.filter(x => x.id !== b.id); await saveEkonomiKoncern(); renderEkonomiKoncernBolag(); };
@@ -14823,7 +14823,7 @@ function renderEkonomiBolagLista(){
     tb.appendChild(tr);
   });
   const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td style="text-align:left;">Summa (' + list.length + ' bolag)</td><td></td><td></td><td></td><td></td><td></td><td>' + formatKrFull(totBehov) + '</td><td></td><td></td>';
+  tot.innerHTML = '<td style="text-align:left;">Summa (' + list.length + ' bolag)</td><td></td><td></td><td></td><td></td><td>' + formatKrFull(totBehov) + '</td><td></td><td></td>';
   tb.appendChild(tot);
   t.appendChild(tb);
   wrap.appendChild(t);
@@ -14875,7 +14875,6 @@ function renderEkonomiBolagDetalj(b){
   const kpi = document.createElement('div');
   kpi.style.cssText = 'display:flex; gap:22px; flex-wrap:wrap; margin-bottom:14px; font-size:13px;';
   const kp = (l, v, red) => { const d = document.createElement('div'); d.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px;">' + l + '</div><div style="font-family:\'JetBrains Mono\',monospace; font-size:15px; font-weight:600;' + (red ? ' color:var(--danger);' : '') + '">' + v + '</div>'; kpi.appendChild(d); };
-  kp('Lägsta kassa', formatKrFull(Math.round(r.lagstaKassa)) + (r.lagstaManad ? ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + ekonomiPrognosShortLabel(r.lagstaManad) + '</span>' : ''), r.lagstaKassa < 0);
   kp('Kapitalbehov i perioden', formatKrFull(r.behovTotalt), r.behovTotalt > 0);
   kp('Summa intäkter', formatKrFull(Math.round(months.reduce((s, m) => s + r.intakt[m], 0))));
   kp('Summa kostnader', formatKrFull(Math.round(months.reduce((s, m) => s + r.kostnad[m], 0))));
@@ -14949,9 +14948,6 @@ function renderEkonomiBolagDetalj(b){
   if(r.behovTotalt) addRow('Kassa efter kapitalbehov', months.map(m => tkr(r.kassaEfter[m]) || '0').concat(['']), { small: true, indent: 18 });
   scroll.appendChild(table);
   det.appendChild(scroll);
-  const hint = document.createElement('p'); hint.className = 'eko-sub'; hint.style.marginTop = '8px';
-  hint.textContent = 'Belopp i tkr. Klicka i en cell för att ändra. Kapitalbehovet är det som ' + ekonomiBolagFinansiarNamn(b.finansiar) + ' behöver skjuta till varje månad för att kassan inte ska gå under säkerhetsmarginalen – det syns rött i ' + ekonomiBolagFinansiarNamn(b.finansiar) + 's koncernlikviditet tills du registrerar tillskottet.';
-  det.appendChild(hint);
 }
 function showEkonomiBolagTillskottPopup(b, manad){
   ekonomiBolagNormalisera(b);
@@ -15277,7 +15273,7 @@ function portalOversiktHtml(data){
     h += '<article class="portal-card portal-card-click" data-portal-open="' + escapeHtml(k.id) + '">' +
       '<div class="portal-card-head"><div><div class="portal-card-name">' + escapeHtml(k.namn) + '</div><div class="portal-card-desc">' + escapeHtml(k.beskrivning || '') + '</div></div><span class="portal-pill ' + st.cls + '">' + st.text + '</span></div>' +
       (k.serie.length ? portalSparkline(k.serie, { marginal: k.marginal || null }) : '<div class="portal-spark-empty">Ingen likviditet publicerad</div>') +
-      '<div class="portal-card-kpis"><div><span>Kassa nu</span><b>' + portalFmt.mkr(k.kassaNu) + '</b></div><div><span>Lägsta kassa</span><b' + (k.lagsta < 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.lagsta) + '</b><small>' + portalFmt.manad(k.lagstaManad) + '</small></div><div><span>Kapitalbehov</span><b' + (k.behov > 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.behov) + '</b></div></div>' +
+      '<div class="portal-card-kpis"><div><span>Kassa nu</span><b>' + portalFmt.mkr(k.kassaNu) + '</b></div><div><span>Kapitalbehov</span><b' + (k.behov > 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.behov) + '</b></div></div>' +
       '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + '</div></article>';
   });
   h += '</section>';
@@ -15314,14 +15310,13 @@ function portalDetaljHtml(data, id, state){
     let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px;">' + escapeHtml(info.beskrivning || '') + '</p></div></section>';
     h += '<section class="portal-kpis">' +
       '<div class="portal-kpi"><div class="portal-kpi-l">Kassa ' + portalFmt.manad(months[0]) + '</div><div class="portal-kpi-v">' + portalFmt.mkr(likv[0]) + '</div></div>' +
-      '<div class="portal-kpi"><div class="portal-kpi-l">Lägsta kassa</div><div class="portal-kpi-v' + (lagsta < 0 ? ' rod' : '') + '">' + portalFmt.mkr(lagsta) + '</div><div class="portal-kpi-s">' + portalFmt.manad(months[likv.indexOf(lagsta)]) + '</div></div>' +
       '<div class="portal-kpi"><div class="portal-kpi-l">Kassa om 24 mån</div><div class="portal-kpi-v' + (likv[likv.length - 1] < 0 ? ' rod' : '') + '">' + portalFmt.mkr(likv[likv.length - 1]) + '</div></div>' +
       (aktor.key === 'lanProsavio' ? '<div class="portal-kpi"><div class="portal-kpi-l">Kapitalbehov portföljbolagen</div><div class="portal-kpi-v rod">' + portalFmt.mkr(data.bolag.reduce((s, b) => s + b.nyckeltal.behovTotalt, 0)) + '</div></div>' : '') +
       '</section>';
     if(likv.length) h += '<div class="portal-card">' + portalSparkline(likv, { w: 900, h: 120 }) + '<div class="portal-sub" style="margin-top:4px;">Likviditet per månad, ' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '. Röda siffror i tabellen är preliminära.</div></div>';
     h += '<h2 class="portal-h2">Likviditet (tkr)</h2>' + portalTable(['Post', 'Ing. fordran', 'Ing. kassa'].concat(months.map(portalFmt.manad), ['Summa']), rows.map(r => ({ cls: r.bold ? 'sum' : (r.small ? 'small' : ''), indent: Math.max(0, r.indent - 6), cells: [{ t: escapeHtml(r.label) }].concat(r.cells.map(c => ({ t: escapeHtml(c.t), red: c.red }))) })));
     if(aktor.key === 'lanProsavio'){
-      h += '<h2 class="portal-h2">Portföljbolagen</h2>' + portalTable(['Bolag', 'Kassa nu', 'Lägsta kassa', 'Kapitalbehov 12 mån', 'Kapitalbehov perioden', 'Positivt kassaflöde från'], data.bolag.map(b => ({ cells: ['<a data-portal-open="' + escapeHtml(b.id) + '" class="portal-link">' + escapeHtml(b.namn) + '</a>', portalFmt.kr(b.months.includes(data.idag.slice(0, 7)) ? b.serie.kassa[data.idag.slice(0, 7)] : b.ingaendeKassa), { t: portalFmt.kr(b.nyckeltal.lagstaKassa) + ' <small>' + portalFmt.manad(b.nyckeltal.lagstaManad) + '</small>', red: b.nyckeltal.lagstaKassa < 0 }, { t: portalFmt.kr(b.months.slice(0, 12).reduce((s, m) => s + (b.serie.behov[m] || 0), 0)), red: true }, { t: portalFmt.kr(b.nyckeltal.behovTotalt), red: b.nyckeltal.behovTotalt > 0 }, portalFmt.manad(b.nyckeltal.positivFran)] })), { compact: true });
+      h += '<h2 class="portal-h2">Portföljbolagen</h2>' + portalTable(['Bolag', 'Kassa nu', 'Kapitalbehov 12 mån', 'Kapitalbehov perioden', 'Positivt kassaflöde från'], data.bolag.map(b => ({ cells: ['<a data-portal-open="' + escapeHtml(b.id) + '" class="portal-link">' + escapeHtml(b.namn) + '</a>', portalFmt.kr(b.months.includes(data.idag.slice(0, 7)) ? b.serie.kassa[data.idag.slice(0, 7)] : b.ingaendeKassa), { t: portalFmt.kr(b.months.slice(0, 12).reduce((s, m) => s + (b.serie.behov[m] || 0), 0)), red: true }, { t: portalFmt.kr(b.nyckeltal.behovTotalt), red: b.nyckeltal.behovTotalt > 0 }, portalFmt.manad(b.nyckeltal.positivFran)] })), { compact: true });
     }
     h += '<h2 class="portal-h2">Fordringar och lån</h2>' + portalFordranHtml(data, aktor.key);
     return h;
@@ -15334,7 +15329,7 @@ function portalDetaljHtml(data, id, state){
   const kassaNu = months.includes(idag) ? s.kassa[idag] : b.ingaendeKassa;
   let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px; font-size:14px;">' + escapeHtml(b.beskrivning || '') + '</p><div class="portal-meta">' + (b.agarandel != null && b.agarandel !== '' ? '<span>Ägarandel <b>' + String(b.agarandel).replace('.', ',') + ' %</b></span>' : '') + (b.kontakt ? '<span>Kontakt <b>' + escapeHtml(b.kontakt) + '</b></span>' : '') + '<span>Finansieras av <b>' + escapeHtml(b.finansiarNamn) + '</b></span><span>Säkerhetsmarginal <b>' + portalFmt.kr(b.marginal) + '</b></span><span>Kredittid <b>' + (b.kredittid || 0) + ' dagar</b></span><span>Budget <b>' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '</b></span></div></div></section>';
   const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
-  h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Lägsta kassa', portalFmt.mkr(n.lagstaKassa), portalFmt.manad(n.lagstaManad), n.lagstaKassa < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
+  h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
   h += '<div class="portal-card">' + portalSparkline(months.map(m => s.kassa[m]), { w: 900, h: 130, marginal: b.marginal || null }) + '<div class="portal-sub" style="margin-top:4px;">Kassa per månad före nya tillskott. Streckad linje = säkerhetsmarginal.</div></div>';
   const row = (label, o, opts) => ({ cls: (opts && opts.cls) || '', indent: (opts && opts.indent) || 0, cells: [{ t: label }].concat(months.map(m => ({ t: portalFmt.tkr(typeof o === 'function' ? o(m) : o[m]), red: !!(opts && opts.red && (opts.red === true || opts.red[m])) })), [{ t: portalFmt.tkr(months.reduce((sum, m) => sum + ((typeof o === 'function' ? o(m) : o[m]) || 0), 0)) }]) });
   const likvRows = [
