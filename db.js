@@ -190,6 +190,38 @@
     return data || null;
   }
 
+  // ---------- Ägarportal (Prosavio): portal_users + portal_rapport, se schema-portal.sql ----------
+  async function getPortalUser(){
+    if(!hasSupabase) return null;
+    const { data: userData } = await sb.auth.getUser();
+    const email = userData && userData.user && userData.user.email ? userData.user.email.toLowerCase() : null;
+    if(!email) return null;
+    const { data, error } = await withCacheRetry(() => sb.from('portal_users').select('*').ilike('email', email).maybeSingle());
+    if(error){ if(error.code === 'PGRST205' || error.code === '42P01') return null; throw error; }
+    return data || null;
+  }
+  async function listPortalUsers(){
+    if(!hasSupabase) return [];
+    const { data, error } = await withCacheRetry(() => sb.from('portal_users').select('*').order('email'));
+    if(error) throw error;
+    return data || [];
+  }
+  async function getPortalRapport(id){
+    if(!hasSupabase) return JSON.parse(localGet('portal-rapport-' + id)?.value || 'null');
+    const { data, error } = await withCacheRetry(() => sb.from('portal_rapport').select('*').eq('id', id).maybeSingle());
+    if(error) throw error;
+    return data || null;
+  }
+  async function upsertPortalRapport(row){
+    if(!hasSupabase){ localSet('portal-rapport-' + row.id, JSON.stringify(row)); return; }
+    const { error } = await withCacheRetry(() => sb.from('portal_rapport').upsert(row, { onConflict: 'id' }));
+    if(error) throw error;
+  }
+  async function signOut(){
+    sessionStorage.removeItem(SESSION_FLAG);
+    if(hasSupabase) await sb.auth.signOut();
+  }
+
   // ---------- Lokalt lager (personlig data + testläge utan Supabase) ----------
   function localGet(key){
     const raw = localStorage.getItem(LOCAL_PREFIX + key);
@@ -266,6 +298,11 @@
     updateNyaProjekt,
     deleteNyaProjekt,
     getPublicNyaProjekt,
+    getPortalUser,
+    listPortalUsers,
+    getPortalRapport,
+    upsertPortalRapport,
+    signOut,
     onRemoteChange(cb){ listeners.push(cb); },
     hasSupabase
   };

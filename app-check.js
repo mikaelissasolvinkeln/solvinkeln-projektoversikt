@@ -15062,7 +15062,302 @@ document.getElementById('ekoBolagImportInput').addEventListener('change', async 
   catch(err){ const st = document.getElementById('ekoBolagImportStatus'); if(st){ st.textContent = 'Kunde inte läsa filen: ' + (err.message || err); st.className = 'contract-upload-status err'; } }
 });
 
+// ---------- Ägarportal (Prosavio) ----------
+// Ägarna i Prosavio (portal_users, se schema-portal.sql) loggar in med egna konton och ser en
+// publicerad ögonblicksbild (portal_rapport) i stället för projektöversikten: först en överblick
+// med kort per bolag (Prosavio, Solvinkeln, portföljbolagen), sedan detalj per bolag med
+// likviditet, budget och fordringar. Mikael publicerar från Koncern → Bolag → "Ägarrapport".
+const PORTAL_RAPPORT_ID = 'prosavio';
+const PORTAL_AKTORER = [{ key: 'lanProsavio', namn: 'Prosavio AB' }, { key: 'lanSolvinkeln', namn: 'Solvinkeln Fastigheter AB' }];
+function ekonomiPortalInfo(key){
+  if(!companyEkonomiData.koncern._portalInfo || typeof companyEkonomiData.koncern._portalInfo !== 'object') companyEkonomiData.koncern._portalInfo = {};
+  return companyEkonomiData.koncern._portalInfo[key] || (companyEkonomiData.koncern._portalInfo[key] = { beskrivning: '' });
+}
+// tkr-text ("1 446", "−671") → kr
+function portalTkrToKr(t){ const s = String(t || '').replace(/[\s  ]/g, '').replace(/−/g, '-'); const v = parseFloat(s); return isNaN(v) ? 0 : v * 1000; }
+// Läser koncernlikviditeten för Prosavio + Solvinkeln (24 månader) ur den renderade tabellen.
+async function ekonomiPortalKoncernSnapshot(){
+  const fore = { aktorer: uiPrefs.koncernAktorer, manader: uiPrefs.koncernManader };
+  uiPrefs.koncernAktorer = PORTAL_AKTORER.map(a => a.key); uiPrefs.koncernManader = 24;
+  try{
+    await renderEkonomiKoncern();
+    const table = document.querySelector('#ekonomiKoncernView table');
+    const heads = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    const rows = [...table.querySelectorAll('tbody tr')].map(tr => {
+      const tds = [...tr.children];
+      const first = tds[0];
+      if(first.querySelector('button') && tds.slice(1).every(td => !td.textContent.trim())) return null;
+      const label = (first.textContent || '').replace(/\s+/g, ' ').replace(/\s*(✕|✎)\s*$/, '').replace(/(bara [^✕]+|flera aktörer)$/, '').trim();
+      return {
+        label, section: /uppercase/.test(first.style.cssText || ''), bold: tr.classList.contains('eko-row-resultat') || /700/.test(first.style.fontWeight || ''),
+        small: /11\.5px/.test(first.style.cssText || ''), indent: parseInt((first.style.paddingLeft || '6'), 10) || 6,
+        cells: tds.slice(1).map(td => { const sp = td.querySelector('span,div'); const el = sp || td; return { t: (td.textContent || '').trim(), red: /danger|rgb\(178, 59, 59\)/.test((el.style && el.style.color) || '') }; })
+      };
+    }).filter(Boolean);
+    const months = ekonomiPrognosMonths(new Date().toISOString().slice(0, 7), 24);
+    return { heads, rows, months };
+  } finally {
+    uiPrefs.koncernAktorer = fore.aktorer; uiPrefs.koncernManader = fore.manader;
+    renderEkonomiKoncern();
+  }
+}
+async function ekonomiPortalSnapshot(){
+  const koncern = await ekonomiPortalKoncernSnapshot();
+  const idag = new Date().toISOString().slice(0, 10);
+  // Fordringar: Solvinkelns lån i projekten + koncernlån där Prosavio/Solvinkeln är långivare
+  const projektFordran = [];
+  ekonomiSortedProjects().forEach(p => {
+    const saldo = ekonomiLanSaldo(p.id, 'lanSolvinkeln'); const d = ekonomiLanDetalj(p.id, 'lanSolvinkeln', false);
+    if(!saldo && !(d && d.tx.length)) return;
+    const upp = d ? ekonomiLanUpplupen(d) : { belopp: 0, ranta: 0 };
+    projektFordran.push({ namn: p.name, status: p.status || 'Pågående', saldo, upplupen: Math.round(upp.belopp), ranta: upp.ranta || null, forfall: (companyEkonomiData.lan[p.id] || {}).lanSolvinkelnForfallodatum || '' });
+  });
+  const lan = ekonomiKoncernList('_lan').map(l => ({ langivare: l.langivare || '', lantagare: l.lantagare || '', saldo: ekonomiKoncernLanSaldo(l), ranta: l.ranta != null && l.ranta !== '' ? l.ranta : null, upplupen: (parseFloat(l.ranta) || l.rantaAck) ? Math.round(ekonomiKoncernLanRanta(l).belopp) : 0, forfall: l.forfallodatum || '', bk: !!l.bk, langivareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)).key : null, lantagareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)).key : null }));
+  const bolag = ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).map(b => {
+    ekonomiBolagNormalisera(b);
+    const r = ekonomiBolagBerakna(b);
+    const sum = o => r.manader.reduce((s, m) => s + (o[m] || 0), 0);
+    const positivFran = r.manader.find((m, i) => i > 0 && r.kassaflode[m] > 0 && r.manader.slice(i).every(mm => r.kassaflode[mm] >= 0)) || null;
+    return { id: b.id, namn: b.namn, beskrivning: b.beskrivning || '', agarandel: b.agarandel, kontakt: b.kontakt || '', finansiarNamn: ekonomiBolagFinansiarNamn(b.finansiar), months: r.manader, marginal: b.marginal || 0, kredittid: b.kredittid || 0, ingaendeKassa: b.ingaendeKassa || 0,
+      intakter: b.intakter.map(x => ({ namn: x.namn, per: x.per || {} })), kostnader: b.kostnader.map(x => ({ namn: x.namn, per: x.per || {}, ejKassa: !!x.ejKassa })),
+      serie: { intakt: r.intakt, kostnad: r.kostnad, resultat: r.resultat, inbet: r.inbet, kostnadKassa: r.kostnadKassa, tillskott: r.tillskott, tillskottPrelim: r.tillskottPrelim, kassaflode: r.kassaflode, kassa: r.kassa, behov: r.behov, kassaEfter: r.kassaEfter },
+      nyckeltal: { lagstaKassa: r.lagstaKassa, lagstaManad: r.lagstaManad, behovTotalt: r.behovTotalt, sumIntakt: sum(r.intakt), sumKostnad: sum(r.kostnad), resultat: sum(r.resultat), positivFran } };
+  });
+  return { publiceradAt: new Date().toISOString(), publiceradAv: myName || myEmail || '', idag, koncern, fordran: { projekt: projektFordran, lan }, bolag, aktorInfo: PORTAL_AKTORER.reduce((o, a) => { o[a.key] = { namn: a.namn, beskrivning: ekonomiPortalInfo(a.key).beskrivning || '' }; return o; }, {}) };
+}
+// Admin-popup: kort info om Prosavio/Solvinkeln, ägarna som har tillgång, publicera och förhandsgranska.
+async function showEkonomiPortalPopup(){
+  const p = ekoPopup({ title: 'Ägarrapport till Prosavios ägare', sub: 'Ägarna loggar in med egna konton och ser den senast publicerade rapporten: en överblick med kort per bolag och detaljer per bolag. Publicera igen när siffrorna ändrats.', maxWidth: 640 });
+  const inpCss = 'width:100%; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:13px; background:#fff;';
+  PORTAL_AKTORER.forEach(a => {
+    const info = ekonomiPortalInfo(a.key);
+    const w = document.createElement('div'); w.style.marginBottom = '10px';
+    w.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;">Kort info · ' + escapeHtml(a.namn) + '</div>';
+    const i = document.createElement('input'); i.type = 'text'; i.value = info.beskrivning || ''; i.placeholder = 'T.ex. Moderbolag – äger Solvinkeln Fastigheter och portföljbolagen'; i.style.cssText = inpCss;
+    i.onchange = async () => { info.beskrivning = i.value.trim(); await saveEkonomiKoncern(); };
+    w.appendChild(i); p.body.appendChild(w);
+  });
+  const status = document.createElement('div'); status.className = 'eko-sub'; status.style.margin = '12px 0 6px'; status.textContent = 'Läser…';
+  p.body.appendChild(status);
+  const users = document.createElement('div'); users.style.cssText = 'font-size:12.5px; margin-bottom:12px;';
+  p.body.appendChild(users);
+  try{
+    const [rap, list] = await Promise.all([DB.getPortalRapport(PORTAL_RAPPORT_ID), DB.listPortalUsers()]);
+    status.textContent = rap ? 'Senast publicerad ' + new Date(rap.published_at).toLocaleString('sv-SE').slice(0, 16) + (rap.published_by ? ' av ' + rap.published_by : '') + '.' : 'Ingen rapport publicerad ännu.';
+    users.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;">Ägare med tillgång (portal_users)</div>' + (list.length ? list.map(u => '<div>' + escapeHtml(u.namn || '') + ' <span style="color:var(--ink-soft);">' + escapeHtml(u.email) + '</span></div>').join('') : '<div style="color:var(--danger);">Inga ägare upplagda – kör schema-portal.sql i Supabase.</div>') + '<div class="eko-sub" style="margin-top:4px;">Kontona skapas i Supabase → Authentication → Users → Add user (e-post + lösenord, Auto Confirm). Fler ägare: lägg till rader i tabellen portal_users.</div>';
+  }catch(e){ status.textContent = 'Kunde inte läsa portalens tabeller: ' + (e.message || e) + '. Kör schema-portal.sql i Supabase först.'; }
+  const row = document.createElement('div'); row.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;';
+  const pub = document.createElement('button'); pub.type = 'button'; pub.className = 'upload-btn'; pub.textContent = '📤 Publicera ägarrapport nu';
+  pub.onclick = async () => {
+    pub.disabled = true; pub.textContent = 'Bygger rapporten…';
+    try{
+      const data = await ekonomiPortalSnapshot();
+      await DB.upsertPortalRapport({ id: PORTAL_RAPPORT_ID, data, published_at: data.publiceradAt, published_by: data.publiceradAv });
+      showToast('Ägarrapporten är publicerad (' + data.bolag.length + ' bolag).');
+      p.close();
+    }catch(e){ showDebugError('Kunde inte publicera', e); pub.disabled = false; pub.textContent = '📤 Publicera ägarrapport nu'; }
+  };
+  const prev = document.createElement('button'); prev.type = 'button'; prev.className = 'add-inline-btn'; prev.textContent = 'Förhandsgranska som ägare';
+  prev.onclick = async () => { prev.disabled = true; try{ const data = await ekonomiPortalSnapshot(); p.close(); renderPortal({ namn: myName, email: myEmail, preview: true }, { data, published_at: data.publiceradAt, published_by: data.publiceradAv }); }catch(e){ showDebugError('Kunde inte bygga förhandsgranskningen', e); prev.disabled = false; } };
+  row.appendChild(pub); row.appendChild(prev);
+  p.body.appendChild(row);
+}
+document.getElementById('ekoBolagPortalBtn').onclick = showEkonomiPortalPopup;
+
+// ---------- Portalens vy ----------
+const portalFmt = {
+  kr: v => (v == null || isNaN(v)) ? '—' : Math.round(v).toLocaleString('sv-SE') + ' kr',
+  tkr: v => { if(v == null || isNaN(v)) return ''; const x = Math.round(v / 1000); return x === 0 ? '0' : x.toLocaleString('sv-SE'); },
+  mkr: v => (v == null || isNaN(v)) ? '—' : (Math.round(v / 100000) / 10).toLocaleString('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' mkr',
+  manad: m => m ? ekonomiPrognosShortLabel(m) : '—',
+  datum: iso => iso ? new Date(iso).toLocaleString('sv-SE').slice(0, 16) : ''
+};
+function portalSparkline(values, opts){
+  const w = (opts && opts.w) || 220, h = (opts && opts.h) || 56, pad = 4;
+  const vals = values.map(v => v || 0); if(!vals.length) return '';
+  const marg = opts && opts.marginal != null ? opts.marginal : null;
+  const all = vals.concat(marg != null ? [marg] : [], [0]);
+  const min = Math.min(...all), max = Math.max(...all); const span = (max - min) || 1;
+  const x = i => pad + i * (w - 2 * pad) / Math.max(1, vals.length - 1), y = v => h - pad - (v - min) * (h - 2 * pad) / span;
+  const path = vals.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+  const area = path + ' L' + x(vals.length - 1).toFixed(1) + ' ' + y(0).toFixed(1) + ' L' + x(0).toFixed(1) + ' ' + y(0).toFixed(1) + ' Z';
+  const neg = Math.min(...vals) < (marg != null ? marg : 0);
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" class="portal-spark" aria-hidden="true">' +
+    '<line x1="' + pad + '" x2="' + (w - pad) + '" y1="' + y(0).toFixed(1) + '" y2="' + y(0).toFixed(1) + '" stroke="var(--line)" stroke-dasharray="2 3"/>' +
+    (marg != null ? '<line x1="' + pad + '" x2="' + (w - pad) + '" y1="' + y(marg).toFixed(1) + '" y2="' + y(marg).toFixed(1) + '" stroke="var(--amber)" stroke-dasharray="3 3"/>' : '') +
+    '<path d="' + area + '" fill="' + (neg ? 'rgba(178,59,59,0.10)' : 'rgba(76,122,94,0.12)') + '"/>' +
+    '<path d="' + path + '" fill="none" stroke="' + (neg ? 'var(--danger)' : 'var(--good)') + '" stroke-width="1.8"/></svg>';
+}
+function portalStatus(kassaNu, lagsta, behov, marginal){
+  if(behov > 0 || lagsta < 0) return { cls: 'rod', text: behov > 0 ? 'Kapitalbehov' : 'Negativ kassa' };
+  if(lagsta < (marginal || 0)) return { cls: 'gul', text: 'Nära marginalen' };
+  return { cls: 'gron', text: 'Stabil' };
+}
+// Koncernlikviditetens rader för en aktör (från aktörens rubrikrad till nästa rubrik/"Totalt").
+function portalAktorRows(koncern, namn){
+  const rows = koncern.rows; const alias = namn.replace(' Fastigheter AB', '');
+  const start = rows.findIndex(r => r.section && (r.label === namn || r.label === alias));
+  if(start < 0) return [];
+  const out = [];
+  for(let i = start + 1; i < rows.length; i++){ const r = rows[i]; if(r.section || /^Totalt/.test(r.label) || /^Gemensamma/.test(r.label)) break; out.push(r); }
+  return out;
+}
+function portalAktorLikviditet(koncern, namn){
+  const alias = namn.replace(' Fastigheter AB', '');
+  const row = koncern.rows.find(r => r.label === 'Likviditet ' + namn || r.label === 'Likviditet ' + alias);
+  if(!row) return null;
+  // celler: Ingående fordran, Ingående kassa, månader…, Summa
+  return koncern.months.map((m, i) => portalTkrToKr((row.cells[i + 2] || {}).t));
+}
+async function renderPortal(user, rapport){
+  const root = showPublicPropaOnly();
+  document.title = 'Prosavio · Ägarrapport';
+  root.className = 'portal';
+  root.innerHTML = '<div class="portal-wrap"><p class="eko-sub" style="margin:120px auto; text-align:center;">Läser in rapporten…</p></div>';
+  if(!rapport){
+    try{ rapport = await DB.getPortalRapport(PORTAL_RAPPORT_ID); }catch(e){ rapport = null; }
+  }
+  const data = rapport && rapport.data;
+  const state = { view: 'oversikt', id: null };
+  const header = () => '<header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Ägarrapport</div><h1 class="portal-title">' + (state.view === 'oversikt' ? 'Koncernöversikt' : escapeHtml(state.titel || '')) + '</h1></div>' +
+    '<div class="portal-user">' + (rapport ? '<div>Publicerad ' + portalFmt.datum(rapport.published_at) + (rapport.published_by ? ' av ' + escapeHtml(rapport.published_by) : '') + '</div>' : '') + '<div>' + escapeHtml(user.namn || user.email || '') + (user.preview ? ' · förhandsgranskning' : '') + '</div>' +
+    (user.preview ? '<button type="button" class="portal-btn" id="portalBack">Tillbaka till appen</button>' : '<button type="button" class="portal-btn" id="portalLogout">Logga ut</button>') + '</div></header>';
+  const wire = () => {
+    const lo = root.querySelector('#portalLogout'); if(lo) lo.onclick = async () => { await DB.signOut(); location.reload(); };
+    const bk = root.querySelector('#portalBack'); if(bk) bk.onclick = () => location.reload();
+    root.querySelectorAll('[data-portal-open]').forEach(el => { el.onclick = () => { state.view = 'detalj'; state.id = el.dataset.portalOpen; draw(); window.scrollTo(0, 0); }; });
+    root.querySelectorAll('[data-portal-home]').forEach(el => { el.onclick = () => { state.view = 'oversikt'; state.id = null; draw(); window.scrollTo(0, 0); }; });
+    root.querySelectorAll('[data-portal-toggle]').forEach(el => { el.onclick = () => { const t = root.querySelector('#' + el.dataset.portalToggle); const open = t.style.display !== 'none'; t.style.display = open ? 'none' : 'block'; el.textContent = (open ? 'Visa ' : 'Dölj ') + el.dataset.portalLabel; }; });
+  };
+  const draw = () => {
+    if(!data){ root.innerHTML = '<div class="portal-wrap">' + header() + '<div class="portal-card" style="text-align:center; padding:40px;">Ingen rapport är publicerad ännu. Hör av dig till Mikael Issa.</div></div>'; wire(); return; }
+    state.titel = '';
+    root.innerHTML = '<div class="portal-wrap">' + (state.view === 'oversikt' ? portalOversiktHtml(data) : portalDetaljHtml(data, state.id, state)) + '</div>';
+    root.querySelector('.portal-wrap').insertAdjacentHTML('afterbegin', header());
+    wire();
+  };
+  draw();
+}
+function portalKortData(data){
+  // Ett kort per bolag: Prosavio, Solvinkeln (ur koncernlikviditeten) och portföljbolagen.
+  const idag = data.idag.slice(0, 7);
+  const kort = [];
+  PORTAL_AKTORER.forEach(a => {
+    const likv = portalAktorLikviditet(data.koncern, a.namn);
+    const info = (data.aktorInfo || {})[a.key] || {};
+    const egna = a.key === 'lanProsavio' ? data.bolag.reduce((s, b) => s + (b.nyckeltal.behovTotalt || 0), 0) : 0;
+    const kassaNu = likv ? likv[0] : null, lagsta = likv ? Math.min(...likv) : null;
+    kort.push({ id: a.key, typ: 'aktor', namn: a.namn, beskrivning: info.beskrivning || (a.key === 'lanProsavio' ? 'Moderbolag' : 'Fastighetsutveckling – bostadsrättsprojekt'), serie: likv || [], months: data.koncern.months, kassaNu, lagsta, lagstaManad: likv ? data.koncern.months[likv.indexOf(lagsta)] : null, behov: egna, marginal: 0, extra: a.key === 'lanProsavio' ? data.bolag.length + ' portföljbolag' : data.fordran.projekt.length + ' projekt med fordran' });
+  });
+  data.bolag.forEach(b => {
+    const months = b.months; const i0 = Math.max(0, months.indexOf(idag));
+    const kassaNu = months.includes(idag) ? b.serie.kassa[idag] : (b.serie.kassa[months[0]] != null ? b.ingaendeKassa : null);
+    kort.push({ id: b.id, typ: 'bolag', namn: b.namn, beskrivning: b.beskrivning, agarandel: b.agarandel, serie: months.map(m => b.serie.kassa[m]), months, kassaNu, lagsta: b.nyckeltal.lagstaKassa, lagstaManad: b.nyckeltal.lagstaManad, behov: b.nyckeltal.behovTotalt, marginal: b.marginal, extra: 'Finansieras av ' + b.finansiarNamn, i0 });
+  });
+  return kort;
+}
+function portalOversiktHtml(data){
+  const kort = portalKortData(data);
+  const totBehov = data.bolag.reduce((s, b) => s + (b.nyckeltal.behovTotalt || 0), 0);
+  const behov12 = data.bolag.reduce((s, b) => s + b.months.slice(0, 12).reduce((s2, m) => s2 + (b.serie.behov[m] || 0), 0), 0);
+  const fordranProjekt = data.fordran.projekt.reduce((s, f) => s + (f.saldo || 0), 0);
+  const utlanat = data.fordran.lan.filter(l => l.langivareAktor).reduce((s, l) => s + (l.saldo || 0), 0);
+  const skulder = data.fordran.lan.filter(l => l.lantagareAktor && !l.bk).reduce((s, l) => s + (l.saldo || 0), 0);
+  const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
+  let h = '<section class="portal-kpis">' +
+    kpi('Kapitalbehov kommande 12 mån', portalFmt.mkr(behov12), 'enligt bolagens budgetar', behov12 > 0) +
+    kpi('Kapitalbehov hela perioden', portalFmt.mkr(totBehov), data.bolag.length + ' portföljbolag', totBehov > 0) +
+    kpi('Fordringar mot projekten', portalFmt.mkr(fordranProjekt), 'Solvinkelns lån till föreningarna') +
+    kpi('Utlånat inom koncernen', portalFmt.mkr(utlanat), 'koncernlån där Prosavio/Solvinkeln är långivare') +
+    kpi('Externa lån till koncernen', portalFmt.mkr(skulder), 'exkl. byggnadskreditiv') +
+    '</section>';
+  h += '<h2 class="portal-h2">Bolagen</h2><p class="portal-sub">Klicka på ett bolag för likviditet, budget och fordringar.</p><section class="portal-grid">';
+  kort.forEach(k => {
+    const st = portalStatus(k.kassaNu, k.lagsta == null ? 0 : k.lagsta, k.behov, k.marginal);
+    h += '<article class="portal-card portal-card-click" data-portal-open="' + escapeHtml(k.id) + '">' +
+      '<div class="portal-card-head"><div><div class="portal-card-name">' + escapeHtml(k.namn) + '</div><div class="portal-card-desc">' + escapeHtml(k.beskrivning || '') + '</div></div><span class="portal-pill ' + st.cls + '">' + st.text + '</span></div>' +
+      (k.serie.length ? portalSparkline(k.serie, { marginal: k.marginal || null }) : '<div class="portal-spark-empty">Ingen likviditet publicerad</div>') +
+      '<div class="portal-card-kpis"><div><span>Kassa nu</span><b>' + portalFmt.mkr(k.kassaNu) + '</b></div><div><span>Lägsta kassa</span><b' + (k.lagsta < 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.lagsta) + '</b><small>' + portalFmt.manad(k.lagstaManad) + '</small></div><div><span>Kapitalbehov</span><b' + (k.behov > 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.behov) + '</b></div></div>' +
+      '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + '</div></article>';
+  });
+  h += '</section>';
+  // Koncernens fordringar (hopfällt)
+  h += '<h2 class="portal-h2">Koncernens fordringar och lån</h2><button type="button" class="portal-btn" data-portal-toggle="portalFordran" data-portal-label="fordringar och lån">Visa fordringar och lån</button><div id="portalFordran" style="display:none;">' + portalFordranHtml(data, null) + '</div>';
+  return h;
+}
+function portalTable(head, rows, opts){
+  return '<div class="portal-table-scroll"><table class="portal-table' + (opts && opts.compact ? ' compact' : '') + '"><thead><tr>' + head.map((x, i) => '<th' + (i === 0 ? ' class="l"' : '') + '>' + x + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr' + (r.cls ? ' class="' + r.cls + '"' : '') + '>' + r.cells.map((c, i) => '<td' + (i === 0 ? ' class="l" style="padding-left:' + ((r.indent || 0) + 10) + 'px;"' : '') + (c && c.red ? ' style="color:var(--danger);"' : '') + '>' + (c && c.t != null ? c.t : (c == null ? '' : c)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
+}
+function portalFordranHtml(data, aktorKey){
+  let h = '';
+  if(!aktorKey || aktorKey === 'lanSolvinkeln'){
+    const rows = data.fordran.projekt.map(f => ({ cells: [escapeHtml(f.namn), escapeHtml(f.status), portalFmt.kr(f.saldo), portalFmt.kr(f.upplupen), f.ranta ? String(f.ranta).replace('.', ',') + ' %' : '—', f.forfall || '—'] }));
+    rows.push({ cls: 'sum', cells: ['Summa', '', portalFmt.kr(data.fordran.projekt.reduce((s, f) => s + f.saldo, 0)), portalFmt.kr(data.fordran.projekt.reduce((s, f) => s + f.upplupen, 0)), '', ''] });
+    h += '<h3 class="portal-h3">Solvinkelns fordringar mot projekten</h3>' + portalTable(['Projekt', 'Status', 'Fordran', 'Upplupen ränta', 'Ränta', 'Förfallodatum'], rows, { compact: true });
+  }
+  const ut = data.fordran.lan.filter(l => l.langivareAktor && (!aktorKey || l.langivareAktor === aktorKey));
+  if(ut.length) h += '<h3 class="portal-h3">Utlånat inom koncernen</h3>' + portalTable(['Långivare', 'Låntagare', 'Saldo', 'Ränta', 'Upplupen ränta', 'Förfallodatum'], ut.map(l => ({ cells: [escapeHtml(l.langivare), escapeHtml(l.lantagare), portalFmt.kr(l.saldo), l.ranta != null ? String(l.ranta).replace('.', ',') + ' %' : '—', portalFmt.kr(l.upplupen), l.forfall || '—'] })).concat([{ cls: 'sum', cells: ['Summa', '', portalFmt.kr(ut.reduce((s, l) => s + l.saldo, 0)), '', portalFmt.kr(ut.reduce((s, l) => s + l.upplupen, 0)), ''] }]), { compact: true });
+  const in_ = data.fordran.lan.filter(l => l.lantagareAktor && (!aktorKey || l.lantagareAktor === aktorKey));
+  if(in_.length) h += '<h3 class="portal-h3">Lån till koncernen</h3>' + portalTable(['Långivare', 'Låntagare', 'Saldo', 'Ränta', 'Upplupen ränta', 'Förfallodatum'], in_.map(l => ({ cells: [escapeHtml(l.langivare) + (l.bk ? ' <span class="portal-tag">BK</span>' : ''), escapeHtml(l.lantagare), portalFmt.kr(l.saldo), l.ranta != null ? String(l.ranta).replace('.', ',') + ' %' : '—', portalFmt.kr(l.upplupen), l.forfall || '—'] })).concat([{ cls: 'sum', cells: ['Summa', '', portalFmt.kr(in_.reduce((s, l) => s + l.saldo, 0)), '', portalFmt.kr(in_.reduce((s, l) => s + l.upplupen, 0)), ''] }]), { compact: true });
+  return h || '<p class="portal-sub">Inga fordringar eller lån att visa.</p>';
+}
+function portalDetaljHtml(data, id, state){
+  const back = '<button type="button" class="portal-btn" data-portal-home>← Koncernöversikt</button>';
+  const aktor = PORTAL_AKTORER.find(a => a.key === id);
+  if(aktor){
+    state.titel = aktor.namn;
+    const rows = portalAktorRows(data.koncern, aktor.namn);
+    const likv = portalAktorLikviditet(data.koncern, aktor.namn) || [];
+    const info = (data.aktorInfo || {})[aktor.key] || {};
+    const months = data.koncern.months;
+    const lagsta = likv.length ? Math.min(...likv) : null;
+    let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px;">' + escapeHtml(info.beskrivning || '') + '</p></div></section>';
+    h += '<section class="portal-kpis">' +
+      '<div class="portal-kpi"><div class="portal-kpi-l">Kassa ' + portalFmt.manad(months[0]) + '</div><div class="portal-kpi-v">' + portalFmt.mkr(likv[0]) + '</div></div>' +
+      '<div class="portal-kpi"><div class="portal-kpi-l">Lägsta kassa</div><div class="portal-kpi-v' + (lagsta < 0 ? ' rod' : '') + '">' + portalFmt.mkr(lagsta) + '</div><div class="portal-kpi-s">' + portalFmt.manad(months[likv.indexOf(lagsta)]) + '</div></div>' +
+      '<div class="portal-kpi"><div class="portal-kpi-l">Kassa om 24 mån</div><div class="portal-kpi-v' + (likv[likv.length - 1] < 0 ? ' rod' : '') + '">' + portalFmt.mkr(likv[likv.length - 1]) + '</div></div>' +
+      (aktor.key === 'lanProsavio' ? '<div class="portal-kpi"><div class="portal-kpi-l">Kapitalbehov portföljbolagen</div><div class="portal-kpi-v rod">' + portalFmt.mkr(data.bolag.reduce((s, b) => s + b.nyckeltal.behovTotalt, 0)) + '</div></div>' : '') +
+      '</section>';
+    if(likv.length) h += '<div class="portal-card">' + portalSparkline(likv, { w: 900, h: 120 }) + '<div class="portal-sub" style="margin-top:4px;">Likviditet per månad, ' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '. Röda siffror i tabellen är preliminära.</div></div>';
+    h += '<h2 class="portal-h2">Likviditet (tkr)</h2>' + portalTable(['Post', 'Ing. fordran', 'Ing. kassa'].concat(months.map(portalFmt.manad), ['Summa']), rows.map(r => ({ cls: r.bold ? 'sum' : (r.small ? 'small' : ''), indent: Math.max(0, r.indent - 6), cells: [{ t: escapeHtml(r.label) }].concat(r.cells.map(c => ({ t: escapeHtml(c.t), red: c.red }))) })));
+    if(aktor.key === 'lanProsavio'){
+      h += '<h2 class="portal-h2">Portföljbolagen</h2>' + portalTable(['Bolag', 'Kassa nu', 'Lägsta kassa', 'Kapitalbehov 12 mån', 'Kapitalbehov perioden', 'Positivt kassaflöde från'], data.bolag.map(b => ({ cells: ['<a data-portal-open="' + escapeHtml(b.id) + '" class="portal-link">' + escapeHtml(b.namn) + '</a>', portalFmt.kr(b.months.includes(data.idag.slice(0, 7)) ? b.serie.kassa[data.idag.slice(0, 7)] : b.ingaendeKassa), { t: portalFmt.kr(b.nyckeltal.lagstaKassa) + ' <small>' + portalFmt.manad(b.nyckeltal.lagstaManad) + '</small>', red: b.nyckeltal.lagstaKassa < 0 }, { t: portalFmt.kr(b.months.slice(0, 12).reduce((s, m) => s + (b.serie.behov[m] || 0), 0)), red: true }, { t: portalFmt.kr(b.nyckeltal.behovTotalt), red: b.nyckeltal.behovTotalt > 0 }, portalFmt.manad(b.nyckeltal.positivFran)] })), { compact: true });
+    }
+    h += '<h2 class="portal-h2">Fordringar och lån</h2>' + portalFordranHtml(data, aktor.key);
+    return h;
+  }
+  const b = data.bolag.find(x => x.id === id);
+  if(!b) return back + '<div class="portal-card">Bolaget hittades inte.</div>';
+  state.titel = b.namn;
+  const months = b.months, s = b.serie, n = b.nyckeltal;
+  const idag = data.idag.slice(0, 7);
+  const kassaNu = months.includes(idag) ? s.kassa[idag] : b.ingaendeKassa;
+  let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px; font-size:14px;">' + escapeHtml(b.beskrivning || '') + '</p><div class="portal-meta">' + (b.agarandel != null && b.agarandel !== '' ? '<span>Ägarandel <b>' + String(b.agarandel).replace('.', ',') + ' %</b></span>' : '') + (b.kontakt ? '<span>Kontakt <b>' + escapeHtml(b.kontakt) + '</b></span>' : '') + '<span>Finansieras av <b>' + escapeHtml(b.finansiarNamn) + '</b></span><span>Säkerhetsmarginal <b>' + portalFmt.kr(b.marginal) + '</b></span><span>Kredittid <b>' + (b.kredittid || 0) + ' dagar</b></span><span>Budget <b>' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '</b></span></div></div></section>';
+  const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
+  h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Lägsta kassa', portalFmt.mkr(n.lagstaKassa), portalFmt.manad(n.lagstaManad), n.lagstaKassa < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
+  h += '<div class="portal-card">' + portalSparkline(months.map(m => s.kassa[m]), { w: 900, h: 130, marginal: b.marginal || null }) + '<div class="portal-sub" style="margin-top:4px;">Kassa per månad före nya tillskott. Streckad linje = säkerhetsmarginal.</div></div>';
+  const row = (label, o, opts) => ({ cls: (opts && opts.cls) || '', indent: (opts && opts.indent) || 0, cells: [{ t: label }].concat(months.map(m => ({ t: portalFmt.tkr(typeof o === 'function' ? o(m) : o[m]), red: !!(opts && opts.red && (opts.red === true || opts.red[m])) })), [{ t: portalFmt.tkr(months.reduce((sum, m) => sum + ((typeof o === 'function' ? o(m) : o[m]) || 0), 0)) }]) });
+  const likvRows = [
+    row('Inbetalningar' + (b.kredittid ? ' (kredittid ' + b.kredittid + ' dagar)' : ''), s.inbet, { indent: 8 }),
+    row('Utbetalningar', m => -s.kostnadKassa[m], { indent: 8 }),
+    row('Kapitaltillskott från ' + b.finansiarNamn, s.tillskott, { indent: 8, red: s.tillskottPrelim }),
+    row('Kassaflöde', s.kassaflode, { cls: 'sum' }),
+    { cls: 'sum', cells: [{ t: 'Kassa vid månadens slut' }].concat(months.map(m => ({ t: portalFmt.tkr(s.kassa[m]) || '0', red: s.kassa[m] < (b.marginal || 0) })), [{ t: '' }]) },
+    row('Kapitalbehov för att hålla marginalen', s.behov, { indent: 8, red: true })
+  ];
+  h += '<h2 class="portal-h2">Likviditet (tkr)</h2>' + portalTable(['Post'].concat(months.map(portalFmt.manad), ['Summa']), likvRows);
+  const budRows = [{ cls: 'sec', cells: [{ t: 'Intäkter' }].concat(months.map(() => ''), ['']) }]
+    .concat(b.intakter.map(x => row(escapeHtml(x.namn), x.per, { indent: 8 })), [row('Summa intäkter', s.intakt, { cls: 'sum' })])
+    .concat([{ cls: 'sec', cells: [{ t: 'Kostnader' }].concat(months.map(() => ''), ['']) }], b.kostnader.map(x => row(escapeHtml(x.namn) + (x.ejKassa ? ' <span class="portal-tag">ej kassa</span>' : ''), m => -(x.per[m] || 0), { indent: 8 })), [row('Summa kostnader', m => -s.kostnad[m], { cls: 'sum' }), row('Resultat', s.resultat, { cls: 'sum' })]);
+  h += '<h2 class="portal-h2">Budget</h2><button type="button" class="portal-btn" data-portal-toggle="portalBudget" data-portal-label="budget i detalj">Visa budget i detalj</button><div id="portalBudget" style="display:none;">' + portalTable(['Post (tkr)'].concat(months.map(portalFmt.manad), ['Summa']), budRows) + '</div>';
+  return h;
+}
+
 async function startApp(){
+  // Ägare i Prosavio (portal_users) ser bara ägarportalen.
+  let portalUser = null;
+  try{ portalUser = await DB.getPortalUser(); }catch(e){ portalUser = null; }
+  if(portalUser){ await renderPortal(portalUser); return; }
   await init();
   wireRemoteSync();
 }
