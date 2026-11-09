@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261109121050';
+const APP_BUILD = '20261109170738';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2250,7 +2250,7 @@ document.getElementById('ekoKoncernLanFilInput').addEventListener('change', asyn
     const pdfs = files.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
     const sies = files.filter(f => !pdfs.includes(f));
     if(sies.length) await ekonomiKoncernLanLasSie(sies);
-    for(const f of pdfs) await ekonomiKoncernLanLasBr(f);
+    for(const f of pdfs){ let ok = false; try{ ok = await ekonomiKoncernLanLasKontoanalys(f); }catch(err){ ok = false; } if(!ok) await ekonomiKoncernLanLasBr(f); }
   }catch(err){
     setEkonomiKoncernLanSieStatus('Kunde inte läsa filen: ' + (err.message || err), 'err');
   }finally{
@@ -2258,9 +2258,178 @@ document.getElementById('ekoKoncernLanFilInput').addEventListener('change', asyn
     e.target.value = '';
   }
 });
+// Exakt namnjämförelse (normaliserad): "JWK" ska inte matcha "JWK IT Partner AB".
+function namnLika(a, b){ return !!a && !!b && sieNormName(a) === sieNormName(b); }
+// Koncernlån där ett bolag (Koncern → Bolag) är låntagare, t.ex. Prosavios fordran via kontoanalys.
+function ekonomiBolagKoncernLan(b){ return ekonomiKoncernList('_lan').filter(l => l.lantagare && namnLika(l.lantagare, b.namn)); }
+// ---------- Kontoanalys / huvudbok (PDF från Fortnox) → koncernlån ----------
+// En huvudboksutskrift för ett fordringskonto (t.ex. 1380 "Fordran - Lodda I AB" hos Prosavio)
+// läses med pdf.js i webbläsaren. Bolaget i sidhuvudet blir långivare, kontot blir ett koncernlån
+// mot det bolag/aktör man väljer (t.ex. Taggr), och varje verifikation blir en rörelse. Debet ökar
+// fordran, kredit minskar den. Samma konto igen → nya rader läggs till, IB behålls från den
+// tidigaste perioden. Valet av låntagare per konto kommer ihåg (koncern._kontoMap).
+async function pdfTextLines(file){
+  if(!window.pdfjsLib) throw new Error('PDF-läsaren (pdf.js) kunde inte laddas – kontrollera internetanslutningen.');
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const lines = [];
+  for(let p = 1; p <= pdf.numPages; p++){
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const rows = {};
+    tc.items.forEach(it => { if(!it.str.trim()) return; const k = Math.round(it.transform[5] / 3) * 3; (rows[k] = rows[k] || []).push({ s: it.str, x: it.transform[4] }); });
+    Object.keys(rows).map(Number).sort((a, b) => b - a).forEach(k => { const items = rows[k].sort((a, b) => a.x - b.x); lines.push({ page: p, items, text: items.map(i => i.s).join(' ') }); });
+  }
+  return lines;
+}
+const KONTOANALYS_NUM = /^-?\d{1,3}(?: \d{3})*,\d{2}$|^-?\d+,\d{2}$/;
+function kontoanalysNum(s){ return parseFloat(String(s).replace(/[\s ]/g, '').replace(',', '.')); }
+// Tolkar raderna; returnerar null om det inte ser ut som en huvudbok/kontoanalys.
+function parseKontoanalys(lines){
+  const all = lines.map(l => l.text).join('\n');
+  if(!/Huvudbok|Kontoanalys/i.test(all) || !/Ingående (balans|saldo)/i.test(all)) return null;
+  const res = { bolag: '', orgnr: '', period: null, konton: [] };
+  const first = lines.find(l => l.items.length && !/Utskrivet/i.test(l.items[0].s));
+  if(first) res.bolag = first.items[0].s.trim();
+  const org = all.match(/\b(\d{6}-\d{4})\b/); if(org) res.orgnr = org[1];
+  const per = all.match(/Period\s+(\d{4}-\d{2}-\d{2})\s*-\s*(\d{4}-\d{2}-\d{2})/) || all.match(/Räkenskapsår\s+(\d{4}-\d{2}-\d{2})\s*-\s*(\d{4}-\d{2}-\d{2})/);
+  if(per) res.period = { start: per[1], slut: per[2] };
+  let headX = null, cur = null;
+  lines.forEach(l => {
+    const t = l.text;
+    const h = l.items.find(i => /^Debet$/i.test(i.s)), hk = l.items.find(i => /^Kredit$/i.test(i.s));
+    if(h && hk){ headX = { debet: h.x, kredit: hk.x }; return; }
+    // Kontorad: "1380 | Fordran - Lodda I AB"
+    const k = l.items[0] && /^\d{4}$/.test(l.items[0].s.trim()) && l.items.length >= 2 && !KONTOANALYS_NUM.test(l.items[1].s.trim()) ? l.items[0].s.trim() : null;
+    if(k){ cur = { konto: k, namn: l.items.slice(1).map(i => i.s).join(' ').trim(), ib: null, ub: null, tx: [] }; res.konton.push(cur); return; }
+    if(!cur) return;
+    if(/^Ingående balans/i.test(t)){ const nums = l.items.filter(i => KONTOANALYS_NUM.test(i.s.trim())); if(nums.length) cur.ib = kontoanalysNum(nums[nums.length - 1].s); return; }
+    if(/^Ingående saldo/i.test(t)){ if(cur.ib == null){ const nums = l.items.filter(i => KONTOANALYS_NUM.test(i.s.trim())); if(nums.length) cur.ib = kontoanalysNum(nums[nums.length - 1].s); } return; }
+    if(/^Utgående saldo/i.test(t)){ const nums = l.items.filter(i => KONTOANALYS_NUM.test(i.s.trim())); if(nums.length) cur.ub = kontoanalysNum(nums[nums.length - 1].s); return; }
+    if(/^(Omslutning|Huvudboksomslutning|Periodens)/i.test(t)) return;
+    // Verifikationsrad: "A 22 | 2025-04-23 | text | belopp | saldo"
+    const m = t.match(/^([A-ZÅÄÖ]{1,3})\s?(\d+)\s+(\d{4}-\d{2}-\d{2})\s/);
+    if(!m) return;
+    const nums = l.items.filter(i => KONTOANALYS_NUM.test(i.s.trim()));
+    if(nums.length < 2) return;
+    const saldo = kontoanalysNum(nums[nums.length - 1].s);
+    const prevSaldo = cur.tx.length ? cur.tx[cur.tx.length - 1].saldo : cur.ib;
+    let belopp;
+    if(nums.length >= 3){ belopp = kontoanalysNum(nums[0].s) - kontoanalysNum(nums[1].s); }
+    else if(prevSaldo != null){ belopp = Math.round((saldo - prevSaldo) * 100) / 100; }
+    else { const a = kontoanalysNum(nums[0].s); belopp = headX && Math.abs(nums[0].x - headX.kredit) < Math.abs(nums[0].x - headX.debet) ? -a : a; }
+    const dateIdx = l.items.findIndex(i => i.s.trim() === m[3]);
+    const text = l.items.slice(dateIdx + 1).filter(i => !KONTOANALYS_NUM.test(i.s.trim())).map(i => i.s).join(' ').trim();
+    cur.tx.push({ serie: m[1], vernr: m[2], datum: m[3], text, debet: belopp > 0 ? belopp : 0, kredit: belopp < 0 ? -belopp : 0, netto: belopp, saldo });
+  });
+  res.konton = res.konton.filter(k => k.ib != null || k.tx.length);
+  if(!res.konton.length) return null;
+  return res;
+}
+function ekonomiKontoMap(){ if(!companyEkonomiData.koncern._kontoMap || typeof companyEkonomiData.koncern._kontoMap !== 'object') companyEkonomiData.koncern._kontoMap = {}; return companyEkonomiData.koncern._kontoMap; }
+// Valbara låntagare: bolagen under Koncern → Bolag samt aktörerna (utom långivaren själv).
+function ekonomiKontoanalysMotparter(langivare){
+  const out = [];
+  ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).forEach(b => { if(b.namn && !sieBolagMatchar(b.namn, langivare)) out.push(b.namn); });
+  EKONOMI_KONCERN_AKTORER.forEach(a => { const n = a.key === 'lanSolvinkeln' ? 'Solvinkeln Fastigheter AB' : a.namn; if(!sieBolagMatchar(n, langivare) && !out.some(x => sieBolagMatchar(x, n))) out.push(n); });
+  return out;
+}
+// Lägger in/uppdaterar koncernlånet för ett konto. Fordringskonto hos långivaren: saldo = ib + debet − kredit,
+// lagrat som l.ib och tx.belopp = −netto så att ekonomiKoncernLanSaldo (ib − Σ belopp) ger rätt saldo.
+function ekonomiKoncernLanApplyKontoanalys(res, k, lantagare, filename){
+  const list = ekonomiKoncernList('_lan');
+  const mapKey = (res.orgnr || res.bolag) + ':' + k.konto;
+  let l = list.find(x => String(x.konto || '').trim() === k.konto && x.langivare && sieBolagMatchar(x.langivare, res.bolag) && (!x.lantagare || namnLika(x.lantagare, lantagare)));
+  const ny = !l;
+  if(!l){ l = { id: uid(), langivare: res.bolag, lantagare, konto: k.konto, belopp: 0, rantebelopp: 0, forfallodatum: '', anteckning: k.namn || '', fordranKonto: true }; list.push(l); }
+  if(!Array.isArray(l.tx)) l.tx = [];
+  l.lantagare = lantagare; l.fordranKonto = true; l.kontonamn = k.namn || l.kontonamn || '';
+  const fore = ekonomiKoncernLanSaldo(l);
+  const start = res.period ? res.period.start : '';
+  if(k.ib != null && (l.ib == null || !l.ibDatum || (start && start < l.ibDatum))){
+    l.ib = k.ib; l.ibDatum = start;
+    if(l.ibDatum) l.tx = l.tx.filter(t => t.datum >= l.ibDatum);
+  }
+  let nya = 0;
+  k.tx.forEach(t => {
+    const key = t.serie + ':' + t.vernr + ':' + k.konto + ':' + t.netto;
+    if(l.tx.some(x => x.key === key)) return;
+    if(l.ibDatum && t.datum < l.ibDatum) return;
+    l.tx.push({ id: uid(), key, serie: t.serie, vernr: t.vernr, datum: t.datum, text: t.text, belopp: -t.netto, fil: filename });
+    nya++;
+  });
+  l.tx.sort((a, b) => a.datum.localeCompare(b.datum) || String(a.vernr).localeCompare(String(b.vernr), 'sv', { numeric: true }));
+  l.belopp = Math.round(ekonomiKoncernLanSaldo(l));
+  l.sie = { fnamn: res.bolag, rar: res.period, fil: filename, importerad: new Date().toISOString().slice(0, 10), ub: k.ub != null ? k.ub : null, typ: 'kontoanalys' };
+  ekonomiKontoMap()[mapKey] = lantagare;
+  return { l, ny, nya, fore, efter: l.belopp, ub: k.ub };
+}
+// Popup: visar vad som hittades och låter dig välja låntagare per konto innan det sparas.
+function showEkonomiKontoanalysPopup(res, filename, forvaltLantagare){
+  const p = ekoPopup({ title: 'Kontoanalys · ' + (res.bolag || 'okänt bolag'), sub: (res.period ? 'Period ' + res.period.start + ' – ' + res.period.slut + '. ' : '') + 'Välj vilket bolag i koncernen varje konto är en fordran mot. Kontot blir ett koncernlån med ' + escapeHtml(res.bolag || 'bolaget') + ' som långivare, och verifikationerna blir rörelser (debet ökar fordran, kredit minskar).', maxWidth: 760 });
+  const motparter = ekonomiKontoanalysMotparter(res.bolag);
+  const map = ekonomiKontoMap();
+  const val = {};
+  res.konton.forEach(k => {
+    const box = document.createElement('div'); box.style.cssText = 'border:1px solid var(--line-soft); border-radius:10px; padding:10px 12px; margin-bottom:10px;';
+    const head = document.createElement('div'); head.style.cssText = 'display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:space-between;';
+    head.innerHTML = '<div><b>' + escapeHtml(k.konto) + ' ' + escapeHtml(k.namn || '') + '</b><div style="font-size:11.5px; color:var(--ink-soft);">IB ' + formatKrFull(k.ib || 0) + ' · ' + k.tx.length + ' verifikationer · debet ' + formatKrFull(k.tx.reduce((s, t) => s + t.debet, 0)) + ' · kredit ' + formatKrFull(k.tx.reduce((s, t) => s + t.kredit, 0)) + (k.ub != null ? ' · UB ' + formatKrFull(k.ub) : '') + '</div></div>';
+    const sel = document.createElement('select'); sel.className = 'eko-inline-select'; sel.style.cssText = 'border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; min-width:220px;';
+    sel.innerHTML = '<option value="">– Välj bolag –</option>' + motparter.map(m => '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>').join('') + '<option value="__annan">Annan motpart…</option>';
+    const mapKey = (res.orgnr || res.bolag) + ':' + k.konto;
+    const guess = forvaltLantagare || map[mapKey] || motparter.find(m => sieBolagMatchar(m, k.namn || '')) || '';
+    if(guess && motparter.includes(guess)) sel.value = guess;
+    sel.onchange = () => { if(sel.value === '__annan'){ const n = prompt('Motpartens namn:', k.namn || ''); if(n && n.trim()){ const o = document.createElement('option'); o.value = n.trim(); o.textContent = n.trim(); sel.insertBefore(o, sel.lastElementChild); sel.value = n.trim(); } else sel.value = ''; } val[k.konto] = sel.value; };
+    val[k.konto] = sel.value;
+    const lbl = document.createElement('label'); lbl.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:12.5px;'; lbl.appendChild(document.createTextNode('Fordran mot')); lbl.appendChild(sel);
+    head.appendChild(lbl); box.appendChild(head);
+    const det = document.createElement('details'); det.style.marginTop = '6px';
+    det.innerHTML = '<summary style="cursor:pointer; font-size:12px; color:var(--ink-soft);">Visa verifikationerna</summary>';
+    const tbl = document.createElement('div'); tbl.style.cssText = 'max-height:220px; overflow:auto; margin-top:6px; font-size:12px;';
+    tbl.innerHTML = k.tx.map(t => '<div style="display:flex; gap:10px; padding:3px 0; border-bottom:1px solid var(--line-soft);"><span style="width:50px; color:var(--ink-soft);">' + escapeHtml(t.serie + ' ' + t.vernr) + '</span><span style="width:84px;">' + t.datum + '</span><span style="flex:1;">' + escapeHtml(t.text) + '</span><span style="font-family:\'JetBrains Mono\',monospace; color:' + (t.netto >= 0 ? 'var(--ink)' : 'var(--good, #2e7d32)') + ';">' + (t.netto >= 0 ? '+' : '−') + formatKrFull(Math.abs(t.netto)) + '</span></div>').join('');
+    det.appendChild(tbl); box.appendChild(det);
+    p.body.appendChild(box);
+  });
+  const row = document.createElement('div'); row.style.cssText = 'display:flex; gap:8px; margin-top:6px;';
+  const save = document.createElement('button'); save.type = 'button'; save.className = 'upload-btn'; save.textContent = 'Spara som koncernlån';
+  save.onclick = async () => {
+    const saknas = res.konton.filter(k => !val[k.konto]);
+    if(saknas.length){ showToast('Välj bolag för ' + saknas.map(k => k.konto).join(', ') + '.'); return; }
+    save.disabled = true;
+    try{
+      const out = res.konton.map(k => ekonomiKoncernLanApplyKontoanalys(res, k, val[k.konto], filename));
+      await saveEkonomiKoncern();
+      p.close();
+      renderEkonomiKoncernLan(); if(ekonomiSubView === 'koncernfordran') renderEkonomiKoncernFordran(); if(ekonomiSubView === 'koncernbolag') renderEkonomiKoncernBolag(); if(ekonomiSubView === 'koncern') renderEkonomiKoncern();
+      setEkonomiKoncernLanSieStatus(out.length + ' konto' + (out.length > 1 ? 'n' : '') + ' från ' + filename + ' · ' + out.reduce((s, o) => s + o.nya, 0) + ' nya rörelser · ' + out.filter(o => o.ny).length + ' nya lån.', 'ok');
+      showToast(out.map(o => (o.l.langivare || '') + ' → ' + o.l.lantagare + ': saldo ' + formatKrFull(o.efter) + (o.ub != null && Math.abs(o.ub - o.efter) > 0.5 ? ' (UB i filen ' + formatKrFull(o.ub) + ' – kontrollera)' : '')).join(' · '));
+    }catch(e){ showDebugError('Kunde inte spara kontoanalysen', e); save.disabled = false; }
+  };
+  row.appendChild(save);
+  p.body.appendChild(row);
+}
+async function ekonomiKoncernLanLasKontoanalys(file, forvaltLantagare){
+  setEkonomiKoncernLanSieStatus('Läser ' + file.name + '…');
+  const lines = await pdfTextLines(file);
+  const res = parseKontoanalys(lines);
+  if(!res) return false;
+  setEkonomiKoncernLanSieStatus(res.konton.length + ' konto' + (res.konton.length > 1 ? 'n' : '') + ' hittade i ' + file.name + ' – välj bolag.', 'ok');
+  showEkonomiKontoanalysPopup(res, file.name, forvaltLantagare);
+  return true;
+}
+// Från bolagsvyn: läs in Prosavios kontoanalys direkt mot bolaget.
+document.getElementById('ekoBolagKontoInput').addEventListener('change', async (e) => {
+  const files = [...(e.target.files || [])]; e.target.value = '';
+  const b = ekonomiBolagList().find(x => x.id === currentEkonomiBolagId);
+  for(const f of files){
+    try{ const ok = await ekonomiKoncernLanLasKontoanalys(f, b ? b.namn : ''); if(!ok) showToast(f.name + ' ser inte ut som en huvudbok/kontoanalys.'); }
+    catch(err){ showDebugError('Kunde inte läsa ' + f.name, err); }
+  }
+});
+
 // Historik för ett lån: IB, alla rörelser från SIE och löpande saldo.
 function showEkonomiKoncernLanHistorik(l){
-  const p = ekoPopup({ title: (l.langivare || 'Lån') + (l.lantagare ? ' · ' + l.lantagare : ''), sub: 'Konto ' + (l.konto || '–') + (l.sie ? ' · senast inläst ' + l.sie.importerad + ' från ' + l.sie.fil : '') + '. Debet (plus i bokföringen) minskar skulden, kredit ökar den.', maxWidth: 760 });
+  const p = ekoPopup({ title: (l.langivare || 'Lån') + (l.lantagare ? ' · ' + l.lantagare : ''), sub: 'Konto ' + (l.konto || '–') + (l.kontonamn ? ' ' + l.kontonamn : '') + (l.sie ? ' · senast inläst ' + l.sie.importerad + ' från ' + l.sie.fil : '') + (l.fordranKonto ? '. Fordringskonto hos långivaren: debet ökar fordran, kredit minskar den.' : '. Debet (plus i bokföringen) minskar skulden, kredit ökar den.'), maxWidth: 760 });
   // Konto i låntagarens bokföring (t.ex. 2393) – kopplingen som SIE-inläsningen använder.
   { const kw = document.createElement('div'); kw.style.cssText = 'display:flex; gap:8px; align-items:center;';
     const ki = document.createElement('input'); ki.type = 'text'; ki.value = l.konto || ''; ki.placeholder = 't.ex. 2393';
@@ -14847,6 +15016,10 @@ function renderEkonomiBolagDetalj(b){
   delaBtn.title = 'Skapa en länk som visar bolagets rapport utan inloggning';
   delaBtn.onclick = () => showEkonomiBolagDelaPopup(b);
   top.appendChild(delaBtn);
+  const kontoBtn = document.createElement('button'); kontoBtn.type = 'button'; kontoBtn.className = 'upload-btn'; kontoBtn.textContent = '📄 Läs in kontoanalys (fordran)';
+  kontoBtn.title = 'Huvudbok/kontoanalys (PDF från Fortnox) för långivarens fordringskonto – blir ett koncernlån mot ' + (b.namn || 'bolaget');
+  kontoBtn.onclick = () => { document.getElementById('ekoBolagKontoInput').click(); };
+  top.appendChild(kontoBtn);
   const impBtn = document.createElement('button'); impBtn.type = 'button'; impBtn.className = 'upload-btn'; impBtn.textContent = '📄 Läs in budget (Excel)';
 
   impBtn.title = 'Excel med en flik där raderna är poster och kolumnerna månader (t.ex. Budget-fliken: Post | Källa | månader, med INTÄKTER och KOSTNADER som avsnitt)';
@@ -14883,6 +15056,7 @@ function renderEkonomiBolagDetalj(b){
   kpi.style.cssText = 'display:flex; gap:22px; flex-wrap:wrap; margin-bottom:14px; font-size:13px;';
   const kp = (l, v, red) => { const d = document.createElement('div'); d.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px;">' + l + '</div><div style="font-family:\'JetBrains Mono\',monospace; font-size:15px; font-weight:600;' + (red ? ' color:var(--danger);' : '') + '">' + v + '</div>'; kpi.appendChild(d); };
   kp('Kapitalbehov i perioden', formatKrFull(r.behovTotalt), r.behovTotalt > 0);
+  { const kl = ekonomiBolagKoncernLan(b); if(kl.length) kp('Lån från koncernen', formatKrFull(Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0))) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + kl.map(l => escapeHtml(l.langivare || '')).filter((v, i, a) => v && a.indexOf(v) === i).join(', ') + '</span>'); }
   kp('Summa intäkter', formatKrFull(Math.round(months.reduce((s, m) => s + r.intakt[m], 0))));
   kp('Summa kostnader', formatKrFull(Math.round(months.reduce((s, m) => s + r.kostnad[m], 0))));
   kp('Resultat', formatKrFull(Math.round(months.reduce((s, m) => s + r.resultat[m], 0))), months.reduce((s, m) => s + r.resultat[m], 0) < 0);
@@ -15124,7 +15298,8 @@ function ekonomiPortalBolagData(b){
     const r = ekonomiBolagBerakna(b);
     const sum = o => r.manader.reduce((s, m) => s + (o[m] || 0), 0);
     const positivFran = r.manader.find((m, i) => i > 0 && r.kassaflode[m] > 0 && r.manader.slice(i).every(mm => r.kassaflode[mm] >= 0)) || null;
-    return { id: b.id, namn: b.namn, beskrivning: b.beskrivning || '', agarandel: b.agarandel, kontakt: b.kontakt || '', finansiarNamn: ekonomiBolagFinansiarNamn(b.finansiar), months: r.manader, marginal: b.marginal || 0, kredittid: b.kredittid || 0, ingaendeKassa: b.ingaendeKassa || 0,
+    const kl = ekonomiBolagKoncernLan(b);
+    return { id: b.id, namn: b.namn, beskrivning: b.beskrivning || '', agarandel: b.agarandel, kontakt: b.kontakt || '', finansiarNamn: ekonomiBolagFinansiarNamn(b.finansiar), koncernLan: Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0)), koncernLanFran: kl.map(l => l.langivare || '').filter((v, i, a) => v && a.indexOf(v) === i).join(', '), months: r.manader, marginal: b.marginal || 0, kredittid: b.kredittid || 0, ingaendeKassa: b.ingaendeKassa || 0,
       intakter: b.intakter.map(x => ({ namn: x.namn, per: x.per || {} })), kostnader: b.kostnader.map(x => ({ namn: x.namn, per: x.per || {}, ejKassa: !!x.ejKassa })),
       serie: { intakt: r.intakt, kostnad: r.kostnad, resultat: r.resultat, inbet: r.inbet, kostnadKassa: r.kostnadKassa, tillskott: r.tillskott, tillskottPrelim: r.tillskottPrelim, kassaflode: r.kassaflode, kassa: r.kassa, behov: r.behov, kassaEfter: r.kassaEfter },
       nyckeltal: { lagstaKassa: r.lagstaKassa, lagstaManad: r.lagstaManad, behovTotalt: r.behovTotalt, sumIntakt: sum(r.intakt), sumKostnad: sum(r.kostnad), resultat: sum(r.resultat), positivFran } };
@@ -15295,7 +15470,7 @@ function portalKortData(data){
   data.bolag.forEach(b => {
     const months = b.months; const i0 = Math.max(0, months.indexOf(idag));
     const kassaNu = months.includes(idag) ? b.serie.kassa[idag] : (b.serie.kassa[months[0]] != null ? b.ingaendeKassa : null);
-    kort.push({ id: b.id, typ: 'bolag', namn: b.namn, beskrivning: b.beskrivning, agarandel: b.agarandel, serie: months.map(m => b.serie.kassa[m]), months, kassaNu, lagsta: b.nyckeltal.lagstaKassa, lagstaManad: b.nyckeltal.lagstaManad, behov: b.nyckeltal.behovTotalt, marginal: b.marginal, extra: 'Finansieras av ' + b.finansiarNamn, i0 });
+    kort.push({ id: b.id, typ: 'bolag', namn: b.namn, beskrivning: b.beskrivning, agarandel: b.agarandel, koncernLan: b.koncernLan || 0, serie: months.map(m => b.serie.kassa[m]), months, kassaNu, lagsta: b.nyckeltal.lagstaKassa, lagstaManad: b.nyckeltal.lagstaManad, behov: b.nyckeltal.behovTotalt, marginal: b.marginal, extra: 'Finansieras av ' + b.finansiarNamn, i0 });
   });
   return kort;
 }
@@ -15321,7 +15496,7 @@ function portalOversiktHtml(data){
       '<div class="portal-card-head"><div><div class="portal-card-name">' + escapeHtml(k.namn) + '</div><div class="portal-card-desc">' + escapeHtml(k.beskrivning || '') + '</div></div><span class="portal-pill ' + st.cls + '">' + st.text + '</span></div>' +
       (k.serie.length ? portalSparkline(k.serie, { marginal: k.marginal || null }) : '<div class="portal-spark-empty">Ingen likviditet publicerad</div>') +
       '<div class="portal-card-kpis"><div><span>Kassa nu</span><b>' + portalFmt.mkr(k.kassaNu) + '</b></div><div><span>Kapitalbehov</span><b' + (k.behov > 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.behov) + '</b></div></div>' +
-      '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + '</div></article>';
+      '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + (k.koncernLan ? ' · Lån från koncernen ' + portalFmt.mkr(k.koncernLan) : '') + '</div></article>';
   });
   h += '</section>';
   // Koncernens fordringar (hopfällt)
@@ -15376,7 +15551,7 @@ function portalDetaljHtml(data, id, state){
   const kassaNu = months.includes(idag) ? s.kassa[idag] : b.ingaendeKassa;
   let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px; font-size:14px;">' + escapeHtml(b.beskrivning || '') + '</p><div class="portal-meta">' + (b.agarandel != null && b.agarandel !== '' ? '<span>Ägarandel <b>' + String(b.agarandel).replace('.', ',') + ' %</b></span>' : '') + (b.kontakt ? '<span>Kontakt <b>' + escapeHtml(b.kontakt) + '</b></span>' : '') + '<span>Finansieras av <b>' + escapeHtml(b.finansiarNamn) + '</b></span><span>Säkerhetsmarginal <b>' + portalFmt.kr(b.marginal) + '</b></span><span>Kredittid <b>' + (b.kredittid || 0) + ' dagar</b></span><span>Budget <b>' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '</b></span></div></div></section>';
   const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
-  h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
+  h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + (b.koncernLan ? kpi('Lån från koncernen', portalFmt.mkr(b.koncernLan), escapeHtml(b.koncernLanFran || '')) : '') + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
   h += '<div class="portal-card">' + portalSparkline(months.map(m => s.kassa[m]), { w: 900, h: 130, marginal: b.marginal || null }) + '<div class="portal-sub" style="margin-top:4px;">Kassa per månad före nya tillskott. Streckad linje = säkerhetsmarginal.</div></div>';
   const row = (label, o, opts) => ({ cls: (opts && opts.cls) || '', indent: (opts && opts.indent) || 0, cells: [{ t: label }].concat(months.map(m => ({ t: portalFmt.tkr(typeof o === 'function' ? o(m) : o[m]), red: !!(opts && opts.red && (opts.red === true || opts.red[m])) })), [{ t: portalFmt.tkr(months.reduce((sum, m) => sum + ((typeof o === 'function' ? o(m) : o[m]) || 0), 0)) }]) });
   const likvRows = [
