@@ -1455,7 +1455,7 @@ async function openCompanyEkonomi(){
 // Projekt: listan + Budget, Mark, Likviditet, Förväntad vinst. Koncern: Koncernlikviditet, Fordran, Lån.
 const EKONOMI_TAB_GROUPS = {
   projekt: [['projekt', 'Projekt'], ['budget', 'Budget/förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']],
-  koncern: [['koncern', 'Koncernlikviditet'], ['koncernbolag', 'Bolag'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']]
+  koncern: [['koncern', 'Koncernlikviditet'], ['koncernbolag', 'Bolag'], ['koncernschema', 'Koncernschema'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']]
 };
 function ekonomiTabGroupOf(view){
   return Object.keys(EKONOMI_TAB_GROUPS).find(g => EKONOMI_TAB_GROUPS[g].some(x => x[0] === view)) || null;
@@ -2565,7 +2565,8 @@ function renderEkonomiAndelarOversikt(wrap){
   wrap.innerHTML = '<h3 style="margin:26px 0 4px;">Prosavios investeringar</h3><p class="eko-sub" style="margin:0 0 10px;">Andelar enligt balansrapporten (' + escapeHtml(andelar[0].fil || '') + (andelar[0].importerad ? ', inläst ' + andelar[0].importerad : '') + ') tillsammans med fordringar från kontoanalyserna.</p>';
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(t); wrap.appendChild(scroll);
 }
-$1function showEkonomiKoncernLanHistorik(l){
+// Historik för ett lån: IB, alla rörelser från SIE och löpande saldo.
+function showEkonomiKoncernLanHistorik(l){
   const p = ekoPopup({ title: (l.langivare || 'Lån') + (l.lantagare ? ' · ' + l.lantagare : ''), sub: 'Konto ' + (l.konto || '–') + (l.kontonamn ? ' ' + l.kontonamn : '') + (l.sie ? ' · senast inläst ' + l.sie.importerad + ' från ' + l.sie.fil : '') + (l.fordranKonto ? '. Fordringskonto hos långivaren: debet ökar fordran, kredit minskar den.' : '. Debet (plus i bokföringen) minskar skulden, kredit ökar den.'), maxWidth: 760 });
   // Konto i låntagarens bokföring (t.ex. 2393) – kopplingen som SIE-inläsningen använder.
   { const kw = document.createElement('div'); kw.style.cssText = 'display:flex; gap:8px; align-items:center;';
@@ -2590,8 +2591,8 @@ $1function showEkonomiKoncernLanHistorik(l){
     const ra = ekonomiKoncernLanRanta(l);
     if(parseFloat(l.ranta) || l.rantaAck){ const rl = ekoPopupLine('Upplupen ränta idag', formatKrFull(Math.round(ra.belopp)) + ' <span style="font-size:11px; color:var(--ink-soft);">klicka för plan</span>'); rl.style.cursor = 'pointer'; rl.onclick = () => { p.close(); showEkonomiKoncernLanRantaPopup(l); }; p.body.appendChild(rl); }
   }
-$1
- + (l.ibDatum ? ' ' + l.ibDatum : ''), formatKrFull(saldo), { bold: true }));
+  let saldo = l.ib || 0;
+  p.body.appendChild(ekoPopupLine('Ingående balans' + (l.ibDatum ? ' ' + l.ibDatum : ''), formatKrFull(saldo), { bold: true }));
   (l.tx || []).forEach(t => {
     saldo -= t.belopp || 0;
     const amort = (t.belopp || 0) > 0;
@@ -2803,6 +2804,7 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiKoncernLanView').style.display = view === 'koncernlan' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernKostnaderView').style.display = view === 'koncernkostnader' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernBolagView').style.display = view === 'koncernbolag' ? 'block' : 'none';
+  document.getElementById('ekonomiKoncernSchemaView').style.display = view === 'koncernschema' ? 'block' : 'none';
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
@@ -2827,6 +2829,7 @@ function setEkonomiSubView(view){
   else if(view === 'koncernlan') renderEkonomiKoncernLan();
   else if(view === 'koncernkostnader') renderEkonomiKoncernKostnader();
   else if(view === 'koncernbolag') renderEkonomiKoncernBolag();
+  else if(view === 'koncernschema') renderEkonomiKoncernSchema();
   else renderEkonomiNumberTab(view);
 }
 
@@ -15212,7 +15215,7 @@ function renderEkonomiBolagDetalj(b){
   const kp = (l, v, red) => { const d = document.createElement('div'); d.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px;">' + l + '</div><div style="font-family:\'JetBrains Mono\',monospace; font-size:15px; font-weight:600;' + (red ? ' color:var(--danger);' : '') + '">' + v + '</div>'; kpi.appendChild(d); };
   kp('Kapitalbehov i perioden', formatKrFull(r.behovTotalt), r.behovTotalt > 0);
   { const an = ekonomiAndelarForBolag(b); if(an.length) kp('Andelar (anskaffningsvärde)', formatKrFull(ekonomiAndelarSumma(an)) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + an.map(a => escapeHtml(a.konto) + (a.procent != null ? ' · ' + String(a.procent).replace('.', ',') + ' %' : '')).join(', ') + '</span>'); }
-$1, formatKrFull(Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0))) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + kl.map(l => escapeHtml(l.langivare || '')).filter((v, i, a) => v && a.indexOf(v) === i).join(', ') + '</span>'); }
+  { const kl = ekonomiBolagKoncernLan(b); if(kl.length) kp('Lån från koncernen', formatKrFull(Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0))) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + kl.map(l => escapeHtml(l.langivare || '')).filter((v, i, a) => v && a.indexOf(v) === i).join(', ') + '</span>'); }
   kp('Summa intäkter', formatKrFull(Math.round(months.reduce((s, m) => s + r.intakt[m], 0))));
   kp('Summa kostnader', formatKrFull(Math.round(months.reduce((s, m) => s + r.kostnad[m], 0))));
   kp('Resultat', formatKrFull(Math.round(months.reduce((s, m) => s + r.resultat[m], 0))), months.reduce((s, m) => s + r.resultat[m], 0) < 0);
@@ -15395,6 +15398,87 @@ document.getElementById('ekoBolagImportInput').addEventListener('change', async 
   catch(err){ const st = document.getElementById('ekoBolagImportStatus'); if(st){ st.textContent = 'Kunde inte läsa filen: ' + (err.message || err); st.className = 'contract-upload-status err'; } }
 });
 
+// ---------- Koncernschema (koncernträd) ----------
+// Noder med moderbolag och ägarandel ritas som ett träd, både under Koncern → Koncernschema
+// (där Mikael fyller i) och i ägarportalen/delningslänkarna. koncern._schema = [{ id, namn,
+//   parentId, procent, typ, beskrivning, bolagId, aktorKey, ordning }]. "Skapa från andelar"
+// bygger ett förslag ur balansrapportens andelsposter (Prosavio som moderbolag).
+const SCHEMA_TYPER = ['Moderbolag', 'Dotterbolag', 'Intressebolag', 'Övrigt innehav'];
+function ekonomiSchemaNoder(){ return ekonomiKoncernList('_schema'); }
+function ekonomiSchemaTypFor(procent){ return procent == null ? 'Övrigt innehav' : procent > 50 ? 'Dotterbolag' : procent >= 20 ? 'Intressebolag' : 'Övrigt innehav'; }
+function ekonomiSchemaSkapaFranAndelar(){
+  const n = ekonomiSchemaNoder();
+  let root = n.find(x => !x.parentId && x.aktorKey === 'lanProsavio') || n.find(x => !x.parentId);
+  if(!root){ root = { id: uid(), namn: 'Prosavio AB', parentId: null, procent: null, typ: 'Moderbolag', beskrivning: 'Moderbolag', aktorKey: 'lanProsavio', bolagId: null, ordning: 0 }; n.push(root); }
+  let i = n.length;
+  ekonomiAndelarList().forEach(a => {
+    const namn = ekonomiAndelarMotpartNamn(a);
+    if(n.some(x => namnLika(x.namn, namn) || (a.bolagId && x.bolagId === a.bolagId))) return;
+    n.push({ id: uid(), namn, parentId: root.id, procent: a.procent, typ: ekonomiSchemaTypFor(a.procent), beskrivning: '', bolagId: a.bolagId || null, aktorKey: a.aktorKey || null, ordning: i++ });
+  });
+}
+function ekonomiSchemaBarn(noder, parentId){ return noder.filter(x => (x.parentId || null) === (parentId || null)).sort((a, b) => (b.procent || 0) - (a.procent || 0) || (a.ordning || 0) - (b.ordning || 0)); }
+function ekonomiSchemaArAttling(noder, id, kandidat){ let cur = noder.find(x => x.id === kandidat); let guard = 0; while(cur && guard++ < 100){ if(cur.id === id) return true; cur = noder.find(x => x.id === cur.parentId); } return false; }
+// HTML för trädet (används av både adminvyn och portalen). extra(nod) kan ge en rad till per nod.
+function koncernTradHtml(noder, extra){
+  const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : 'ovrigt';
+  const nod = x => '<li><div class="knod ' + typKlass(x.typ) + '">' + (x.procent != null ? '<span class="knod-proc">' + String(x.procent).replace('.', ',') + ' %</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div>' + (x.beskrivning ? '<div class="knod-sub">' + escapeHtml(x.beskrivning) + '</div>' : '<div class="knod-sub">' + escapeHtml(x.typ || '') + '</div>') + (extra ? extra(x) : '') + '</div>' + gren(x.id) + '</li>';
+  const gren = pid => { const barn = ekonomiSchemaBarn(noder, pid); return barn.length ? '<ul>' + barn.map(nod).join('') + '</ul>' : ''; };
+  const rotter = ekonomiSchemaBarn(noder, null);
+  if(!rotter.length) return '<p class="eko-sub">Inget koncernschema ännu.</p>';
+  return '<div class="ktrad-scroll"><div class="ktrad"><ul class="ktrad-rot">' + rotter.map(nod).join('') + '</ul></div></div><div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
+}
+function renderEkonomiKoncernSchema(){
+  const wrap = document.getElementById('ekoSchemaWrap'); if(!wrap) return;
+  const noder = ekonomiSchemaNoder();
+  wrap.innerHTML = '';
+  const bar = document.createElement('div'); bar.style.cssText = 'display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;';
+  const add = document.createElement('button'); add.type = 'button'; add.className = 'add-inline-btn'; add.textContent = '+ Lägg till bolag i schemat';
+  add.onclick = async () => { const namn = prompt('Bolagets namn:', ''); if(namn === null || !namn.trim()) return; const root = noder.find(x => !x.parentId); noder.push({ id: uid(), namn: namn.trim(), parentId: root ? root.id : null, procent: root ? 100 : null, typ: root ? 'Dotterbolag' : 'Moderbolag', beskrivning: '', bolagId: null, aktorKey: null, ordning: noder.length }); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+  bar.appendChild(add);
+  if(ekonomiAndelarList().length){ const seed = document.createElement('button'); seed.type = 'button'; seed.className = 'add-inline-btn'; seed.textContent = noder.length ? 'Komplettera från andelar' : 'Skapa från andelar (balansrapporten)'; seed.onclick = async () => { ekonomiSchemaSkapaFranAndelar(); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); }; bar.appendChild(seed); }
+  wrap.appendChild(bar);
+  if(noder.length){
+    const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.style.marginBottom = '18px';
+    const t = document.createElement('table'); t.className = 'eko-compare-table'; t.style.width = '100%';
+    t.innerHTML = '<colgroup><col style="width:20%;"><col style="width:18%;"><col style="width:90px;"><col style="width:150px;"><col><col style="width:18%;"><col style="width:44px;"></colgroup><thead><tr><th style="text-align:left;">Bolag</th><th style="text-align:left;">Ägs av</th><th>Ägarandel</th><th style="text-align:left;">Typ</th><th style="text-align:left;">Beskrivning</th><th style="text-align:left;">Koppling (Bolag-fliken)</th><th></th></tr></thead>';
+    const tb = document.createElement('tbody');
+    const ordnade = []; const walk = (pid, djup) => ekonomiSchemaBarn(noder, pid).forEach(x => { ordnade.push({ x, djup }); walk(x.id, djup + 1); }); walk(null, 0);
+    noder.filter(x => !ordnade.some(o => o.x === x)).forEach(x => ordnade.push({ x, djup: 0 }));
+    ordnade.forEach(({ x, djup }) => {
+      const tr = document.createElement('tr'); tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td class="row-actions"></td>';
+      tr.children[0].style.paddingLeft = (6 + djup * 18) + 'px';
+      ekonomiKoncernTextCell(tr.children[0], x.namn, async v => { x.namn = v; await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); }, 'Namn');
+      const par = document.createElement('select'); par.className = 'eko-inline-select'; par.style.width = '100%';
+      par.innerHTML = '<option value="">– Toppnivå –</option>' + noder.filter(y => y.id !== x.id && !ekonomiSchemaArAttling(noder, x.id, y.id)).map(y => '<option value="' + y.id + '">' + escapeHtml(y.namn) + '</option>').join('');
+      par.value = x.parentId || ''; par.onchange = async () => { x.parentId = par.value || null; if(!x.parentId && x.typ !== 'Moderbolag') x.typ = 'Moderbolag'; await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+      tr.children[1].appendChild(par);
+      const pr = document.createElement('input'); pr.type = 'number'; pr.step = '0.01'; pr.className = 'eko-inline-input'; pr.style.textAlign = 'center'; pr.value = x.procent != null ? x.procent : ''; pr.placeholder = '%';
+      pr.onchange = async () => { x.procent = pr.value === '' ? null : parseFloat(pr.value.replace(',', '.')); if(x.parentId) x.typ = ekonomiSchemaTypFor(x.procent); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+      tr.children[2].appendChild(pr);
+      const ty = document.createElement('select'); ty.className = 'eko-inline-select'; ty.style.width = '100%'; ty.innerHTML = SCHEMA_TYPER.map(s => '<option>' + s + '</option>').join(''); ty.value = SCHEMA_TYPER.includes(x.typ) ? x.typ : 'Övrigt innehav';
+      ty.onchange = async () => { x.typ = ty.value; await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+      tr.children[3].appendChild(ty);
+      ekonomiKoncernTextCell(tr.children[4], x.beskrivning, async v => { x.beskrivning = v; await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); }, 'T.ex. verksamhet, org.nr');
+      const kop = document.createElement('select'); kop.className = 'eko-inline-select'; kop.style.width = '100%';
+      kop.innerHTML = '<option value="">– Ingen –</option>' + ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).map(b => '<option value="b:' + b.id + '">' + escapeHtml(b.namn) + '</option>').join('') + EKONOMI_KONCERN_AKTORER.map(a => '<option value="a:' + a.key + '">' + escapeHtml(a.key === 'lanSolvinkeln' ? 'Solvinkeln Fastigheter AB' : a.namn) + ' (aktör)</option>').join('');
+      kop.value = x.bolagId ? 'b:' + x.bolagId : x.aktorKey ? 'a:' + x.aktorKey : '';
+      kop.onchange = async () => { x.bolagId = kop.value.startsWith('b:') ? kop.value.slice(2) : null; x.aktorKey = kop.value.startsWith('a:') ? kop.value.slice(2) : null; await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+      tr.children[5].appendChild(kop);
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort ur schemat';
+      del.onclick = async () => { if(!confirm('Ta bort ' + (x.namn || 'bolaget') + ' ur schemat? Underliggande bolag flyttas upp en nivå.')) return; noder.filter(y => y.parentId === x.id).forEach(y => { y.parentId = x.parentId || null; }); companyEkonomiData.koncern._schema = noder.filter(y => y.id !== x.id); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+      tr.children[6].appendChild(del);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); scroll.appendChild(t); wrap.appendChild(scroll);
+  } else {
+    const p = document.createElement('p'); p.className = 'eko-sub'; p.textContent = 'Lägg till bolagen och ange vem som äger vad, eller skapa ett förslag från andelarna i balansrapporten.'; wrap.appendChild(p);
+  }
+  const trad = document.createElement('div');
+  trad.innerHTML = koncernTradHtml(noder, x => { const b = x.bolagId ? ekonomiBolagList().find(y => y.id === x.bolagId) : null; const an = x.bolagId ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.bolagId === x.bolagId)) : x.aktorKey ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.aktorKey === x.aktorKey)) : 0; const lan = b ? ekonomiBolagKoncernLan(b).reduce((s, l) => s + ekonomiKoncernLanSaldo(l), 0) : 0; return (an || lan) ? '<div class="knod-tal">' + (an ? 'Andelar ' + portalFmt.mkr(an) : '') + (an && lan ? ' · ' : '') + (lan ? 'Lån ' + portalFmt.mkr(lan) : '') + '</div>' : ''; });
+  wrap.appendChild(trad);
+}
+
 // ---------- Ägarportal (Prosavio) ----------
 // Ägarna i Prosavio (portal_users, se schema-portal.sql) loggar in med egna konton och ser en
 // publicerad ögonblicksbild (portal_rapport) i stället för projektöversikten: först en överblick
@@ -15447,7 +15531,7 @@ async function ekonomiPortalSnapshot(){
   });
   const lan = ekonomiKoncernList('_lan').map(l => ({ langivare: l.langivare || '', lantagare: l.lantagare || '', saldo: ekonomiKoncernLanSaldo(l), ranta: l.ranta != null && l.ranta !== '' ? l.ranta : null, upplupen: (parseFloat(l.ranta) || l.rantaAck) ? Math.round(ekonomiKoncernLanRanta(l).belopp) : 0, forfall: l.forfallodatum || '', bk: !!l.bk, langivareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.langivare, a.namn)).key : null, lantagareAktor: PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)) ? PORTAL_AKTORER.find(a => sieBolagMatchar(l.lantagare, a.namn)).key : null }));
   const bolag = ekonomiBolagList().slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).map(b => ekonomiPortalBolagData(b));
-  return { publiceradAt: new Date().toISOString(), publiceradAv: myName || myEmail || '', idag, koncern, fordran: { projekt: projektFordran, lan }, bolag, aktorInfo: PORTAL_AKTORER.reduce((o, a) => { o[a.key] = { namn: a.namn, beskrivning: ekonomiPortalInfo(a.key).beskrivning || '' }; return o; }, {}) };
+  return { publiceradAt: new Date().toISOString(), publiceradAv: myName || myEmail || '', idag, koncern, fordran: { projekt: projektFordran, lan }, bolag, schema: JSON.parse(JSON.stringify(ekonomiSchemaNoder())), aktorInfo: PORTAL_AKTORER.reduce((o, a) => { o[a.key] = { namn: a.namn, beskrivning: ekonomiPortalInfo(a.key).beskrivning || '' }; return o; }, {}) };
 }
 function ekonomiPortalBolagData(b){
     ekonomiBolagNormalisera(b);
@@ -15475,7 +15559,7 @@ async function showEkonomiBolagDelaPopup(b){
   const actions = document.createElement('div'); actions.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;'; p.body.appendChild(actions);
   const publicera = async () => {
     status.textContent = 'Sparar dagens siffror…';
-    const data = { typ: 'bolagsrapport', bolag: ekonomiPortalBolagData(b), idag: new Date().toISOString().slice(0, 10), publiceradAt: new Date().toISOString(), publiceradAv: myName || '' };
+    const data = { typ: 'bolagsrapport', bolag: ekonomiPortalBolagData(b), schema: JSON.parse(JSON.stringify(ekonomiSchemaNoder())), idag: new Date().toISOString().slice(0, 10), publiceradAt: new Date().toISOString(), publiceradAv: myName || '' };
     let row = null; try{ row = await DB.getNyaProjektRow(id); }catch(e){ row = null; }
     if(row){ await DB.updateNyaProjekt(id, { data, name: b.namn, is_public: true }); row.data = data; row.is_public = true; }
     else row = await DB.insertNyaProjekt({ id, share_id: uid() + uid() + uid(), name: b.namn, data, is_public: true, status: 'candidate', created_by: myPersonId, created_by_name: myName });
@@ -15495,7 +15579,12 @@ function renderPublicBolagView(root, candidate){
   root.className = 'portal';
   const data = { bolag: [b], idag: d.idag || new Date().toISOString().slice(0, 10), fordran: { projekt: [], lan: [] }, koncern: { rows: [], months: [] }, aktorInfo: {} };
   const html = portalDetaljHtml(data, b.id, {}).replace(/^<button[^>]*data-portal-home>[^<]*<\/button>/, '');
-  root.innerHTML = '<div class="portal-wrap"><header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Bolagsrapport</div><h1 class="portal-title">' + escapeHtml(b.namn || '') + '</h1></div><div class="portal-user"><div>Siffror per ' + portalFmt.datum(d.publiceradAt) + (d.publiceradAv ? ' · ' + escapeHtml(d.publiceradAv) : '') + '</div></div></header>' + html + '</div>';
+  const harSchema = Array.isArray(d.schema) && d.schema.length;
+  const tabs = harSchema ? '<div class="portal-tabs"><button type="button" class="portal-tab active" data-pub-tab="bolag">' + escapeHtml(b.namn || 'Bolaget') + '</button><button type="button" class="portal-tab" data-pub-tab="schema">Koncernschema</button></div>' : '';
+  const schemaHtml = harSchema ? '<div id="pubSchema" style="display:none;">' + koncernTradHtml(d.schema, x => (x.bolagId === b.id && (b.andelar || b.koncernLan)) ? '<div class="knod-tal">' + (b.andelar ? 'Andelar ' + portalFmt.mkr(b.andelar) : '') + (b.andelar && b.koncernLan ? ' · ' : '') + (b.koncernLan ? 'Lån ' + portalFmt.mkr(b.koncernLan) : '') + '</div>' : '') + '</div>';
+  root.innerHTML = '<div class="portal-wrap"><header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Bolagsrapport</div><h1 class="portal-title">' + escapeHtml(b.namn || '') + '</h1>' + tabs + '</div>
+<div class="portal-user"><div>Siffror per ' + portalFmt.datum(d.publiceradAt) + (d.publiceradAv ? ' · ' + escapeHtml(d.publiceradAv) : '') + '</div></div></header><div id="pubBolag">' + html + '</div>' + (harSchema ? schemaHtml : '') + '</div>';
+  root.querySelectorAll('[data-pub-tab]').forEach(el => { el.onclick = () => { const v = el.dataset.pubTab; root.querySelectorAll('[data-pub-tab]').forEach(t => t.classList.toggle('active', t === el)); root.querySelector('#pubBolag').style.display = v === 'bolag' ? 'block' : 'none'; const sEl = root.querySelector('#pubSchema'); if(sEl) sEl.style.display = v === 'schema' ? 'block' : 'none'; window.scrollTo(0, 0); }; });
   root.querySelectorAll('[data-portal-toggle]').forEach(el => { el.onclick = () => { const t = root.querySelector('#' + el.dataset.portalToggle); const open = t.style.display !== 'none'; t.style.display = open ? 'none' : 'block'; el.textContent = (open ? 'Visa ' : 'Dölj ') + el.dataset.portalLabel; }; });
 }
 
@@ -15593,7 +15682,7 @@ async function renderPortal(user, rapport){
   }
   const data = rapport && rapport.data;
   const state = { view: 'oversikt', id: null };
-  const header = () => '<header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Ägarrapport</div><h1 class="portal-title">' + (state.view === 'oversikt' ? 'Koncernöversikt' : escapeHtml(state.titel || '')) + '</h1></div>' +
+  const header = () => '<header class="portal-head"><div><div class="portal-eyebrow">Prosavio AB · Ägarrapport</div><h1 class="portal-title">' + (state.view === 'oversikt' ? 'Koncernöversikt' : state.view === 'schema' ? 'Koncernschema' : escapeHtml(state.titel || '')) + '</h1>' + ((data && data.schema && data.schema.length) ? '<div class="portal-tabs"><button type="button" class="portal-tab' + (state.view === 'oversikt' ? ' active' : '') + '" data-portal-home>Översikt</button><button type="button" class="portal-tab' + (state.view === 'schema' ? ' active' : '') + '" data-portal-schema>Koncernschema</button></div>' : '') + '</div>' +
     '<div class="portal-user">' + (rapport ? '<div>Publicerad ' + portalFmt.datum(rapport.published_at) + (rapport.published_by ? ' av ' + escapeHtml(rapport.published_by) : '') + '</div>' : '') + '<div>' + escapeHtml(user.namn || user.email || '') + (user.preview ? ' · förhandsgranskning' : '') + '</div>' +
     (user.preview ? '<button type="button" class="portal-btn" id="portalBack">Tillbaka till appen</button>' : '<button type="button" class="portal-btn" id="portalLogout">Logga ut</button>') + '</div></header>';
   const wire = () => {
@@ -15601,17 +15690,24 @@ async function renderPortal(user, rapport){
     const bk = root.querySelector('#portalBack'); if(bk) bk.onclick = () => location.reload();
     root.querySelectorAll('[data-portal-open]').forEach(el => { el.onclick = () => { state.view = 'detalj'; state.id = el.dataset.portalOpen; draw(); window.scrollTo(0, 0); }; });
     root.querySelectorAll('[data-portal-home]').forEach(el => { el.onclick = () => { state.view = 'oversikt'; state.id = null; draw(); window.scrollTo(0, 0); }; });
+    root.querySelectorAll('[data-portal-schema]').forEach(el => { el.onclick = () => { state.view = 'schema'; state.id = null; draw(); window.scrollTo(0, 0); }; });
     root.querySelectorAll('[data-portal-toggle]').forEach(el => { el.onclick = () => { const t = root.querySelector('#' + el.dataset.portalToggle); const open = t.style.display !== 'none'; t.style.display = open ? 'none' : 'block'; el.textContent = (open ? 'Visa ' : 'Dölj ') + el.dataset.portalLabel; }; });
   };
   const draw = () => {
     if(!data){ root.innerHTML = '<div class="portal-wrap">' + header() + '<div class="portal-card" style="text-align:center; padding:40px;">Ingen rapport är publicerad ännu. Hör av dig till Mikael Issa.</div></div>'; wire(); return; }
     state.titel = '';
-    root.innerHTML = '<div class="portal-wrap">' + (state.view === 'oversikt' ? portalOversiktHtml(data) : portalDetaljHtml(data, state.id, state)) + '</div>';
+    root.innerHTML = '<div class="portal-wrap">' + (state.view === 'oversikt' ? portalOversiktHtml(data) : state.view === 'schema' ? portalSchemaHtml(data) : portalDetaljHtml(data, state.id, state)) + '</div>';
     root.querySelector('.portal-wrap').insertAdjacentHTML('afterbegin', header());
     wire();
   };
   draw();
 }
+function portalSchemaHtml(data){
+  const noder = data.schema || [];
+  const bolagAv = x => data.bolag.find(b => b.id === x.bolagId);
+  return '<p class="portal-sub">Ägarandelar enligt koncernschemat. Klicka på ett bolag i översikten för detaljer.</p>' + koncernTradHtml(noder, x => { const b = bolagAv(x); const an = b ? b.andelar : 0, lan = b ? b.koncernLan : 0; return (an || lan) ? '<div class="knod-tal">' + (an ? 'Andelar ' + portalFmt.mkr(an) : '') + (an && lan ? ' · ' : '') + (lan ? 'Lån ' + portalFmt.mkr(lan) : '') + '</div>' : ''; });
+}
+
 function portalKortData(data){
   // Ett kort per bolag: Prosavio, Solvinkeln (ur koncernlikviditeten) och portföljbolagen.
   const idag = data.idag.slice(0, 7);
