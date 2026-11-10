@@ -2552,7 +2552,9 @@ document.getElementById('ekoBolagBrInput').addEventListener('change', async (e) 
 });
 // Översikt över Prosavios investeringar: andelar + fordringar per bolag (visas under bolagslistan).
 function renderEkonomiAndelarOversikt(wrap){
-  const andelar = ekonomiAndelarList();
+  // Innehav markerade dold (a.dold) visas inte i tabellen eller summorna; länken under tabellen tar fram dem igen.
+  const dolda = ekonomiAndelarList().filter(a => a.dold);
+  const andelar = ekonomiAndelarList().filter(a => !a.dold);
   const allaLan = ekonomiKoncernList('_lan');
   const grupper = {};
   andelar.forEach(a => { const k = a.bolagId ? 'b:' + a.bolagId : a.aktorKey ? 'a:' + a.aktorKey : 'm:' + (a.motpart || a.namn); (grupper[k] = grupper[k] || { namn: ekonomiAndelarMotpartNamn(a), rows: [], bolag: a.bolagId ? ekonomiBolagList().find(x => x.id === a.bolagId) : null, aktorKey: a.aktorKey }).rows.push(a); });
@@ -2564,7 +2566,7 @@ function renderEkonomiAndelarOversikt(wrap){
   const saldoSum = rows => rows.reduce((s, l) => s + ekonomiKoncernLanSaldo(l), 0);
   let totA = 0, totL = 0, totE = 0;
   const t = document.createElement('table'); t.className = 'eko-compare-table'; t.style.width = '100%';
-  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th>Ägarandel</th><th>Andelar (anskaffningsvärde)</th><th>Tillskjutet kapital</th><th>Totalt investerat</th><th>Externa lån</th><th title="Bolagets värdering – klicka i cellen för att ange">Värdering</th><th title="Eget kapital – klicka i cellen för att ange">EK</th></tr></thead>';
+  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th>Ägarandel</th><th>Andelar (anskaffningsvärde)</th><th>Tillskjutet kapital</th><th title="Andelar + tillskjutet kapital + externa lån">Totalt investerat</th><th>Externa lån</th><th title="Bolagets värdering – klicka i cellen för att ange">Värdering</th><th title="Eget kapital – klicka i cellen för att ange">EK</th></tr></thead>';
   const tb = document.createElement('tbody');
   if(!companyEkonomiData.koncern._investering || typeof companyEkonomiData.koncern._investering !== 'object') companyEkonomiData.koncern._investering = {};
   const inv = companyEkonomiData.koncern._investering;
@@ -2577,17 +2579,18 @@ function renderEkonomiAndelarOversikt(wrap){
     const proc = g.rows.map(r => r.procent).filter(v => v != null);
     const langivare = ext.map(l => l.langivare || '').filter((v, i, a) => v && a.indexOf(v) === i);
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td style="text-align:left;" title="' + escapeHtml(g.rows.map(r => r.konto + ' ' + r.namn).join(', ')) + '">' + escapeHtml(g.namn) + '</td><td>' + (proc.length ? proc.map(v => String(v).replace('.', ',') + ' %').join(', ') : (g.bolag && g.bolag.agarandel != null && g.bolag.agarandel !== '' ? String(g.bolag.agarandel).replace('.', ',') + ' %' : '—')) + '</td><td>' + (sA ? formatKrFull(sA) : '—') + '</td><td>' + (sL ? formatKrFull(Math.round(sL)) : '—') + '</td><td style="font-weight:600;">' + formatKrFull(Math.round(sA + sL)) + '</td><td title="' + escapeHtml(langivare.join(', ')) + '">' + (sE ? formatKrFull(Math.round(sE)) : '—') + '</td><td></td><td></td>';
+    tr.innerHTML = '<td style="text-align:left;" title="' + escapeHtml(g.rows.map(r => r.konto + ' ' + r.namn).join(', ')) + '">' + escapeHtml(g.namn) + '</td><td>' + (proc.length ? proc.map(v => String(v).replace('.', ',') + ' %').join(', ') : (g.bolag && g.bolag.agarandel != null && g.bolag.agarandel !== '' ? String(g.bolag.agarandel).replace('.', ',') + ' %' : '—')) + '</td><td>' + (sA ? formatKrFull(sA) : '—') + '</td><td>' + (sL ? formatKrFull(Math.round(sL)) : '—') + '</td><td style="font-weight:600;">' + formatKrFull(Math.round(sA + sL + sE)) + '</td><td title="' + escapeHtml(langivare.join(', ')) + '">' + (sE ? formatKrFull(Math.round(sE)) : '—') + '</td><td></td><td></td>';
     const sparaInv = async (falt, v) => { if(!inv[key]) inv[key] = {}; if(v == null || v === 0) delete inv[key][falt]; else inv[key][falt] = Math.round(v); await saveEkonomiKoncern(); renderEkonomiAndelarOversikt(wrap); };
     likviditetsbudgetEditableCell(tr.children[6], iv.vardering != null ? iv.vardering : null, v => sparaInv('vardering', v));
     likviditetsbudgetEditableCell(tr.children[7], iv.ek != null ? iv.ek : null, v => sparaInv('ek', v));
     tb.appendChild(tr);
   });
   const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td style="text-align:left;">Summa</td><td></td><td>' + formatKrFull(totA) + '</td><td>' + formatKrFull(Math.round(totL)) + '</td><td>' + formatKrFull(Math.round(totA + totL)) + '</td><td>' + formatKrFull(Math.round(totE)) + '</td><td>' + (totV ? formatKrFull(totV) : '—') + '</td><td>' + (totEk ? formatKrFull(totEk) : '—') + '</td>';
+  tot.innerHTML = '<td style="text-align:left;">Summa</td><td></td><td>' + formatKrFull(totA) + '</td><td>' + formatKrFull(Math.round(totL)) + '</td><td>' + formatKrFull(Math.round(totA + totL + totE)) + '</td><td>' + formatKrFull(Math.round(totE)) + '</td><td>' + (totV ? formatKrFull(totV) : '—') + '</td><td>' + (totEk ? formatKrFull(totEk) : '—') + '</td>';
   tb.appendChild(tot); t.appendChild(tb);
   wrap.innerHTML = '<h3 style="margin:26px 0 10px;">Prosavios investeringar</h3>';
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(t); wrap.appendChild(scroll);
+  if(dolda.length){ const d = document.createElement('div'); d.className = 'editable'; d.style.cssText = 'font-size:11.5px; color:var(--ink-soft); margin-top:6px; cursor:pointer;'; d.textContent = dolda.length + ' dolda innehav (' + dolda.map(a => a.namn).join(', ') + ') · visa igen'; d.onclick = async () => { dolda.forEach(a => { delete a.dold; }); await saveEkonomiKoncern(); renderEkonomiAndelarOversikt(wrap); }; wrap.appendChild(d); }
 }
 // Historik för ett lån: IB, alla rörelser från SIE och löpande saldo.
 function showEkonomiKoncernLanHistorik(l){
