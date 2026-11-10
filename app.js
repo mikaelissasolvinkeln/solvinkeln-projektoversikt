@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261110162240';
+const APP_BUILD = '20261110164230';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2572,7 +2572,7 @@ function renderEkonomiAndelarOversikt(wrap){
     const proc = g.rows.map(r => r.procent).filter(v => v != null);
     const langivare = ext.map(l => l.langivare || '').filter((v, i, a) => v && a.indexOf(v) === i);
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td style="text-align:left;" title="' + escapeHtml(g.rows.map(r => r.konto + ' ' + r.namn).join(', ')) + '">' + escapeHtml(g.namn) + '</td><td>' + (proc.length ? proc.map(v => String(v).replace('.', ',') + ' %').join(', ') : (g.bolag && g.bolag.agarandel != null && g.bolag.agarandel !== '' ? String(g.bolag.agarandel).replace('.', ',') + ' %' : '—')) + '</td><td>' + (sA ? formatKrFull(sA) : '—') + '</td><td>' + (sL ? formatKrFull(Math.round(sL)) : '—') + '</td><td style="font-weight:600;">' + formatKrFull(Math.round(sA + sL)) + '</td><td>' + (sE ? formatKrFull(Math.round(sE)) + '<div style="font-size:10.5px; color:var(--ink-soft);">' + escapeHtml(langivare.join(', ')) + '</div>' : '—') + '</td>';
+    tr.innerHTML = '<td style="text-align:left;" title="' + escapeHtml(g.rows.map(r => r.konto + ' ' + r.namn).join(', ')) + '">' + escapeHtml(g.namn) + '</td><td>' + (proc.length ? proc.map(v => String(v).replace('.', ',') + ' %').join(', ') : (g.bolag && g.bolag.agarandel != null && g.bolag.agarandel !== '' ? String(g.bolag.agarandel).replace('.', ',') + ' %' : '—')) + '</td><td>' + (sA ? formatKrFull(sA) : '—') + '</td><td>' + (sL ? formatKrFull(Math.round(sL)) : '—') + '</td><td style="font-weight:600;">' + formatKrFull(Math.round(sA + sL)) + '</td><td title="' + escapeHtml(langivare.join(', ')) + '">' + (sE ? formatKrFull(Math.round(sE)) : '—') + '</td>';
     tb.appendChild(tr);
   });
   const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
