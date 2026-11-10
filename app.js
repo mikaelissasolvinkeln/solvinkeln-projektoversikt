@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261110164512';
+const APP_BUILD = '20261110164612';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -2552,7 +2552,9 @@ document.getElementById('ekoBolagBrInput').addEventListener('change', async (e) 
 });
 // Översikt över Prosavios investeringar: andelar + fordringar per bolag (visas under bolagslistan).
 function renderEkonomiAndelarOversikt(wrap){
-  const andelar = ekonomiAndelarList();
+  // Innehav markerade dold (a.dold) visas inte i tabellen eller summorna; länken under tabellen tar fram dem igen.
+  const dolda = ekonomiAndelarList().filter(a => a.dold);
+  const andelar = ekonomiAndelarList().filter(a => !a.dold);
   const allaLan = ekonomiKoncernList('_lan');
   const grupper = {};
   andelar.forEach(a => { const k = a.bolagId ? 'b:' + a.bolagId : a.aktorKey ? 'a:' + a.aktorKey : 'm:' + (a.motpart || a.namn); (grupper[k] = grupper[k] || { namn: ekonomiAndelarMotpartNamn(a), rows: [], bolag: a.bolagId ? ekonomiBolagList().find(x => x.id === a.bolagId) : null, aktorKey: a.aktorKey }).rows.push(a); });
@@ -2588,6 +2590,7 @@ function renderEkonomiAndelarOversikt(wrap){
   tb.appendChild(tot); t.appendChild(tb);
   wrap.innerHTML = '<h3 style="margin:26px 0 10px;">Prosavios investeringar</h3>';
   const scroll = document.createElement('div'); scroll.className = 'table-scroll'; scroll.appendChild(t); wrap.appendChild(scroll);
+  if(dolda.length){ const d = document.createElement('div'); d.className = 'editable'; d.style.cssText = 'font-size:11.5px; color:var(--ink-soft); margin-top:6px; cursor:pointer;'; d.textContent = dolda.length + ' dolda innehav (' + dolda.map(a => a.namn).join(', ') + ') · visa igen'; d.onclick = async () => { dolda.forEach(a => { delete a.dold; }); await saveEkonomiKoncern(); renderEkonomiAndelarOversikt(wrap); }; wrap.appendChild(d); }
 }
 // Historik för ett lån: IB, alla rörelser från SIE och löpande saldo.
 function showEkonomiKoncernLanHistorik(l){
