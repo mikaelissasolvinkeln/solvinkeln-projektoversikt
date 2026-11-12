@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112165438';
+const APP_BUILD = '20261112170353';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15658,7 +15658,7 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
     if(!items[id]){ items[id] = { kat, label, v: zero(), p: zero() }; order.push(id); }
     vals.forEach((v, i) => { items[id].v[i] += v; if(v && prel[i]) items[id].p[i] = 1; });
   };
-  const netto = zero(); let ing = 0; const utlanat = {};
+  const netto = zero(); let ing = 0; const utlanat = {}; const kostnader = [];
   const flera = keys.length > 1;
   keys.forEach(k => {
     const s = sek[k]; if(!s) return;
@@ -15674,7 +15674,12 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
       const suf = flera ? ' (' + s.a.namn + ')' : '';
       // Vinsten särredovisas inte i månadsöversikten: den läggs på projektets egen rad under inbetalningar.
       if(L === 'Vinst' || /^Vinst /.test(L)) add('in', L === 'Vinst' ? (lastProj || 'Vinst') : L.replace(/^Vinst /, ''), vals, prel);
-      else if(L === 'Kostnader') add('kost', 'Kostnader' + suf, vals, prel);
+      else if(L === 'Kostnader'){
+        add('kost', 'Kostnader' + suf, vals, prel);
+        const poster = [];
+        ekonomiKoncernKostnadBolag().filter(kb => kb.bolag && sieBolagMatchar(kb.bolag, s.a.namn)).forEach(kb => (kb.poster || []).forEach(p => { if(p.belopp) poster.push({ kategori: p.kategori || 'Övrigt', namn: p.namn || '', belopp: Math.round(p.belopp) }); }));
+        if(poster.length) kostnader.push({ label: 'Kostnader' + suf, aktor: s.a.namn, poster });
+      }
       else if(/^(Kapitalbehov|Kapitaltillskott) /.test(L)) add('bolag', L, vals, prel);
       else if(/^(Ränta|Amortering) /.test(L)) add('ranta', L, vals, prel);
       else if(projNames.has(L)){
@@ -15727,7 +15732,7 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
     key: flera ? 'alla' : keys[0], namn, months, netto: netto.map(Math.round), saldo: saldo.map(Math.round), prel: prelNet.map(Math.round), fast: fastNet.map(Math.round),
     ingaende: Math.round(ing), utgaende: Math.round(saldo.length ? saldo[saldo.length - 1] : ing), lagsta: Math.round(lagsta), lagstaManad: saldo.length ? months[saldo.indexOf(lagsta)] : '',
     negManader: negIdx.length, forstaNeg: negIdx.length ? months[negIdx[0]] : '', prelimAndel: sumAbs ? Math.round(100 * sumPrel / sumAbs) : 0,
-    kategorier, utlanat: sortObj(utlanat), lan: sortObj(lanPer), lanAntal: lan.filter(l => ekonomiKoncernLanSaldo(l) > 0).length, varningar, skapad: new Date().toISOString().slice(0, 10)
+    kategorier, kostnader, utlanat: sortObj(utlanat), lan: sortObj(lanPer), lanAntal: lan.filter(l => ekonomiKoncernLanSaldo(l) > 0).length, varningar, skapad: new Date().toISOString().slice(0, 10)
   };
 }
 function ekonomiHelhetScopes(rows, months, aktorer){
@@ -15813,16 +15818,26 @@ function helhetBarsHtml(titel, sub, list, color){
   return '<div class="hb-bars"><h4>' + titel + '</h4><p class="portal-sub">' + sub + '</p>' + visa.map(x => '<div class="hb-bar-row"><span class="hb-bar-namn" title="' + escapeHtml(x.namn) + '">' + escapeHtml(x.namn) + '</span><span class="hb-bar-track"><span class="hb-bar-fill" style="width:' + Math.max(1, Math.round(100 * Math.abs(x.belopp) / max)) + '%; background:' + color + ';"></span></span><span class="hb-bar-val">' + (Math.round(x.belopp / 100000) / 10).toLocaleString('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '</span></div>').join('') + '</div>';
 }
 function helhetKategoriTabell(M){
+  // Kostnader-rader med specifikation blir länkar som fäller ut posterna under tabellen.
+  const kostLank = label => { const i = (M.kostnader || []).findIndex(kd => kd.label === label); return i < 0 ? escapeHtml(label) : '<a class="portal-link" data-hb-kost="' + i + '" title="Visa kostnadsposterna">' + escapeHtml(label) + ' ▾</a>'; };
   const tk = v => { const r = Math.round((v || 0) / 1000); return r === 0 ? '–' : r.toLocaleString('sv-SE'); };
   const tot = arr => arr.reduce((s, v) => s + v, 0);
   const rows = [];
   M.kategorier.forEach(k => {
     rows.push({ cls: 'sum', cells: [{ t: escapeHtml(k.namn) }].concat(k.sum.map(v => ({ t: tk(v) })), [{ t: tk(tot(k.sum)) }]) });
-    k.rows.forEach(r => rows.push({ indent: 10, cells: [{ t: escapeHtml(r.label) }].concat(r.v.map((v, i) => ({ t: tk(v), red: !!(v && r.p[i]) })), [{ t: tk(tot(r.v)) }]) }));
+    k.rows.forEach(r => rows.push({ indent: 10, cells: [{ t: kostLank(r.label) }].concat(r.v.map((v, i) => ({ t: tk(v), red: !!(v && r.p[i]) })), [{ t: tk(tot(r.v)) }]) }));
   });
   rows.push({ cls: 'sum', cells: [{ t: 'Nettoflöde' }].concat(M.netto.map(v => ({ t: tk(v) })), [{ t: tk(tot(M.netto)) }]) });
-  rows.push({ cls: 'sum', cells: [{ t: 'Saldo vid månadens slut' }].concat(M.saldo.map(v => ({ t: tk(v), red: v < 0 })), [{ t: tk(M.utgaende) }]) });
-  return portalTable(['Kategori / post (tkr)'].concat(M.months.map(helhetManad), ['Totalt']), rows, { compact: true });
+  // Saldo under 10 Mkr markeras rött.
+  const SALDO_ROD = 10000000;
+  rows.push({ cls: 'sum', cells: [{ t: 'Saldo vid månadens slut' }].concat(M.saldo.map(v => ({ t: tk(v), red: v < SALDO_ROD })), [{ t: tk(M.utgaende), red: M.utgaende < SALDO_ROD }]) });
+  const kostDetalj = (M.kostnader || []).map((kd, i) => {
+    const sum = kd.poster.reduce((s2, p) => s2 + p.belopp, 0);
+    const prows = kd.poster.slice().sort((a, b) => b.belopp - a.belopp).map(p => ({ cells: [escapeHtml(p.namn || p.kategori), escapeHtml(p.kategori), portalFmt.kr(p.belopp), portalFmt.kr(p.belopp * 12)] }));
+    prows.push({ cls: 'sum', cells: ['Summa', '', portalFmt.kr(sum), portalFmt.kr(sum * 12)] });
+    return '<div class="hb-kost-detalj" data-hb-kost-box="' + i + '" style="display:none;"><h4>Kostnader ' + escapeHtml(kd.aktor) + '</h4><p class="portal-sub">Löpande kostnader per månad. Klicka på raden igen för att dölja.</p>' + portalTable(['Post', 'Kategori', 'Per månad', 'Per år'], prows, { compact: true }) + '</div>';
+  }).join('');
+  return portalTable(['Kategori / post (tkr)'].concat(M.months.map(helhetManad), ['Totalt']), rows, { compact: true }) + kostDetalj;
 }
 function helhetHtml(M){
   const kpis = helhetKpis(M).map(k => '<div class="portal-kpi"><div class="portal-kpi-l">' + k.l + '</div><div class="portal-kpi-v' + (k.red ? ' rod' : '') + '">' + k.v + '</div><div class="portal-kpi-s">' + escapeHtml(k.s || '') + '</div></div>').join('');
@@ -15831,6 +15846,16 @@ function helhetHtml(M){
   h += '<div class="hb-bars-grid">' + helhetBarsHtml('Utlånat kapital per projekt och bolag', 'Utestående fordringar, Mkr.', M.utlanat, '#2F4F6F') + helhetBarsHtml('Låneskuld per långivare', 'Utestående lån, Mkr.', M.lan, '#B5762C') + '</div>';
   return h;
 }
+document.addEventListener('click', e => {
+  const a = e.target && e.target.closest ? e.target.closest('[data-hb-kost]') : null;
+  if(!a) return;
+  const kat = a.closest('.hb-kat'); if(!kat) return;
+  const box = kat.querySelector('[data-hb-kost-box="' + a.dataset.hbKost + '"]'); if(!box) return;
+  const visa = box.style.display === 'none';
+  kat.querySelectorAll('[data-hb-kost-box]').forEach(b => { b.style.display = 'none'; });
+  box.style.display = visa ? 'block' : 'none';
+  if(visa) box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
 // Blocket ovanför koncernlikviditetens tabell (admin): välj omfattning, dölj/visa.
 function renderEkonomiHelhetBlock(wrap, table, months, aktorer){
   try{ ekoHelhetModeller = ekonomiHelhetScopes(ekonomiKoncernTabellRows(table), months, aktorer); }
