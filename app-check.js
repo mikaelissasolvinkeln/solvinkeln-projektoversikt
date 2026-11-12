@@ -15800,9 +15800,7 @@ function helhetKategoriTabell(M){
 function helhetHtml(M){
   const kpis = helhetKpis(M).map(k => '<div class="portal-kpi"><div class="portal-kpi-l">' + k.l + '</div><div class="portal-kpi-v' + (k.red ? ' rod' : '') + '">' + k.v + '</div><div class="portal-kpi-s">' + escapeHtml(k.s || '') + '</div></div>').join('');
   let h = '<section class="portal-kpis">' + kpis + '</section>';
-  h += '<div class="hb-chart"><h4>Kassasaldo och nettoflöde per månad</h4><p class="portal-sub">Staplarna visar månadens nettoflöde, linjen saldot vid månadens slut. Ljus del av stapeln är preliminära belopp.</p><div class="hb-chart-scroll">' + helhetChartSvg(M, 1000, 330) + '</div></div>';
-  if(M.varningar.length) h += '<div class="hb-warn"><h4>Att tänka på i underlaget</h4><ul>' + M.varningar.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul></div>';
-  h += '<details class="hb-details"><summary>Månadsöversikt per kategori</summary>' + helhetKategoriTabell(M) + '<p class="portal-sub" style="margin-top:6px;">Belopp i tkr. Röda belopp är preliminära.</p></details>';
+  h += '<div class="hb-kat"><h4>Månadsöversikt per kategori</h4>' + helhetKategoriTabell(M) + '<p class="portal-sub" style="margin-top:6px;">Belopp i tkr. Röda belopp är preliminära.</p></div>';
   h += '<div class="hb-bars-grid">' + helhetBarsHtml('Utlånat kapital per projekt och bolag', 'Utestående fordringar, Mkr.', M.utlanat, '#2F4F6F') + helhetBarsHtml('Låneskuld per långivare', 'Utestående lån, Mkr.', M.lan, '#B5762C') + '</div>';
   return h;
 }
@@ -15842,16 +15840,21 @@ async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   });
   y += 24;
   y += 2;
-  const varn = M.varningar.slice(0, 5);
-  const plats = 200 - y - (varn.length ? varn.length * 4.6 + 8 : 0);
-  const ch = Math.max(50, Math.min(273 * 0.33, plats)); const cw = ch / 0.33;
-  const png = await helhetSvgToPng(helhetChartSvg(M, 1000, 330), 1000, 330, 2);
-  doc.addImage(png, 'JPEG', 12 + (273 - cw) / 2, y, cw, ch); y += ch + 4;
-  if(varn.length){
-    doc.setFontSize(8.5); doc.setTextColor(31, 26, 20); doc.text('Att tänka på i underlaget', 12, y + 2); y += 6;
-    doc.setFontSize(7.5); doc.setTextColor(80);
-    varn.forEach(v => { const ls = doc.splitTextToSize('• ' + T(v), 270); if(y + ls.length * 3.6 > 204) return; doc.text(ls, 12, y); y += ls.length * 3.6 + 1; });
-  }
+  const tk = v => { const r = Math.round((v || 0) / 1000); return r === 0 ? '' : T(r.toLocaleString('sv-SE')); };
+  const tot = arr => arr.reduce((s2, v) => s2 + v, 0);
+  const antal = M.months.length; const chunks = [];
+  for(let i = 0; i < antal; i += 12) chunks.push([i, Math.min(i + 12, antal)]);
+  chunks.forEach(([a, b], ci) => {
+    if(ci > 0){ doc.addPage(); y = ekonomiPdfHeader(doc, 'Likviditet - helhetsbild', T(M.namn + ' · månadsöversikt, fortsättning · skapad ' + datum), logo, logoW, logoH); }
+    const sista = ci === chunks.length - 1;
+    const head = ['Kategori / post (tkr)'].concat(M.months.slice(a, b).map(helhetManad), sista ? ['Totalt'] : []);
+    const rad = (label, arr, o) => Object.assign({ cells: [T(label)].concat(arr.slice(a, b).map(tk), sista ? [tk(tot(arr))] : []) }, o || {});
+    const rows = [];
+    M.kategorier.forEach(k => { rows.push(rad(k.namn, k.sum, { bold: true, section: true })); k.rows.forEach(r => rows.push(rad('   ' + r.label, r.v))); });
+    rows.push(rad('Nettoflöde', M.netto, { bold: true }));
+    rows.push({ cells: [T('Saldo vid månadens slut')].concat(M.saldo.slice(a, b).map(tk), sista ? [tk(M.utgaende)] : []), bold: true });
+    y = ekonomiPdfTable(doc, y, head, rows, { fontSize: 6.5, firstWidth: 64 }) + 4;
+  });
 }
 // Låneöversikt till ägarportalen: lån till aktörerna, externa lån i portföljbolagen och projektens banklån.
 function ekonomiPortalLanSnapshot(){
