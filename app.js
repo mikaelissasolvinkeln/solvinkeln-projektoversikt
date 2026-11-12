@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112162421';
+const APP_BUILD = '20261112163538';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16268,7 +16268,6 @@ function portalDetaljHtml(data, id, state){
   let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px; font-size:14px;">' + escapeHtml(b.beskrivning || '') + '</p><div class="portal-meta">' + (b.agarandel != null && b.agarandel !== '' ? '<span>Ägarandel <b>' + String(b.agarandel).replace('.', ',') + ' %</b></span>' : '') + (b.kontakt ? '<span>Kontakt <b>' + escapeHtml(b.kontakt) + '</b></span>' : '') + '<span>Finansieras av <b>' + escapeHtml(b.finansiarNamn) + '</b></span><span>Säkerhetsmarginal <b>' + portalFmt.kr(b.marginal) + '</b></span><span>Kredittid <b>' + (b.kredittid || 0) + ' dagar</b></span><span>Budget <b>' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '</b></span></div></div></section>';
   const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
   h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + (b.andelar ? kpi('Andelar (anskaffningsvärde)', portalFmt.mkr(b.andelar), 'Prosavios investering') : '') + (b.koncernLan ? kpi('Lån från koncernen', portalFmt.mkr(b.koncernLan), escapeHtml(b.koncernLanFran || '')) : '') + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
-  h += '<div class="portal-card">' + portalSparkline(months.map(m => s.kassa[m]), { w: 900, h: 130, marginal: b.marginal || null }) + '<div class="portal-sub" style="margin-top:4px;">Kassa per månad före nya tillskott. Streckad linje = säkerhetsmarginal.</div></div>';
   const row = (label, o, opts) => ({ cls: (opts && opts.cls) || '', indent: (opts && opts.indent) || 0, cells: [{ t: label }].concat(months.map(m => ({ t: portalFmt.tkr(typeof o === 'function' ? o(m) : o[m]), red: !!(opts && opts.red && (opts.red === true || opts.red[m])) })), [{ t: portalFmt.tkr(months.reduce((sum, m) => sum + ((typeof o === 'function' ? o(m) : o[m]) || 0), 0)) }]) });
   const likvRows = [
     row('Inbetalningar' + (b.kredittid ? ' (kredittid ' + b.kredittid + ' dagar)' : ''), s.inbet, { indent: 8 }),
