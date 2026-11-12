@@ -15668,7 +15668,8 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
       if(/^Utestående fordran /.test(L)) return;
       if(/^Likviditet /.test(L)){ ing += helhetNum(r.cells[1]); return; }
       const suf = flera ? ' (' + s.a.namn + ')' : '';
-      if(L === 'Vinst' || /^Vinst /.test(L)) add('in', L === 'Vinst' ? 'Vinst ' + lastProj : L, vals, prel);
+      // Vinsten särredovisas inte i månadsöversikten: den läggs på projektets egen rad under inbetalningar.
+      if(L === 'Vinst' || /^Vinst /.test(L)) add('in', L === 'Vinst' ? (lastProj || 'Vinst') : L.replace(/^Vinst /, ''), vals, prel);
       else if(L === 'Kostnader') add('kost', 'Kostnader' + suf, vals, prel);
       else if(/^(Kapitalbehov|Kapitaltillskott) /.test(L)) add('bolag', L, vals, prel);
       else if(/^(Ränta|Amortering) /.test(L)) add('ranta', L, vals, prel);
