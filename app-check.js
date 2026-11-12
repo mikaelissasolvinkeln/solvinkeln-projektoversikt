@@ -15511,12 +15511,30 @@ function ekonomiSchemaBarn(noder, parentId){ return noder.filter(x => (x.parentI
 function ekonomiSchemaArAttling(noder, id, kandidat){ let cur = noder.find(x => x.id === kandidat); let guard = 0; while(cur && guard++ < 100){ if(cur.id === id) return true; cur = noder.find(x => x.id === cur.parentId); } return false; }
 // HTML för trädet (används av både adminvyn och portalen). extra(nod) kan ge en rad till per nod.
 function koncernTradHtml(noder, extra){
+  // Ryms på bladets bredd: moderbolaget överst, därunder bolagen i radbrytande rutnät grupperade per typ.
+  // Bolag längre ner i trädet (t.ex. dotterbolag till ett dotterbolag) visas som en lista inne i sitt kort.
   const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : 'ovrigt';
-  const nod = x => '<li><div class="knod ' + typKlass(x.typ) + '">' + (x.procent != null ? '<span class="knod-proc">' + String(x.procent).replace('.', ',') + ' %</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div>' + (x.beskrivning ? '<div class="knod-sub">' + escapeHtml(x.beskrivning) + '</div>' : '<div class="knod-sub">' + escapeHtml(x.typ || '') + '</div>') + (extra ? extra(x) : '') + '</div>' + gren(x.id) + '</li>';
-  const gren = pid => { const barn = ekonomiSchemaBarn(noder, pid); return barn.length ? '<ul>' + barn.map(nod).join('') + '</ul>' : ''; };
+  const proc = x => x.procent != null ? String(x.procent).replace('.', ',') + ' %' : '';
+  const barnLista = (pid, djup) => { const barn = ekonomiSchemaBarn(noder, pid); return barn.length ? '<div class="knod-barn">' + barn.map(b => '<div class="knod-barn-rad" style="padding-left:' + (djup * 10) + 'px;">' + (proc(b) ? '<span class="knod-barn-proc">' + proc(b) + '</span>' : '') + escapeHtml(b.namn || '') + '</div>' + barnLista(b.id, djup + 1)).join('') + '</div>' : ''; };
+  const kort = (x, medBarn) => '<div class="knod ' + typKlass(x.typ) + '">' + (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + escapeHtml(x.beskrivning || x.typ || '') + '</div>' + (extra ? extra(x) : '') + (medBarn ? barnLista(x.id, 0) : '') + '</div>';
   const rotter = ekonomiSchemaBarn(noder, null);
   if(!rotter.length) return '<p class="eko-sub">Inget koncernschema ännu.</p>';
-  return '<div class="ktrad-scroll"><div class="ktrad"><ul class="ktrad-rot">' + rotter.map(nod).join('') + '</ul></div></div><div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
+  const grupper = [['Dotterbolag', 'Dotterbolag (över 50 %)'], ['Intressebolag', 'Intressebolag (20–50 %)'], ['Övrigt innehav', 'Övriga innehav']];
+  const block = rot => {
+    const barn = ekonomiSchemaBarn(noder, rot.id);
+    let h = '<div class="kschema"><div class="kschema-rot">' + kort(rot, false) + '</div>';
+    if(barn.length){
+      h += '<div class="kschema-stam"></div>';
+      const kanda = grupper.map(g => g[0]);
+      grupper.forEach(([typ, rubrik]) => {
+        const rs = barn.filter(b => b.typ === typ || (typ === 'Övrigt innehav' && !kanda.includes(b.typ)));
+        if(!rs.length) return;
+        h += '<div class="kschema-grupp"><div class="kschema-rubrik">' + rubrik + ' <span>' + rs.length + ' bolag</span></div><div class="kschema-grid">' + rs.map(b => kort(b, true)).join('') + '</div></div>';
+      });
+    }
+    return h + '</div>';
+  };
+  return rotter.map(block).join('') + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
 }
 function renderEkonomiKoncernSchema(){
   const wrap = document.getElementById('ekoSchemaWrap'); if(!wrap) return;
