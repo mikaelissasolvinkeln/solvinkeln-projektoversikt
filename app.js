@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112170353';
+const APP_BUILD = '20261112170641';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15688,7 +15688,8 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
         add('in', L, vals.map(v => v > 0 ? v : 0), prel);
         add('ut', L, vals.map(v => v < 0 ? v : 0), prel);
       }
-      else add('ovrigt', L + suf, vals, prel);
+      // Egna poster visas med sitt eget namn, utan aktörens namn efter.
+      else add('ovrigt', L, vals, prel);
     });
   });
   // Manuella justeringar som bara gäller månadsöversikten (inte koncernlikviditetens tabell):
