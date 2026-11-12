@@ -146,7 +146,7 @@
   // investeringspropå. ----------
   async function listNyaProjekt(){
     // Bolagsrapporter (delningslänkar för Koncern → Bolag) ligger i samma tabell men hör inte hemma i listan.
-    const ejRapport = r => !(r && r.data && r.data.typ === 'bolagsrapport');
+    const ejRapport = r => !(r && r.data && (r.data.typ === 'bolagsrapport' || r.data.typ === 'agarrapport'));
     if(!hasSupabase) return JSON.parse(localGet('nya-projekt')?.value || '[]').filter(ejRapport);
     const { data, error } = await withCacheRetry(() => sb.from('nya_projekt')
       .select('*').order('created_at', { ascending: false }));

@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112160450';
+const APP_BUILD = '20261112160822';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -10424,6 +10424,7 @@ async function renderPublicNyaProjektView(shareId){
       return;
     }
     if(candidate.data && candidate.data.typ === 'bolagsrapport'){ renderPublicBolagView(root, candidate); return; }
+    if(candidate.data && candidate.data.typ === 'agarrapport'){ await renderPortal({ namn: '', email: '', publik: true }, { data: candidate.data.rapport, published_at: candidate.data.rapport.publiceradAt, published_by: candidate.data.rapport.publiceradAv }); return; }
     document.title = candidate.name + ' · Investeringspropå';
     root.innerHTML = buildPropaHtml(candidate);
 
@@ -16021,6 +16022,32 @@ async function showEkonomiPortalPopup(){
   prev.onclick = async () => { prev.disabled = true; try{ const data = await ekonomiPortalSnapshot(); p.close(); renderPortal({ namn: myName, email: myEmail, preview: true }, { data, published_at: data.publiceradAt, published_by: data.publiceradAv }); }catch(e){ showDebugError('Kunde inte bygga förhandsgranskningen', e); prev.disabled = false; } };
   row.appendChild(pub); row.appendChild(prev);
   p.body.appendChild(row);
+  // Delningslänk: hela ägarrapporten som en ögonblicksbild utan inloggning (samma mekanism som bolagslänkarna).
+  const LANK_ID = 'agarrapport-' + PORTAL_RAPPORT_ID;
+  const lbox = document.createElement('div');
+  lbox.style.cssText = 'margin-top:18px; padding-top:12px; border-top:1px solid var(--line-soft);';
+  lbox.innerHTML = '<div style="font-weight:700; margin-bottom:4px;">Delningslänk utan inloggning</div><p class="eko-sub" style="margin:0 0 8px;">Länken visar hela ägarrapporten som den ser ut när du skapar eller uppdaterar den. Alla som har länken kan öppna den. "Sluta dela" stänger den.</p>';
+  const lst = document.createElement('p'); lst.className = 'eko-sub'; lst.style.margin = '0 0 6px'; lbox.appendChild(lst);
+  const lrow = document.createElement('div'); lrow.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;'; lbox.appendChild(lrow);
+  const linp = document.createElement('input'); linp.type = 'text'; linp.readOnly = true; linp.style.cssText = 'flex:1; min-width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:12.5px; background:#fff;';
+  lrow.appendChild(linp);
+  const visaLank = r => { const aktiv = !!(r && r.is_public); linp.value = aktiv ? location.origin + location.pathname + '?propa=' + r.share_id : ''; lst.textContent = aktiv ? 'Länken är aktiv · siffror från ' + new Date(r.data.rapport.publiceradAt).toLocaleString('sv-SE').slice(0, 16) + '.' : 'Ingen aktiv länk.'; };
+  lrow.appendChild(ekoSmallBtn('Skapa / uppdatera länk', async () => {
+    lst.textContent = 'Bygger rapporten…';
+    try{
+      const rapport = await ekonomiPortalSnapshot();
+      const data = { typ: 'agarrapport', rapport };
+      let r = null; try{ r = await DB.getNyaProjektRow(LANK_ID); }catch(e){ r = null; }
+      if(r){ await DB.updateNyaProjekt(LANK_ID, { data, is_public: true }); r.data = data; r.is_public = true; }
+      else r = await DB.insertNyaProjekt({ id: LANK_ID, share_id: uid() + uid() + uid(), name: 'Ägarrapport Prosavio', data, is_public: true, status: 'candidate', created_by: myPersonId, created_by_name: myName });
+      visaLank(r); showToast('Länken är uppdaterad.');
+    }catch(e){ lst.textContent = 'Kunde inte skapa länken: ' + (e.message || e); }
+  }));
+  lrow.appendChild(ekoSmallBtn('Kopiera', async () => { if(!linp.value) return; try{ await navigator.clipboard.writeText(linp.value); }catch(e){ linp.select(); document.execCommand('copy'); } showToast('Länken kopierad.'); }));
+  lrow.appendChild(ekoSmallBtn('Öppna', () => { if(linp.value) window.open(linp.value, '_blank'); }));
+  lrow.appendChild(ekoSmallBtn('Sluta dela', async () => { if(!linp.value || !confirm('Sluta dela ägarrapporten? Länken slutar fungera.')) return; try{ await DB.updateNyaProjekt(LANK_ID, { is_public: false }); visaLank(null); showToast('Delningen är avslutad.'); }catch(e){ showDebugError('Kunde inte avsluta delningen', e); } }, true));
+  p.body.appendChild(lbox);
+  try{ visaLank(await DB.getNyaProjektRow(LANK_ID)); }catch(e){ visaLank(null); }
 }
 document.getElementById('ekoBolagPortalBtn').onclick = showEkonomiPortalPopup;
 
@@ -16091,7 +16118,7 @@ async function renderPortal(user, rapport){
   };
   const header = () => '<header class="portal-head"><div style="min-width:0; flex:1;"><div class="portal-eyebrow">Prosavio AB · Ägarrapport</div><h1 class="portal-title">' + (state.view === 'oversikt' ? 'Helhetsbild' : state.view === 'lan' ? 'Lån' : state.view === 'schema' ? 'Koncernschema' : escapeHtml(state.titel || '')) + '</h1>' + tabsHtml() + '</div>' +
     '<div class="portal-user">' + (rapport ? '<div>Publicerad ' + portalFmt.datum(rapport.published_at) + (rapport.published_by ? ' av ' + escapeHtml(rapport.published_by) : '') + '</div>' : '') + '<div>' + escapeHtml(user.namn || user.email || '') + (user.preview ? ' · förhandsgranskning' : '') + '</div>' +
-    (user.preview ? '<button type="button" class="portal-btn" id="portalBack">Tillbaka till appen</button>' : '<button type="button" class="portal-btn" id="portalLogout">Logga ut</button>') + '</div></header>';
+    (user.preview ? '<button type="button" class="portal-btn" id="portalBack">Tillbaka till appen</button>' : user.publik ? '' : '<button type="button" class="portal-btn" id="portalLogout">Logga ut</button>') + '</div></header>';
   const go = (view, id) => { state.view = view; state.id = id || null; draw(); window.scrollTo(0, 0); };
   const wire = () => {
     const lo = root.querySelector('#portalLogout'); if(lo) lo.onclick = async () => { await DB.signOut(); location.reload(); };
