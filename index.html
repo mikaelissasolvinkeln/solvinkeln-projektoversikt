@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261112160822">
+<meta name="app-build" content="20261112161557">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -551,6 +551,22 @@
   .portal-tabs{ display:flex; gap:6px; margin-top:12px; }
   .portal-tab{ font-size:12.5px; padding:6px 14px; border:1px solid var(--line-soft); background:var(--paper); border-radius:999px; cursor:pointer; color:var(--ink-soft); }
   .portal-tab.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  /* Koncernschema på ett blad: moderbolag överst, bolagen i radbrytande rutnät per typ (ingen sidledsscroll) */
+  .kschema{ max-width:100%; margin:6px 0 10px; }
+  .kschema-rot{ display:flex; justify-content:center; }
+  .kschema-rot .knod{ min-width:220px; padding:14px 22px 12px; }
+  .kschema-rot .knod-namn{ font-size:18px; }
+  .kschema-stam{ width:2px; height:22px; background:var(--line); margin:0 auto; }
+  .kschema-grupp{ border-top:2px solid var(--line); padding:0 0 18px; }
+  .kschema-grupp + .kschema-grupp{ border-top:1px dashed var(--line); }
+  .kschema-rubrik{ font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); margin:10px 0 18px; font-weight:600; }
+  .kschema-rubrik span{ font-weight:400; letter-spacing:0; text-transform:none; margin-left:6px; }
+  .kschema-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:22px 12px; }
+  .kschema-grid .knod{ display:block; min-width:0; max-width:none; }
+  .knod-barn{ margin-top:8px; padding-top:6px; border-top:1px solid var(--line-soft); text-align:left; }
+  .knod-barn-rad{ font-size:11px; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .knod-barn-proc{ font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--ink-soft); margin-right:5px; }
+  @media print{ .kschema-grid{ grid-template-columns:repeat(5, 1fr); } }
   /* ---------- Ägarportal (Prosavio) ---------- */
   .portal{ min-height:100vh; background:var(--bg); color:var(--ink); font-family:Inter, system-ui, sans-serif; }
   .portal-wrap{ max-width:1180px; margin:0 auto; padding:28px 24px 60px; }
@@ -2774,7 +2790,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261112160822"></script>
-<script src="app.js?v=20261112160822"></script>
+<script src="db.js?v=20261112161557"></script>
+<script src="app.js?v=20261112161557"></script>
 </body>
 </html>
