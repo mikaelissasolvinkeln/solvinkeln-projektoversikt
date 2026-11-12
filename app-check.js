@@ -15635,6 +15635,10 @@ const HELHET_KATEGORIER = [['in', 'Projekt – inbetalningar (återbetalningar o
 function ekonomiHelhetLanFor(keys, aktorer){
   return ekonomiKoncernList('_lan').filter(l => !l.fordranKonto && l.lantagare && aktorer.some(a => keys.includes(a.key) && sieBolagMatchar(l.lantagare, a.namn)));
 }
+function ekonomiHelhetJusteringar(){
+  const k = companyEkonomiData.koncern || {};
+  return Array.isArray(k._helhetJust) ? k._helhetJust : [];
+}
 // rows: tabellens rader, months: tabellens månader, aktorer: [{key, namn}] som visas i tabellen,
 // keys: vilka av dem modellen ska omfatta, namn: rubrik för omfattningen.
 function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
@@ -15681,6 +15685,19 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
       }
       else add('ovrigt', L + suf, vals, prel);
     });
+  });
+  // Manuella justeringar som bara gäller månadsöversikten (inte koncernlikviditetens tabell):
+  // koncern._helhetJust = [{ id, aktorKey, label, manad, belopp }]. Läggs på raden med samma namn
+  // (eller en ny rad) och räknas in i nettoflöde och saldo i helhetsbilden. Visas som preliminära.
+  ekonomiHelhetJusteringar().forEach(j => {
+    if(!keys.includes(j.aktorKey) || !j.belopp) return;
+    const i = months.indexOf(j.manad); if(i < 0) return;
+    const an = (aktorer.find(a => a.key === j.aktorKey) || {}).namn || '';
+    const ex = order.map(o => items[o]).find(x => x.label === j.label || x.label === j.label + ' (' + an + ')');
+    const kat = ex ? ex.kat : /^(Kapitalbehov|Kapitaltillskott) /.test(j.label) ? 'bolag' : /^(Ränta|Amortering) /.test(j.label) ? 'ranta' : /^Kostnader/.test(j.label) ? 'kost' : projNames.has(j.label) ? (j.belopp > 0 ? 'in' : 'ut') : 'ovrigt';
+    const vals = zero(); vals[i] = j.belopp;
+    add(kat, ex ? ex.label : j.label, vals, months.map((m, k) => k === i ? 1 : 0));
+    netto[i] += j.belopp;
   });
   // Utlånat via koncernlån/fordringskonton där aktören är långivare (t.ex. Prosavio → Taggr)
   ekonomiKoncernList('_lan').filter(l => l.langivare && l.lantagare && aktorer.some(a => keys.includes(a.key) && sieBolagMatchar(l.langivare, a.namn))).forEach(l => { const s = ekonomiKoncernLanSaldo(l); if(s) utlanat[l.lantagare] = (utlanat[l.lantagare] || 0) + s; });
@@ -15825,6 +15842,35 @@ function renderEkonomiHelhetBlock(wrap, table, months, aktorer){
     const M = ekoHelhetModeller.find(m => m.key === ekoHelhetScope) || ekoHelhetModeller[0];
     box.innerHTML = '<div class="hb-top"><h3>Helhetsbild</h3>' + (ekoHelhetModeller.length > 1 && !dold ? '<div class="portal-tabs" style="margin-top:0;">' + ekoHelhetModeller.map(m => '<button type="button" class="portal-tab' + (m === M ? ' active' : '') + '" data-hb-scope="' + m.key + '">' + escapeHtml(m.key === 'alla' ? 'Totalt' : m.namn) + '</button>').join('') + '</div>' : '') + '<button type="button" class="portal-btn" data-hb-toggle style="margin-left:auto;">' + (dold ? 'Visa helhetsbild' : 'Dölj') + '</button></div>' + (dold ? '' : helhetHtml(M));
     box.querySelectorAll('[data-hb-scope]').forEach(b => { b.onclick = () => { ekoHelhetScope = b.dataset.hbScope; draw(); }; });
+    if(!dold){
+      // Justeringar som bara gäller månadsöversikten (påverkar inte tabellen nedanför).
+      const just = ekonomiHelhetJusteringar();
+      const jb = document.createElement('div'); jb.className = 'hb-just';
+      const aNamn = k => (EKONOMI_KONCERN_AKTORER.find(a => a.key === k) || {}).namn || k;
+      jb.innerHTML = '<span class="hb-just-rubrik">Justeringar som bara gäller månadsöversikten:</span>' + (just.length ? '' : ' <span style="color:var(--ink-soft);">inga</span>');
+      just.forEach(j => {
+        const chip = document.createElement('span'); chip.className = 'hb-just-chip';
+        chip.textContent = j.label + ' · ' + ekonomiPrognosShortLabel(j.manad) + ' · ' + Math.round(j.belopp / 1000).toLocaleString('sv-SE') + ' tkr · ' + aNamn(j.aktorKey) + ' ';
+        const x = document.createElement('button'); x.type = 'button'; x.className = 'remove-btn'; x.textContent = '✕'; x.title = 'Ta bort justeringen';
+        x.onclick = async () => { if(!confirm('Ta bort justeringen ' + j.label + ' ' + ekonomiPrognosShortLabel(j.manad) + '?')) return; companyEkonomiData.koncern._helhetJust = just.filter(y => y !== j); await saveEkonomiKoncern(); renderEkonomiKoncern(); };
+        chip.appendChild(x); jb.appendChild(chip);
+      });
+      const addJ = document.createElement('button'); addJ.type = 'button'; addJ.className = 'portal-btn'; addJ.textContent = '+ Justering'; addJ.style.cssText = 'font-size:11.5px; padding:3px 10px;';
+      addJ.onclick = async () => {
+        const label = prompt('Vilken post i månadsöversikten? Skriv radens namn exakt, t.ex. Kapitalbehov Taggr. Ett nytt namn ger en ny rad.', ''); if(label === null || !label.trim()) return;
+        const manad = prompt('Månad (ÅÅÅÅ-MM):', M.months[0]); if(manad === null || !/^\d{4}-\d{2}$/.test(manad.trim())){ if(manad !== null) showToast('Ange månad som ÅÅÅÅ-MM.'); return; }
+        const tkrTxt = prompt('Belopp i tkr. Minus = pengar ut, plus = pengar in.', ''); if(tkrTxt === null) return;
+        const tk = parseFloat(String(tkrTxt).replace(/\s/g, '').replace('−', '-').replace(',', '.')); if(!tk){ showToast('Ange ett belopp.'); return; }
+        // Aktör: den valda omfattningen, annars den aktör som redan har en rad med samma namn.
+        let aktorKey = M.key !== 'alla' ? M.key : null;
+        if(!aktorKey){ const hit = ekoHelhetModeller.find(m => m.key !== 'alla' && m.kategorier.some(k => k.rows.some(r => r.label === label.trim()))); aktorKey = hit ? hit.key : (ekoHelhetModeller.find(m => m.key !== 'alla') || {}).key; }
+        if(!Array.isArray(companyEkonomiData.koncern._helhetJust)) companyEkonomiData.koncern._helhetJust = [];
+        companyEkonomiData.koncern._helhetJust.push({ id: uid(), aktorKey, label: label.trim(), manad: manad.trim(), belopp: Math.round(tk * 1000) });
+        await saveEkonomiKoncern(); renderEkonomiKoncern();
+      };
+      jb.appendChild(addJ);
+      box.appendChild(jb);
+    }
     box.querySelector('[data-hb-toggle]').onclick = async () => { uiPrefs.koncernHelhetDold = !uiPrefs.koncernHelhetDold; draw(); await saveUiPrefs(); };
   };
   try{ draw(); wrap.insertBefore(box, table); }catch(e){ console.error('Helhetsbild', e); }
