@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112163538';
+const APP_BUILD = '20261112164302';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3155,6 +3155,15 @@ async function renderEkonomiKoncern(){
         addRow('Amortering ' + (l.langivare || 'koncernlån'), ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (ap.per[m] || 0), 0))]), { indent: 18 });
       }
     });
+    // Externa lån i portföljbolag som aktören finansierar (t.ex. Polar → Taggr): planerade räntor och
+    // amorteringar betalas i praktiken av finansiären och visas därför som utbetalningar här.
+    ekonomiBolagForFinansiar(a.key).forEach(b => ekonomiBolagExternaLan(b).forEach(l => {
+      [['Ränta', ekonomiKoncernLanRantePlanPer(l, months)], ['Amortering', ekonomiKoncernLanAmortPlanPer(l, months)]].forEach(([typ, pl]) => {
+        if(!Object.keys(pl.per).length) return;
+        const cells = months.map(m => { const v = pl.per[m] || 0; sum[m] -= v; const sp = sumCell(-v); if(v && pl.prelim[m]){ sp.style.color = 'var(--danger)'; sp.dataset.p = '1'; } sp.title = typ + ' enligt plan på externt lån i ' + b.namn + ' (Koncern → Lån)'; return sp; });
+        addRow(typ + ' ' + (l.langivare || 'lån') + ' (' + b.namn + ')', ['', ''].concat(cells, [sumCell(-months.reduce((s2, m) => s2 + (pl.per[m] || 0), 0))]), { indent: 18 });
+      });
+    }));
     // Amorteringsplaner på lån där aktören är långivare: pengar in.
     ekonomiKoncernLanUtlanade(a.namn).forEach(l => {
       const ap = ekonomiKoncernLanAmortPlanPer(l, months);
