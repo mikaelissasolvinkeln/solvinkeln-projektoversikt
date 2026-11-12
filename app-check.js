@@ -15799,10 +15799,7 @@ function helhetKategoriTabell(M){
 }
 function helhetHtml(M){
   const kpis = helhetKpis(M).map(k => '<div class="portal-kpi"><div class="portal-kpi-l">' + k.l + '</div><div class="portal-kpi-v' + (k.red ? ' rod' : '') + '">' + k.v + '</div><div class="portal-kpi-s">' + escapeHtml(k.s || '') + '</div></div>').join('');
-  let h = '<p class="hb-lead">' + escapeHtml(helhetRubrik(M)) + '</p>';
-  h += '<p class="portal-sub">' + escapeHtml(M.namn) + '. Prognos ' + helhetManadLang(M.months[0]) + ' – ' + helhetManadLang(M.months[M.months.length - 1]) + ', enligt koncernlikviditeten ' + escapeHtml(M.skapad || '') + '.</p>';
-  h += '<section class="portal-kpis">' + kpis + '</section>';
-  h += '<div class="hb-box' + (M.lagsta < 0 ? ' behov' : '') + '">' + escapeHtml(helhetFinansText(M)) + '</div>';
+  let h = '<section class="portal-kpis">' + kpis + '</section>';
   h += '<div class="hb-chart"><h4>Kassasaldo och nettoflöde per månad</h4><p class="portal-sub">Staplarna visar månadens nettoflöde, linjen saldot vid månadens slut. Ljus del av stapeln är preliminära belopp.</p><div class="hb-chart-scroll">' + helhetChartSvg(M, 1000, 330) + '</div></div>';
   if(M.varningar.length) h += '<div class="hb-warn"><h4>Att tänka på i underlaget</h4><ul>' + M.varningar.map(v => '<li>' + escapeHtml(v) + '</li>').join('') + '</ul></div>';
   h += '<details class="hb-details"><summary>Månadsöversikt per kategori</summary>' + helhetKategoriTabell(M) + '<p class="portal-sub" style="margin-top:6px;">Belopp i tkr. Röda belopp är preliminära.</p></details>';
@@ -15835,8 +15832,6 @@ async function helhetSvgToPng(svg, w, h, scale){
 async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   const T = s => String(s == null ? '' : s).replace(/−/g, '-').replace(/[  ]/g, ' ').replace(/–/g, '-');
   let y = ekonomiPdfHeader(doc, 'Likviditet - helhetsbild', T(M.namn + ' · ' + helhetManadLang(M.months[0]) + ' - ' + helhetManadLang(M.months[M.months.length - 1]) + ' · skapad ' + datum), logo, logoW, logoH);
-  doc.setFontSize(11.5); doc.setTextColor(31, 26, 20);
-  const rub = doc.splitTextToSize(T(helhetRubrik(M)), 273); doc.text(rub, 12, y + 4); y += rub.length * 5.2 + 3;
   const kp = helhetKpis(M); const bw = (273 - 4 * 4) / 5;
   kp.forEach((k, i) => {
     const bx = 12 + i * (bw + 4);
@@ -15846,11 +15841,7 @@ async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
     doc.setFontSize(7); doc.setTextColor(120); if(k.s) doc.text(T(k.s), bx + 3, y + 17.3);
   });
   y += 24;
-  doc.setFontSize(8.5);
-  const fl = doc.splitTextToSize(T(helhetFinansText(M)), 264); const fh = fl.length * 4.2 + 4.5;
-  doc.setFillColor(246, 244, 239); doc.rect(12, y, 273, fh, 'F');
-  if(M.lagsta < 0){ doc.setFillColor(181, 118, 44); doc.rect(12, y, 1.3, fh, 'F'); }
-  doc.setTextColor(31, 26, 20); doc.text(fl, 16, y + 5.2); y += fh + 4;
+  y += 2;
   const varn = M.varningar.slice(0, 5);
   const plats = 200 - y - (varn.length ? varn.length * 4.6 + 8 : 0);
   const ch = Math.max(50, Math.min(273 * 0.33, plats)); const cw = ch / 0.33;
