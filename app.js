@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112155116';
+const APP_BUILD = '20261112155613';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15809,7 +15809,7 @@ async function helhetSvgToPng(svg, w, h, scale){
   await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('Kunde inte rita diagrammet')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
   const c = document.createElement('canvas'); c.width = w * scale; c.height = h * scale;
   const ctx = c.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/png');
+  return c.toDataURL('image/jpeg', 0.92);
 }
 async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   const T = s => String(s == null ? '' : s).replace(/−/g, '-').replace(/[  ]/g, ' ').replace(/–/g, '-');
@@ -15834,7 +15834,7 @@ async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   const plats = 200 - y - (varn.length ? varn.length * 4.6 + 8 : 0);
   const ch = Math.max(50, Math.min(273 * 0.33, plats)); const cw = ch / 0.33;
   const png = await helhetSvgToPng(helhetChartSvg(M, 1000, 330), 1000, 330, 2);
-  doc.addImage(png, 'PNG', 12 + (273 - cw) / 2, y, cw, ch); y += ch + 4;
+  doc.addImage(png, 'JPEG', 12 + (273 - cw) / 2, y, cw, ch); y += ch + 4;
   if(varn.length){
     doc.setFontSize(8.5); doc.setTextColor(31, 26, 20); doc.text('Att tänka på i underlaget', 12, y + 2); y += 6;
     doc.setFontSize(7.5); doc.setTextColor(80);
