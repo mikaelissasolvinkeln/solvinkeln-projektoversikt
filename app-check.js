@@ -15688,7 +15688,8 @@ function ekonomiHelhetModell(rows, months, aktorer, keys, namn){
         add('in', L, vals.map(v => v > 0 ? v : 0), prel);
         add('ut', L, vals.map(v => v < 0 ? v : 0), prel);
       }
-      else add('ovrigt', L + suf, vals, prel);
+      // Egna poster visas med sitt eget namn, utan aktörens namn efter.
+      else add('ovrigt', L, vals, prel);
     });
   });
   // Manuella justeringar som bara gäller månadsöversikten (inte koncernlikviditetens tabell):
@@ -15825,7 +15826,7 @@ function helhetKategoriTabell(M){
   const rows = [];
   M.kategorier.forEach(k => {
     rows.push({ cls: 'sum', cells: [{ t: escapeHtml(k.namn) }].concat(k.sum.map(v => ({ t: tk(v) })), [{ t: tk(tot(k.sum)) }]) });
-    k.rows.forEach(r => rows.push({ indent: 10, cells: [{ t: kostLank(r.label) }].concat(r.v.map((v, i) => ({ t: tk(v), red: !!(v && r.p[i]) })), [{ t: tk(tot(r.v)) }]) }));
+    k.rows.forEach(r => rows.push({ indent: 10, cells: [{ t: kostLank(r.label) }].concat(r.v.map(v => ({ t: tk(v) })), [{ t: tk(tot(r.v)) }]) }));
   });
   rows.push({ cls: 'sum', cells: [{ t: 'Nettoflöde' }].concat(M.netto.map(v => ({ t: tk(v) })), [{ t: tk(tot(M.netto)) }]) });
   // Saldo under 10 Mkr markeras rött.
@@ -15842,7 +15843,7 @@ function helhetKategoriTabell(M){
 function helhetHtml(M){
   const kpis = helhetKpis(M).map(k => '<div class="portal-kpi"><div class="portal-kpi-l">' + k.l + '</div><div class="portal-kpi-v' + (k.red ? ' rod' : '') + '">' + k.v + '</div><div class="portal-kpi-s">' + escapeHtml(k.s || '') + '</div></div>').join('');
   let h = '<section class="portal-kpis">' + kpis + '</section>';
-  h += '<div class="hb-kat"><h4>Månadsöversikt per kategori</h4>' + helhetKategoriTabell(M) + '<p class="portal-sub" style="margin-top:6px;">Belopp i tkr. Röda belopp är preliminära.</p></div>';
+  h += '<div class="hb-kat"><h4>Månadsöversikt per kategori</h4>' + helhetKategoriTabell(M) + '<p class="portal-sub" style="margin-top:6px;">Belopp i tkr. Saldo under 10 Mkr visas i rött.</p></div>';
   h += '<div class="hb-bars-grid">' + helhetBarsHtml('Utlånat kapital per projekt och bolag', 'Utestående fordringar, Mkr.', M.utlanat, '#2F4F6F') + helhetBarsHtml('Låneskuld per långivare', 'Utestående lån, Mkr.', M.lan, '#B5762C') + '</div>';
   return h;
 }
