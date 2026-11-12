@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261112155613';
+const APP_BUILD = '20261112160450';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -3363,10 +3363,12 @@ function showEkonomiKoncernPdfPopup(){
   const mk = (label, checked, disabled) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:8px; align-items:center; margin:6px 0; cursor:pointer;' + (disabled ? ' opacity:0.5;' : ''); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = checked; cb.disabled = disabled; l.appendChild(cb); l.appendChild(document.createTextNode(label)); p.body.appendChild(l); return cb; };
   const cbH = mk('Helhetsbild (slutsats, nyckeltal, diagram och varningar)', true, false);
   const cbK = mk('Koncernlikviditet (' + namn.join(', ') + ')', true, false);
-  const cbG = mk('Gemensamma projekt (' + namn.join(' + ') + ')', flera, !flera);
+  // Gemensamma projekt finns bara när de valda aktörerna äger projekt ihop (t.ex. Solvinkeln + Derome).
+  const harGem = flera && !!document.getElementById('ekoKoncernGemTable');
+  const cbG = mk('Gemensamma projekt (' + namn.join(' + ') + ')' + (flera && !harGem ? ' – finns inga för de valda aktörerna' : ''), harGem, !harGem);
   const lage = document.createElement('label');
-  lage.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0 10px 26px; font-size:12.5px;' + (flera ? '' : ' opacity:0.5;');
-  lage.innerHTML = 'Gemensamma projekt som <select class="eko-inline-select"' + (flera ? '' : ' disabled') + '><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
+  lage.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0 10px 26px; font-size:12.5px;' + (harGem ? '' : ' opacity:0.5;');
+  lage.innerHTML = 'Gemensamma projekt som <select class="eko-inline-select"' + (harGem ? '' : ' disabled') + '><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
   const lageSel = lage.querySelector('select'); lageSel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
   p.body.appendChild(lage);
   const cbF = mk('Fordran (Solvinkelns fordringar mot projekten + övriga fordringar)', false, !harSolvinkeln);
@@ -3375,7 +3377,7 @@ function showEkonomiKoncernPdfPopup(){
   const btn = document.createElement('button');
   btn.type = 'button'; btn.textContent = 'Ladda ner PDF'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
   btn.onclick = async () => {
-    const opts = { helhet: cbH.checked, koncern: cbK.checked, gem: flera && cbG.checked, lage: lageSel.value, fordran: cbF.checked, lan: cbL.checked };
+    const opts = { helhet: cbH.checked, koncern: cbK.checked, gem: harGem && cbG.checked, lage: lageSel.value, fordran: cbF.checked, lan: cbL.checked };
     if(!opts.helhet && !opts.koncern && !opts.gem && !opts.fordran && !opts.lan){ showToast('Välj minst en del att skriva ut.'); return; }
     btn.disabled = true;
     try{ await ekonomiKoncernPdf(opts); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; }
@@ -3423,8 +3425,8 @@ async function ekonomiKoncernPdf(opts){
     }
     if(opts.gem){
       const gt = document.getElementById('ekoKoncernGemTable');
-      if(!gt) throw new Error('Inga gemensamma projekt att skriva ut – välj minst två aktörer.');
-      manadsTabell(gt, 'Gemensamma projekt', aktorer.replace(/, /g, ' + ') + ' · ' + (uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utökad'));
+      // Saknas gemensamma projekt för de valda aktörerna hoppas delen över i stället för att stoppa utskriften.
+      if(gt) manadsTabell(gt, 'Gemensamma projekt', aktorer.replace(/, /g, ' + ') + ' · ' + (uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utökad'));
     }
     if(opts.fordran){
       if(ekonomiSubView !== 'koncernfordran'){ renderEkonomiKoncernFordran(); }
