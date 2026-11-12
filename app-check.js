@@ -3363,10 +3363,12 @@ function showEkonomiKoncernPdfPopup(){
   const mk = (label, checked, disabled) => { const l = document.createElement('label'); l.style.cssText = 'display:flex; gap:8px; align-items:center; margin:6px 0; cursor:pointer;' + (disabled ? ' opacity:0.5;' : ''); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = checked; cb.disabled = disabled; l.appendChild(cb); l.appendChild(document.createTextNode(label)); p.body.appendChild(l); return cb; };
   const cbH = mk('Helhetsbild (slutsats, nyckeltal, diagram och varningar)', true, false);
   const cbK = mk('Koncernlikviditet (' + namn.join(', ') + ')', true, false);
-  const cbG = mk('Gemensamma projekt (' + namn.join(' + ') + ')', flera, !flera);
+  // Gemensamma projekt finns bara när de valda aktörerna äger projekt ihop (t.ex. Solvinkeln + Derome).
+  const harGem = flera && !!document.getElementById('ekoKoncernGemTable');
+  const cbG = mk('Gemensamma projekt (' + namn.join(' + ') + ')' + (flera && !harGem ? ' – finns inga för de valda aktörerna' : ''), harGem, !harGem);
   const lage = document.createElement('label');
-  lage.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0 10px 26px; font-size:12.5px;' + (flera ? '' : ' opacity:0.5;');
-  lage.innerHTML = 'Gemensamma projekt som <select class="eko-inline-select"' + (flera ? '' : ' disabled') + '><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
+  lage.style.cssText = 'display:flex; gap:8px; align-items:center; margin:2px 0 10px 26px; font-size:12.5px;' + (harGem ? '' : ' opacity:0.5;');
+  lage.innerHTML = 'Gemensamma projekt som <select class="eko-inline-select"' + (harGem ? '' : ' disabled') + '><option value="utokad">Utökad (per projekt)</option><option value="kompakt">Kompakt (en rad per aktör)</option></select>';
   const lageSel = lage.querySelector('select'); lageSel.value = uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utokad';
   p.body.appendChild(lage);
   const cbF = mk('Fordran (Solvinkelns fordringar mot projekten + övriga fordringar)', false, !harSolvinkeln);
@@ -3375,7 +3377,7 @@ function showEkonomiKoncernPdfPopup(){
   const btn = document.createElement('button');
   btn.type = 'button'; btn.textContent = 'Ladda ner PDF'; btn.style.cssText = 'background:var(--blue); color:#fff; margin-right:8px;';
   btn.onclick = async () => {
-    const opts = { helhet: cbH.checked, koncern: cbK.checked, gem: flera && cbG.checked, lage: lageSel.value, fordran: cbF.checked, lan: cbL.checked };
+    const opts = { helhet: cbH.checked, koncern: cbK.checked, gem: harGem && cbG.checked, lage: lageSel.value, fordran: cbF.checked, lan: cbL.checked };
     if(!opts.helhet && !opts.koncern && !opts.gem && !opts.fordran && !opts.lan){ showToast('Välj minst en del att skriva ut.'); return; }
     btn.disabled = true;
     try{ await ekonomiKoncernPdf(opts); p.close(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); btn.disabled = false; }
@@ -3423,8 +3425,8 @@ async function ekonomiKoncernPdf(opts){
     }
     if(opts.gem){
       const gt = document.getElementById('ekoKoncernGemTable');
-      if(!gt) throw new Error('Inga gemensamma projekt att skriva ut – välj minst två aktörer.');
-      manadsTabell(gt, 'Gemensamma projekt', aktorer.replace(/, /g, ' + ') + ' · ' + (uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utökad'));
+      // Saknas gemensamma projekt för de valda aktörerna hoppas delen över i stället för att stoppa utskriften.
+      if(gt) manadsTabell(gt, 'Gemensamma projekt', aktorer.replace(/, /g, ' + ') + ' · ' + (uiPrefs.koncernGemLage === 'kompakt' ? 'kompakt' : 'utökad'));
     }
     if(opts.fordran){
       if(ekonomiSubView !== 'koncernfordran'){ renderEkonomiKoncernFordran(); }
@@ -15809,7 +15811,7 @@ async function helhetSvgToPng(svg, w, h, scale){
   await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('Kunde inte rita diagrammet')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
   const c = document.createElement('canvas'); c.width = w * scale; c.height = h * scale;
   const ctx = c.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/png');
+  return c.toDataURL('image/jpeg', 0.92);
 }
 async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   const T = s => String(s == null ? '' : s).replace(/−/g, '-').replace(/[  ]/g, ' ').replace(/–/g, '-');
@@ -15834,7 +15836,7 @@ async function ekonomiHelhetPdfSida(doc, M, logo, logoW, logoH, datum){
   const plats = 200 - y - (varn.length ? varn.length * 4.6 + 8 : 0);
   const ch = Math.max(50, Math.min(273 * 0.33, plats)); const cw = ch / 0.33;
   const png = await helhetSvgToPng(helhetChartSvg(M, 1000, 330), 1000, 330, 2);
-  doc.addImage(png, 'PNG', 12 + (273 - cw) / 2, y, cw, ch); y += ch + 4;
+  doc.addImage(png, 'JPEG', 12 + (273 - cw) / 2, y, cw, ch); y += ch + 4;
   if(varn.length){
     doc.setFontSize(8.5); doc.setTextColor(31, 26, 20); doc.text('Att tänka på i underlaget', 12, y + 2); y += 6;
     doc.setFontSize(7.5); doc.setTextColor(80);
