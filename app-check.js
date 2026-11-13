@@ -16469,7 +16469,8 @@ function nyMenyUppdatera(){
     else { grupp = 'ekonomi'; barn = v; titel = v === 'oversikt' ? 'Ekonomi' : etikett('ekonomi', v); }
   }
   nav.querySelectorAll('.ny-nav-item').forEach(b => b.classList.toggle('active', b.dataset.id === grupp));
-  nav.querySelectorAll('.ny-sub').forEach(s => { if(s.dataset.grupp === grupp){ s.classList.add('open'); const hb = nav.querySelector('.ny-nav-item[data-id="' + grupp + '"]'); if(hb) hb.classList.add('open'); } });
+  // Bara den aktiva gruppen är utfälld (övriga fälls ihop när man byter sida).
+  nav.querySelectorAll('.ny-sub').forEach(s => { const pa = s.dataset.grupp === grupp; s.classList.toggle('open', pa); const hb = nav.querySelector('.ny-nav-item[data-id="' + s.dataset.grupp + '"]'); if(hb) hb.classList.toggle('open', pa); });
   nav.querySelectorAll('.ny-sub button').forEach(b => b.classList.toggle('active', b.dataset.grupp === grupp && b.dataset.barn === barn));
   const rub = document.getElementById('nyRubrik');
   if(rub){
@@ -16534,8 +16535,8 @@ function nyLayoutInit(){
   if(cu && !document.getElementById('nyLayoutPaBtn')){ const b = document.createElement('button'); b.id = 'nyLayoutPaBtn'; b.type = 'button'; b.textContent = 'Ny layout'; b.onclick = () => nyLayoutSatt(true); cu.appendChild(b); }
   const q = new URLSearchParams(location.search).get('layout');
   if(q === 'gammal' || q === 'ny') nyLagra('layout', q);
-  // STEG 1 (test): nya layouten bara för den som valt den. Byts till förval i steg 2.
-  if(nyLas('layout') === 'ny') document.body.classList.add('ny-layout');
+  // Nya layouten är förval. Den som valt "Gamla layouten" behåller den tills hen byter tillbaka.
+  if(nyLas('layout') !== 'gammal') document.body.classList.add('ny-layout');
 }
 
 async function startApp(){
