@@ -685,6 +685,7 @@ function showScreen(next){
   if(deskBtn) deskBtn.style.display = (screen !== 'personal') ? 'inline-block' : 'none';
   const ekoBtn = document.getElementById('goToEkonomiBtn');
   if(ekoBtn) ekoBtn.style.display = (isEkonomiAdmin && screen !== 'companyEkonomi') ? 'inline-block' : 'none';
+  if(typeof nyMenyUppdatera === 'function') nyMenyUppdatera();
 }
 
 function openHome(){
@@ -2858,6 +2859,7 @@ function setEkonomiSubView(view){
   else if(view === 'koncernbolag') renderEkonomiKoncernBolag();
   else if(view === 'koncernschema') renderEkonomiKoncernSchema();
   else renderEkonomiNumberTab(view);
+  if(typeof nyMenyUppdatera === 'function') nyMenyUppdatera();
 }
 
 // Statusfilter (samma som i Projektöversikten); valet sparas per användare under prefKey.
@@ -11081,6 +11083,7 @@ function setProjectSubView(view){
   if(view === 'inflyttningsinfo') renderInflyttningsinfo();
   if(view === 'intressenter') loadInterests().then(renderIntressenterTab);
   if(view === 'entreprenad') setEntreprenadSubView(entreprenadSubView || 'tidsplan');
+  if(typeof nyMenyUppdatera === 'function') nyMenyUppdatera();
 }
 
 function setEntreprenadSubView(view){
@@ -11096,6 +11099,7 @@ function setEntreprenadSubView(view){
   if(view === 'byggmoten') loadByggmoten(activeProjectId);
   if(view === 'besiktningsprotokoll') renderBesiktningsprotokollList();
   if(view === 'material') loadMaterial(activeProjectId);
+  if(typeof nyMenyUppdatera === 'function') nyMenyUppdatera();
 }
 
 // ---------- Besiktningsprotokoll (per lägenhet, uppladdning + AI-inläsning av felförteckning) ----------
@@ -15089,6 +15093,7 @@ async function init(){
   myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
   myPersonId = info.id;
   renderNameUI();
+  nyLayoutInit();
   openPersonal();
 }
 
@@ -16365,6 +16370,172 @@ function portalDetaljHtml(data, id, state){
     .concat([{ cls: 'sec', cells: [{ t: 'Kostnader' }].concat(months.map(() => ''), ['']) }], b.kostnader.map(x => row(escapeHtml(x.namn) + (x.ejKassa ? ' <span class="portal-tag">ej kassa</span>' : ''), m => -(x.per[m] || 0), { indent: 8 })), [row('Summa kostnader', m => -s.kostnad[m], { cls: 'sum' }), row('Resultat', s.resultat, { cls: 'sum' })]);
   h += '<h2 class="portal-h2">Budget</h2><button type="button" class="portal-btn" data-portal-toggle="portalBudget" data-portal-label="budget i detalj">Visa budget i detalj</button><div id="portalBudget" style="display:none;">' + portalTable(['Post (tkr)'].concat(months.map(portalFmt.manad), ['Summa']), budRows) + '</div>';
   return h;
+}
+
+// ---------- Ny layout: sidomeny och topprad ----------
+// Ramen runt appen. Vyerna och all logik är desamma som förut – menyn anropar de befintliga
+// funktionerna (openPersonal, openHome, openProject, setProjectSubView, setEkonomiSubView …).
+// Layouten slås på med klassen "ny-layout" på <body>. Utan klassen visas den gamla layouten
+// med flikar, så det går att växla tillbaka (knappen "Gamla layouten" längst ner i menyn,
+// eller ?layout=gammal i adressen). Valet sparas per webbläsare i localStorage.
+const NY_IKON = {
+  oversikt: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/>',
+  projekt: '<path d="M4 20V8l8-4 8 4v12M9 20v-6h6v6"/>',
+  entreprenad: '<path d="M3 20h18M5 20V10l5-3v13M10 20V4l9 4v12M14 10h1M14 14h1"/>',
+  kalender: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  intressen: '<circle cx="9" cy="9" r="3.5"/><path d="M3 19c.6-3 3-4.5 6-4.5s5.4 1.5 6 4.5M17 8v6M14 11h6"/>',
+  ekonomi: '<path d="M4 19h16M6 16l4-5 3 3 5-7"/>',
+  koncern: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
+  nyaprojekt: '<path d="M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5M3 17l9 5 9-5"/>',
+  agarrapport: '<path d="M5 4h10l4 4v12H5zM14 4v5h5M9 13h6M9 17h6"/>',
+  mini: '<path d="M4 5v14M20 12H9M13 8l-4 4 4 4"/>',
+  gammal: '<path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5"/>'
+};
+const NY_MENY = [
+  { id: 'oversikt', label: 'Översikt' },
+  { id: 'projekt', label: 'Projekt', barn: [['alla', 'Alla projekt'], ['checklista', 'Checklista'], ['betalningar', 'Betalningar'], ['medlemsinfo', 'Medlemsinformation'], ['inflyttningsinfo', 'Inflyttningsinformation'], ['intressenter', 'Intressenter']] },
+  { id: 'entreprenad', label: 'Entreprenad', barn: [['tidsplan', 'Tidsplan'], ['byggmoten', 'Byggmöten'], ['besiktningsprotokoll', 'Besiktningsprotokoll'], ['material', 'Material']] },
+  { id: 'kalender', label: 'Kalender' },
+  { id: 'intressen', label: 'Intresseanmälningar' },
+  { id: 'ekonomi', label: 'Ekonomi', admin: true, barn: [['oversikt', 'Översikt'], ['projekt', 'Projekt'], ['budget', 'Budget och förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']] },
+  { id: 'koncern', label: 'Koncernekonomi', admin: true, barn: [['koncern', 'Koncernlikviditet'], ['koncernbolag', 'Bolag'], ['koncernschema', 'Koncernschema'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']] },
+  { id: 'nyaprojekt', label: 'Nya projekt', admin: true },
+  { id: 'agarrapport', label: 'Ägarrapport', admin: true }
+];
+function nyLayoutPa(){ return document.body.classList.contains('ny-layout'); }
+function nyLagra(k, v){ try{ if(v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch(e){} }
+function nyLas(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function nySvg(namn, cls){ return '<svg viewBox="0 0 24 24"' + (cls ? ' class="' + cls + '"' : '') + '>' + (NY_IKON[namn] || '') + '</svg>'; }
+// Projektet som projekt- och entreprenadsidorna gäller: det öppna, annars det senast öppnade, annars första pågående.
+function nyAktivtProjekt(){
+  const lista = typeof projects !== 'undefined' ? projects : [];
+  return lista.find(p => p.id === activeProjectId) || lista.find(p => p.id === nyLas('nySenasteProjekt')) || lista.find(p => (p.status || 'Pågående') === 'Pågående') || lista[0] || null;
+}
+function nyOppnaProjektVy(view){
+  const p = nyAktivtProjekt();
+  if(!p){ openHome(); return; }
+  if(screen !== 'project' || activeProjectId !== p.id) openProject(p);
+  if(projectSubView !== view) setProjectSubView(view); else nyMenyUppdatera();
+}
+function nyOppnaEntreprenad(view){
+  const p = nyAktivtProjekt();
+  if(!p){ openHome(); return; }
+  if(screen !== 'project' || activeProjectId !== p.id) openProject(p);
+  entreprenadSubView = view;
+  setProjectSubView('entreprenad');
+}
+async function nyOppnaEkonomi(view){
+  if(screen !== 'companyEkonomi'){ ekonomiSubView = view; await openCompanyEkonomi(); }
+  else setEkonomiSubView(view);
+}
+// Byt projekt i rubrikraden och stanna kvar på samma undersida.
+function nyBytProjekt(pid){
+  const p = (typeof projects !== 'undefined' ? projects : []).find(x => x.id === pid);
+  if(!p) return;
+  const v = projectSubView, ev = entreprenadSubView;
+  openProject(p);
+  if(v === 'entreprenad'){ entreprenadSubView = ev; setProjectSubView('entreprenad'); }
+  else if(v !== 'checklista') setProjectSubView(v);
+}
+async function nyMenyKlick(id, barn){
+  if(id === 'oversikt') return openPersonal();
+  if(id === 'kalender') return openCalendarScreen();
+  if(id === 'intressen') return openIntressenScreen();
+  if(id === 'projekt') return (!barn || barn === 'alla') ? openHome() : nyOppnaProjektVy(barn);
+  if(id === 'entreprenad') return nyOppnaEntreprenad(barn || 'tidsplan');
+  if(id === 'ekonomi') return nyOppnaEkonomi(barn || 'oversikt');
+  if(id === 'koncern') return nyOppnaEkonomi(barn || 'koncern');
+  if(id === 'nyaprojekt') return nyOppnaEkonomi('nyaprojekt');
+  if(id === 'agarrapport'){ await nyOppnaEkonomi('koncernbolag'); showEkonomiPortalPopup(); }
+}
+// Markerar rätt rad i menyn och sätter sidans rubrik utifrån var man är.
+function nyMenyUppdatera(){
+  if(!nyLayoutPa()) return;
+  const nav = document.getElementById('nyNav'); if(!nav) return;
+  let grupp = null, barn = null, titel = '';
+  const etikett = (gid, bid) => { const g = NY_MENY.find(x => x.id === gid); const b = g && g.barn ? g.barn.find(x => x[0] === bid) : null; return b ? b[1] : (g ? g.label : ''); };
+  if(screen === 'personal'){ grupp = 'oversikt'; }
+  else if(screen === 'home'){ grupp = 'projekt'; barn = 'alla'; titel = 'Projekt'; }
+  else if(screen === 'project'){
+    if(projectSubView === 'entreprenad'){ grupp = 'entreprenad'; barn = entreprenadSubView; titel = 'Entreprenad · ' + etikett('entreprenad', barn); }
+    else { grupp = 'projekt'; barn = projectSubView; titel = etikett('projekt', barn); }
+  }
+  else if(screen === 'calendar'){ grupp = 'kalender'; titel = 'Kalender'; }
+  else if(screen === 'intressen'){ grupp = 'intressen'; titel = 'Intresseanmälningar'; }
+  else if(screen === 'companyEkonomi'){
+    const v = ekonomiSubView || 'oversikt';
+    if(v === 'nyaprojekt'){ grupp = 'nyaprojekt'; titel = 'Nya projekt'; }
+    else if(/^koncern/.test(v)){ grupp = 'koncern'; barn = v; titel = etikett('koncern', v); }
+    else { grupp = 'ekonomi'; barn = v; titel = v === 'oversikt' ? 'Ekonomi' : etikett('ekonomi', v); }
+  }
+  nav.querySelectorAll('.ny-nav-item').forEach(b => b.classList.toggle('active', b.dataset.id === grupp));
+  nav.querySelectorAll('.ny-sub').forEach(s => { if(s.dataset.grupp === grupp){ s.classList.add('open'); const hb = nav.querySelector('.ny-nav-item[data-id="' + grupp + '"]'); if(hb) hb.classList.add('open'); } });
+  nav.querySelectorAll('.ny-sub button').forEach(b => b.classList.toggle('active', b.dataset.grupp === grupp && b.dataset.barn === barn));
+  const rub = document.getElementById('nyRubrik');
+  if(rub){
+    rub.style.display = titel ? 'flex' : 'none';
+    rub.querySelector('h1').textContent = titel;
+    const sel = document.getElementById('nyProjektVal');
+    const visaVal = screen === 'project';
+    sel.style.display = visaVal ? '' : 'none';
+    if(visaVal){
+      const lista = typeof projects !== 'undefined' ? projects : [];
+      sel.innerHTML = lista.map(p => '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</option>').join('');
+      sel.value = activeProjectId || '';
+    }
+  }
+  // Underflikar i rubrikraden: visas bara när menyn är smal (då syns inte undersidorna i menyn).
+  const uf = document.getElementById('nyUnderflikar');
+  if(uf){ const g = NY_MENY.find(x => x.id === grupp); uf.innerHTML = g && g.barn ? g.barn.map(b => '<button type="button" class="portal-tab' + (b[0] === barn ? ' active' : '') + '" data-grupp="' + g.id + '" data-barn="' + b[0] + '">' + b[1] + '</button>').join('') : ''; }
+  if(screen === 'project' && activeProjectId) nyLagra('nySenasteProjekt', activeProjectId);
+}
+function nyLayoutSatt(pa){
+  document.body.classList.toggle('ny-layout', !!pa);
+  nyLagra('layout', pa ? 'ny' : 'gammal');
+  if(pa) nyMenyUppdatera();
+}
+// Bygger menyn och toppraden. Körs en gång efter inloggning (init).
+function nyLayoutInit(){
+  const nav = document.getElementById('nyNav'); if(!nav || nav.dataset.klar) return;
+  nav.dataset.klar = '1';
+  nav.innerHTML = NY_MENY.filter(m => !m.admin || isEkonomiAdmin).map(m =>
+    '<button type="button" class="ny-nav-item" data-id="' + m.id + '"' + (m.barn ? ' data-har-barn="1"' : '') + ' title="' + m.label + '">' + nySvg(m.id) + '<span>' + m.label + '</span>' + (m.barn ? '<svg class="ny-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>' : '') + '</button>' +
+    (m.barn ? '<div class="ny-sub" data-grupp="' + m.id + '">' + m.barn.map(b => '<button type="button" data-grupp="' + m.id + '" data-barn="' + b[0] + '">' + b[1] + '</button>').join('') + '</div>' : '')
+  ).join('');
+  nav.addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b) return;
+    if(b.classList.contains('ny-nav-item')){
+      if(b.dataset.harBarn){
+        // Smal meny: gå direkt till gruppens första sida. Bred meny: fäll ut eller ihop.
+        if(document.body.classList.contains('ny-mini') || window.innerWidth <= 900){ nyMenyKlick(b.dataset.id, null); return; }
+        const sub = nav.querySelector('.ny-sub[data-grupp="' + b.dataset.id + '"]');
+        const oppna = !sub.classList.contains('open');
+        sub.classList.toggle('open', oppna); b.classList.toggle('open', oppna);
+        return;
+      }
+      nyMenyKlick(b.dataset.id, null);
+    } else if(b.dataset.barn) nyMenyKlick(b.dataset.grupp, b.dataset.barn);
+  });
+  const fot = document.getElementById('nyFot');
+  fot.innerHTML = '<button type="button" class="ny-nav-item" id="nyMiniBtn" title="Minimera meny">' + nySvg('mini') + '<span>Minimera meny</span></button><button type="button" class="ny-nav-item ny-diskret" id="nyGammalBtn" title="Byt till gamla layouten">' + nySvg('gammal') + '<span>Gamla layouten</span></button>';
+  document.getElementById('nyMiniBtn').onclick = () => { const m = document.body.classList.toggle('ny-mini'); nyLagra('nyMini', m ? '1' : null); };
+  document.getElementById('nyGammalBtn').onclick = () => { if(confirm('Byta till den gamla layouten med flikar? Du kan byta tillbaka med knappen "Ny layout" överst.')) nyLayoutSatt(false); };
+  if(nyLas('nyMini') === '1') document.body.classList.add('ny-mini');
+  // Topprad: logotyp och inloggad användare
+  const logga = document.querySelector('.brand-logo'); const nyLogga = document.getElementById('nyLogga');
+  if(logga && nyLogga) nyLogga.src = logga.src;
+  const namn = myName || myEmail || '';
+  document.getElementById('nyUserNamn').textContent = namn;
+  document.getElementById('nyAvatar').textContent = namn.split(/[\s.@]+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('') || '·';
+  document.getElementById('nyProjektVal').onchange = e => nyBytProjekt(e.target.value);
+  document.getElementById('nyUnderflikar').addEventListener('click', e => { const b = e.target.closest('button[data-barn]'); if(b) nyMenyKlick(b.dataset.grupp, b.dataset.barn); });
+  // Gamla layouten: knapp för att byta till den nya
+  const cu = document.getElementById('currentUser');
+  if(cu && !document.getElementById('nyLayoutPaBtn')){ const b = document.createElement('button'); b.id = 'nyLayoutPaBtn'; b.type = 'button'; b.textContent = 'Ny layout'; b.onclick = () => nyLayoutSatt(true); cu.appendChild(b); }
+  const q = new URLSearchParams(location.search).get('layout');
+  if(q === 'gammal' || q === 'ny') nyLagra('layout', q);
+  // STEG 1 (test): nya layouten bara för den som valt den. Byts till förval i steg 2.
+  if(nyLas('layout') === 'ny') document.body.classList.add('ny-layout');
 }
 
 async function startApp(){
