@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261113121053';
+const APP_BUILD = '20261113121213';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16474,7 +16474,7 @@ function nyMenyUppdatera(){
   nav.querySelectorAll('.ny-sub button').forEach(b => b.classList.toggle('active', b.dataset.grupp === grupp && b.dataset.barn === barn));
   const rub = document.getElementById('nyRubrik');
   if(rub){
-    rub.style.display = titel ? 'flex' : 'none';
+    rub.style.display = ''; rub.classList.toggle('ny-tom', !titel);
     rub.querySelector('h1').textContent = titel;
     const sel = document.getElementById('nyProjektVal');
     const visaVal = screen === 'project';
