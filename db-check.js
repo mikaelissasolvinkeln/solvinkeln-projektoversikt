@@ -193,6 +193,11 @@
   }
   async function getPublicNyaProjekt(shareId){
     if(!hasSupabase) return null;
+    // Funktionen nya_projekt_delad (schema-nya-projekt-sakerhet.sql) lämnar bara ut raden för exakt
+    // den länk man har. Det går inte att lista delade rader via den.
+    const r = await sb.rpc('nya_projekt_delad', { p_share_id: shareId });
+    if(!r.error){ const d = Array.isArray(r.data) ? r.data[0] : r.data; return d || null; }
+    // Äldre databas där funktionen inte finns än: läs raden direkt ur tabellen.
     const { data, error } = await sb.from('nya_projekt').select('*').eq('share_id', shareId).eq('is_public', true).maybeSingle();
     if(error) throw error;
     return data || null;
