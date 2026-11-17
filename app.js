@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261113145808';
+const APP_BUILD = '20261117165642';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -11630,6 +11630,38 @@ function renderBetalningar(){
     '<td style="' + mono + ' font-weight:700;">' + formatKrFull(tot.summa) + '</td>' +
     '<td style="' + mono + ' font-weight:700; color:' + (tot.diff > 0 ? 'var(--danger)' : tot.diff < 0 ? 'var(--good, #2e7d32)' : 'inherit') + ';" title="Totalpris enligt ekonomiska planen (slutbetalda lägenheter) minus summa">' + diffTxt + '</td></tr>';
 }
+// PDF av fliken Betalningar: alla lägenheter i projektet med totalpris, slutbetalning (belopp och datum),
+// avgiftsfritt, dubbelboende, tillval, summa och diff mot plan, samt totalrad. Liggande A4.
+function betalningarPdf(){
+  if(!apartments.length){ showToast('Det finns inga lägenheter att skriva ut.'); return; }
+  const proj = projects.find(x => x.id === activeProjectId);
+  const namn = proj ? proj.name : 'Projekt';
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const logoEl = document.querySelector('.brand-logo');
+  const logo = logoEl && /^data:image\/png/.test(logoEl.src) ? logoEl.src : null;
+  const logoW = 38, logoH = logoEl && logoEl.naturalWidth ? 38 * logoEl.naturalHeight / logoEl.naturalWidth : 10.8;
+  const datum = new Date().toLocaleDateString('sv-SE');
+  const T = t => String(t == null ? '' : t).replace(/[  ]/g, ' ').replace(/−/g, '-');
+  const kr = v => T(formatKrFull(v));
+  const tot = { plan: 0, planBetalda: 0, slut: 0, avgiftsfritt: 0, dubbelboende: 0, tillvalDras: 0, summa: 0, diff: 0, betalda: 0 };
+  const rows = apartments.map(apt => {
+    const r = betalningRad(apt);
+    tot.plan += r.plan; tot.slut += r.slut; tot.avgiftsfritt += r.avgiftsfritt; tot.dubbelboende += r.dubbelboende; tot.tillvalDras += r.tillvalDras; tot.summa += r.summa; tot.diff += r.diff;
+    if(r.betald){ tot.betalda++; tot.planBetalda += r.plan; }
+    const tillval = (apt.tillval && apt.tillval.done && r.tillval) ? kr(r.tillval) + (r.tillvalPaSlut ? '' : ' (separat)') : '';
+    const diff = r.betald ? (r.diff === 0 ? '0 kr' : (r.diff > 0 ? '-' : '+') + kr(Math.abs(r.diff))) : '';
+    return { cells: [T(apt.lgh || '—'), r.plan ? kr(r.plan) : '', r.betald ? kr(r.slut) : 'Ej slutbetald', r.betald ? T(apt.slutbetald.date || '') : '', r.avgiftsfritt ? kr(r.avgiftsfritt) : '', r.dubbelboende ? kr(r.dubbelboende) : '', tillval, r.betald ? kr(r.summa) : '', diff] };
+  });
+  const totDiff = tot.diff === 0 ? '0 kr' : (tot.diff > 0 ? '-' : '+') + kr(Math.abs(tot.diff));
+  rows.push({ bold: true, cells: ['Totalt', kr(tot.plan), kr(tot.slut), tot.betalda + ' av ' + apartments.length + ' slutbetalda', tot.avgiftsfritt ? '-' + kr(tot.avgiftsfritt) : '', tot.dubbelboende ? '-' + kr(tot.dubbelboende) : '', tot.tillvalDras ? '-' + kr(tot.tillvalDras) : '', kr(tot.summa), totDiff] });
+  const y = ekonomiPdfHeader(doc, 'Betalningar', T(namn + ' · skapad ' + datum), logo, logoW, logoH);
+  const slutY = ekonomiPdfTable(doc, y, ['LGH', 'Totalpris (ekonomisk plan)', 'Slutbetald', 'Datum', 'Avgiftsfritt', 'Dubbelboende', 'Tillval', 'Summa', 'Diff mot plan'], rows, { fontSize: 8, firstWidth: 20 });
+  doc.setFontSize(7.5); doc.setTextColor(120);
+  doc.text(T('Totalpris för slutbetalda lägenheter: ' + kr(tot.planBetalda) + '. Tillval märkt (separat) är fakturerat kunden separat och dras inte från slutbetalningen.'), 12, Math.min(slutY + 6, 204));
+  doc.save('Betalningar-' + namn.replace(/[^\wåäöÅÄÖ-]+/g, '-') + '-' + datum + '.pdf');
+}
+document.getElementById('betalningarPdfBtn').onclick = () => { try{ betalningarPdf(); }catch(e){ showDebugError('Kunde inte skapa PDF', e); } };
 function renderMedlemsinfo(){
   const body = document.getElementById('medlemsBody');
   const table = document.getElementById('medlemsTable');
