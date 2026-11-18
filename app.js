@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118143810';
+const APP_BUILD = '20261118144040';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -17215,7 +17215,7 @@ async function renderPublicTillvalView(shareId){
     const valdaNu = () => bockar.filter(b => b.checked).map(b => b.value);
     const rakna = () => { root.querySelector('[data-tvo-summa]').textContent = tvKr(tvSumma(o.data.rader, valdaNu())); bockar.forEach(b => b.closest('.tvo-svarsrad').classList.toggle('vald', b.checked)); };
     const betalval = [...root.querySelectorAll('[data-tvo-betal]')];
-    betalval.forEach(b => { b.onchange = () => betalval.forEach(x => x.closest('.tvo-betal').classList.toggle('vald', x.checked)); });
+    betalval.forEach(b => { b.onchange = () => { betalval.forEach(x => x.closest('.tvo-betal').classList.toggle('vald', x.checked)); root.querySelector('[data-tvo-fel]').textContent = ''; }; });
     bockar.forEach(b => { b.onchange = rakna; });
     const skicka = root.querySelector('[data-tvo-skicka]'), fel = root.querySelector('[data-tvo-fel]');
     skicka.onclick = async () => {
