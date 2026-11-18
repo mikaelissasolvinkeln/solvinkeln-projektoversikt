@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118113215';
+const APP_BUILD = '20261118114009';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15118,17 +15118,18 @@ setInterval(() => {
 }, SYNC_INTERVAL_MS);
 
 async function init(){
-  await loadProjects();
+  // Vem som är inloggad först, så att menyn kan byggas direkt i stället för efter all dataladdning.
   const info = await DB.getCurrentUserInfo();
   myEmail = (info.email || '').toLowerCase();
   isEkonomiAdmin = EKONOMI_ADMIN_EMAILS.includes(myEmail);
+  myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
+  myPersonId = info.id;
+  nyLayoutInit();
+  await loadProjects();
   document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
   if(isEkonomiAdmin) await loadEkonomiData();
   else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } if(uiPrefsMigrera()) saveUiPrefs(); }
-  myName = PERSONAL_NAMES_BY_EMAIL[myEmail] || info.name || '';
-  myPersonId = info.id;
   renderNameUI();
-  nyLayoutInit();
   openPersonal();
 }
 
@@ -15159,10 +15160,9 @@ async function attemptPersonalLogin(){
     btn.disabled = false;
   }
 }
-document.getElementById('personalLoginSubmit').onclick = attemptPersonalLogin;
-document.getElementById('personalLoginPassword').addEventListener('keydown', e => {
-  if(e.key === 'Enter') attemptPersonalLogin();
-});
+// Formuläret skickas aldrig till någon server: inloggningen görs av attemptPersonalLogin. Att det är
+// ett riktigt formulär gör att webbläsaren kan spara lösenordet. Enter i fälten skickar formuläret.
+document.getElementById('personalLoginFields').addEventListener('submit', e => { e.preventDefault(); attemptPersonalLogin(); });
 
 // ---------- Realtidssynk: ersätter/kompletterar 30-minuterspollningen ovan ----------
 // När någon annan sparar en ändring (i Supabase, eller i en annan flik lokalt i mock-läge)
@@ -16485,7 +16485,7 @@ function avstRadHtml(u, idag){
   const p = u.p, klar = !!u.st.klar, sen = !klar && !!u.forfall && u.forfall < idag;
   let h = '<div class="avst-rad' + (klar ? ' klar' : '') + '" data-id="' + avstAttr(p.id) + '" data-ym="' + u.ym + '">';
   h += '<input type="checkbox" class="avst-bock" data-avst="klar"' + (klar ? ' checked' : '') + ' title="Markera som klar">';
-  h += '<div class="avst-huvud"><div class="avst-text">' + escapeHtml(p.text || '') + '</div><div class="avst-meta">' + (p.typ === 'engang' ? 'En gång' : 'Varje månad') + (p.skapadAv ? ' · upplagd av ' + escapeHtml(p.skapadAv) : '') + '</div></div>';
+  h += '<div class="avst-huvud"><div class="avst-text">' + escapeHtml(p.text || '') + '</div><div class="avst-meta">' + (p.ansvarig ? '<b>' + escapeHtml(p.ansvarig) + '</b> · ' : '') + (p.typ === 'engang' ? 'En gång' : 'Varje månad') + (p.skapadAv && p.skapadAv !== p.ansvarig ? ' · upplagd av ' + escapeHtml(p.skapadAv) : '') + '</div></div>';
   h += '<div class="avst-datum">' + (u.forfall ? avstDatumText(u.forfall) : '<span class="avst-inget">Inget datum</span>') + (sen ? '<span>Försenad</span>' : '') + '</div>';
   h += '<input type="text" class="avst-not" data-avst="not" placeholder="Anteckning" value="' + avstAttr(u.st.not || '') + '">';
   h += '<div class="avst-vem">' + (klar ? 'Klar' + (u.st.av ? ' · ' + escapeHtml(u.st.av) : '') + (u.st.nar ? ' · ' + avstDatumText(new Date(u.st.nar)) : '') : 'Ej klar') + '</div>';
@@ -16515,7 +16515,15 @@ function avstFormSatt(p){
   if(p && typ === 'manad') document.getElementById('avstNyDag').value = p.dag || 1;
   if(p && typ === 'engang') document.getElementById('avstNyDatum').value = p.datum || '';
   if(!p) document.getElementById('avstNyDatum').value = '';
+  if(p && p.ansvarig) avstAnsvarigSatt(p.ansvarig);
   avstFormVisa();
+}
+// Vems uppgiften är. Listan är de som ser checklistan (EKONOMI_ADMIN_EMAILS).
+function avstAnsvarigSatt(namn){
+  const sel = document.getElementById('avstNyAnsvarig'); if(!sel) return;
+  if(!sel.options.length) sel.innerHTML = EKONOMI_ADMIN_EMAILS.map(e => PERSONAL_NAMES_BY_EMAIL[e] || e).map(n => '<option value="' + avstAttr(n) + '">' + escapeHtml(n) + '</option>').join('');
+  if(namn && ![...sel.options].some(o => o.value === namn)) sel.insertAdjacentHTML('beforeend', '<option value="' + avstAttr(namn) + '">' + escapeHtml(namn) + '</option>');
+  if(namn) sel.value = namn;
 }
 function avstFormVisa(){
   const engang = document.getElementById('avstNyTyp').value === 'engang';
@@ -16537,12 +16545,14 @@ async function avstSparaUppgift(){
     if(datum && !/^\d{4}-\d{2}-\d{2}$/.test(datum)){ showToast('Datumet går inte att läsa.'); return; }
   }
   const redId = avstamningRedigerarId, nyttId = uid(), ym = avstamningManad || avstManadNu(), av = myName || myEmail || '';
+  const ansvarig = document.getElementById('avstNyAnsvarig').value || av;
   const ok = await avstAndra(d => {
     let p = redId ? d.punkter.find(x => x.id === redId) : null;
     if(redId && !p) return; // borttagen av den andra under tiden
     if(!p){ p = { id: nyttId, skapadAv: av, skapad: new Date().toISOString() }; d.punkter.push(p); }
     const gammaltFack = p.typ === 'engang' ? avstFack(p, ym) : null;
     p.text = text; p.typ = typ;
+    if(ansvarig) p.ansvarig = ansvarig;
     if(typ === 'manad'){ p.dag = dag; delete p.datum; if(!p.fran) p.fran = ym; }
     else {
       if(datum) p.datum = datum; else delete p.datum;
@@ -16590,6 +16600,9 @@ async function avstSattStatus(ym, id, andring){
   renderEkonomiAvstamning();
 }
 async function oppnaEkonomiAvstamning(){
+  // Första gången: förvald ansvarig är den som är inloggad.
+  const sel = document.getElementById('avstNyAnsvarig');
+  if(sel && !sel.options.length) avstAnsvarigSatt(myName || '');
   renderEkonomiAvstamning();
   try{ await avstLas(); }catch(e){ showDebugError('Kunde inte läsa checklistan', e); }
   if(ekonomiSubView === 'avstamning') renderEkonomiAvstamning();
@@ -16809,12 +16822,20 @@ function nyLayoutInit(){
   // Nya layouten är förval. Den som valt "Gamla layouten" behåller den tills hen byter tillbaka.
   if(nyLas('layout') !== 'gammal') document.body.classList.add('ny-layout');
 }
+// Ramen slås på direkt när sidan laddas, så att den gamla layouten inte hinner visas medan datan
+// hämtas efter inloggning. Delningslänkar (?propa=) har egen sida och får ingen ram.
+(function(){
+  const q = new URLSearchParams(location.search);
+  const val = q.get('layout');
+  if(val === 'gammal' || val === 'ny') nyLagra('layout', val);
+  if(!q.get('propa') && nyLas('layout') !== 'gammal') document.body.classList.add('ny-layout');
+})();
 
 async function startApp(){
   // Ägare i Prosavio (portal_users) ser bara ägarportalen.
   let portalUser = null;
   try{ portalUser = await DB.getPortalUser(); }catch(e){ portalUser = null; }
-  if(portalUser){ await renderPortal(portalUser); return; }
+  if(portalUser){ document.body.classList.remove('ny-layout'); await renderPortal(portalUser); return; }
   await init();
   wireRemoteSync();
 }

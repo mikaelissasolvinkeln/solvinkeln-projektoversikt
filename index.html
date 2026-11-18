@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261118113215">
+<meta name="app-build" content="20261118114009">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1113,16 +1113,17 @@
   <div class="modal-box">
     <h3 style="font-family:'Fraunces',serif;font-weight:700;font-size:19px;margin:0 0 6px;">Solvinkeln Fastigheter</h3>
     <p style="font-size:13px;color:var(--ink-soft);margin:0 0 14px;">Logga in med ditt personliga konto.</p>
-    <div id="personalLoginFields">
-      <input id="personalLoginEmail" type="email" placeholder="E-post" autocomplete="username"
+    <!-- Ett riktigt formulär, så att webbläsaren erbjuder sig att spara och fylla i lösenordet. -->
+    <form id="personalLoginFields" autocomplete="on" style="margin:0;">
+      <input id="personalLoginEmail" name="username" type="email" placeholder="E-post" autocomplete="username"
         style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:7px;padding:9px 11px;font-size:14px;margin-bottom:8px;">
-      <input id="personalLoginPassword" type="password" placeholder="Lösenord" autocomplete="current-password"
+      <input id="personalLoginPassword" name="password" type="password" placeholder="Lösenord" autocomplete="current-password"
         style="width:100%;box-sizing:border-box;border:1px solid var(--line-soft);border-radius:7px;padding:9px 11px;font-size:14px;margin-bottom:10px;">
       <p id="personalLoginError" style="display:none;color:var(--danger);font-size:12.5px;margin:0 0 10px;"></p>
       <div class="modal-actions">
-        <button id="personalLoginSubmit" style="background:var(--ink);color:#fff;">Logga in</button>
+        <button type="submit" id="personalLoginSubmit" style="background:var(--ink);color:#fff;">Logga in</button>
       </div>
-    </div>
+    </form>
   </div>
 </div>
 <header class="ny-top" id="nyTop">
@@ -1136,7 +1137,7 @@
   <div class="ny-side-fot" id="nyFot"></div>
 </aside>
 <div class="wrap">
-  <div class="ny-rubrik" id="nyRubrik"><h1></h1><select id="nyProjektVal" class="ny-projektval" title="Byt projekt"></select></div>
+  <div class="ny-rubrik ny-tom" id="nyRubrik"><h1></h1><select id="nyProjektVal" class="ny-projektval" title="Byt projekt"></select></div>
   <div class="portal-tabs ny-underflikar" id="nyUnderflikar"></div>
   <div class="brand-row">
 
@@ -1520,6 +1521,7 @@
         </select>
         <span id="avstNyDagWrap">den <input type="number" id="avstNyDag" min="1" max="31" value="20"> varje månad</span>
         <span id="avstNyDatumWrap" style="display:none;">senast <input type="date" id="avstNyDatum"> (datum är valfritt)</span>
+        <span>för <select id="avstNyAnsvarig" title="Vems uppgift det är"></select></span>
         <button type="button" id="avstNyBtn" class="upload-btn">Lägg till</button>
         <button type="button" id="avstNyAvbryt" class="upload-btn" style="display:none;">Avbryt</button>
       </div>
@@ -2922,7 +2924,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261118113215"></script>
-<script src="app.js?v=20261118113215"></script>
+<script src="db.js?v=20261118114009"></script>
+<script src="app.js?v=20261118114009"></script>
 </body>
 </html>
