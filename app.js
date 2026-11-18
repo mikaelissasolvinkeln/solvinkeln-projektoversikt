@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118144040';
+const APP_BUILD = '20261118150445';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -226,6 +226,13 @@ function timeAgo(iso){
   if(diff < 3600) return Math.floor(diff/60) + ' min sedan';
   if(diff < 86400) return Math.floor(diff/3600) + ' tim sedan';
   return Math.floor(diff/86400) + ' d sedan';
+}
+
+// Adressen som delningslänkar byggs på (kundens tillvalsoffert, ägarrapport, bolagsrapport, propå).
+// Alltid app.solvinkeln.se, även om man själv råkar ha öppnat appen via Vercels egen adress.
+// Bara vid lokal utveckling används adressen man står på.
+function publikBas(){
+  return /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? location.origin + location.pathname : 'https://app.solvinkeln.se/';
 }
 
 function showToast(msg){
@@ -9183,7 +9190,7 @@ function renderNyaProjektDetail(){
   shareBox.style.display = candidate.is_public ? 'block' : 'none';
   document.getElementById('nyaProjektShareBtn').style.display = candidate.is_public ? 'none' : 'inline-block';
   if(candidate.is_public){
-    document.getElementById('nyaProjektShareLinkInput').value = location.origin + location.pathname + '?propa=' + candidate.share_id;
+    document.getElementById('nyaProjektShareLinkInput').value = publikBas() + '?propa=' + candidate.share_id;
   }
 }
 
@@ -16099,7 +16106,7 @@ async function showEkonomiBolagDelaPopup(b){
     let row = null; try{ row = await DB.getNyaProjektRow(id); }catch(e){ row = null; }
     if(row){ await DB.updateNyaProjekt(id, { data, name: b.namn, is_public: true }); row.data = data; row.is_public = true; }
     else row = await DB.insertNyaProjekt({ id, share_id: uid() + uid() + uid(), name: b.namn, data, is_public: true, status: 'candidate', created_by: myPersonId, created_by_name: myName });
-    inp.value = location.origin + location.pathname + '?propa=' + row.share_id;
+    inp.value = publikBas() + '?propa=' + row.share_id;
     status.textContent = 'Länken är aktiv · siffror från ' + new Date(data.publiceradAt).toLocaleString('sv-SE').slice(0, 16) + '.';
     return row;
   };
@@ -16168,7 +16175,7 @@ async function showEkonomiPortalPopup(){
   const lrow = document.createElement('div'); lrow.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;'; lbox.appendChild(lrow);
   const linp = document.createElement('input'); linp.type = 'text'; linp.readOnly = true; linp.style.cssText = 'flex:1; min-width:260px; border:1px solid var(--line-soft); border-radius:6px; padding:6px 8px; font-size:12.5px; background:#fff;';
   lrow.appendChild(linp);
-  const visaLank = r => { const aktiv = !!(r && r.is_public); linp.value = aktiv ? location.origin + location.pathname + '?propa=' + r.share_id : ''; lst.textContent = aktiv ? 'Länken är aktiv · siffror från ' + new Date(r.data.rapport.publiceradAt).toLocaleString('sv-SE').slice(0, 16) + '.' : 'Ingen aktiv länk.'; };
+  const visaLank = r => { const aktiv = !!(r && r.is_public); linp.value = aktiv ? publikBas() + '?propa=' + r.share_id : ''; lst.textContent = aktiv ? 'Länken är aktiv · siffror från ' + new Date(r.data.rapport.publiceradAt).toLocaleString('sv-SE').slice(0, 16) + '.' : 'Ingen aktiv länk.'; };
   lrow.appendChild(ekoSmallBtn('Skapa / uppdatera länk', async () => {
     lst.textContent = 'Bygger rapporten…';
     try{
@@ -16692,7 +16699,7 @@ function tvValda(o){
   if(o.status === 'godkand') return (o.data.godkand && o.data.godkand.valda) || [];
   return o.svar && Array.isArray(o.svar.valda) ? o.svar.valda : null;
 }
-function tvLank(o){ return location.origin + location.pathname + '?tillval=' + o.share_id; }
+function tvLank(o){ return publikBas() + '?tillval=' + o.share_id; }
 function tvDatum(iso){ const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('sv-SE'); }
 function tvKopare(apt){
   const b1 = apt.sald && apt.sald.buyer1 && apt.sald.buyer1.name, b2 = apt.sald && apt.sald.buyer2 && apt.sald.buyer2.name;
