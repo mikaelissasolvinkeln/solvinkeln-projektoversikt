@@ -16667,7 +16667,13 @@ DB.onDeladKonflikt = function(){
 // lägenhetens tillval (apt.tillval, samma fält som Checklistan och Betalningar läser).
 // Rapporten till entreprenören är en egen rad (typ 'rapport') med en ögonblicksbild av alla hus.
 const TILLVAL_STATUS = { utkast: 'Utkast', skickad: 'Skickad till kund', besvarad: 'Kunden har svarat', godkand: 'Godkänd' };
-const TILLVAL_VILLKOR_STD = 'Priserna är inklusive moms. Beställningen gäller när Solvinkeln har bekräftat den.';
+const TILLVAL_VILLKOR_STD = 'Priserna gäller till och med svarsdatumet ovan och förutsätter att arbetet kan utföras inom ordinarie byggtid.';
+// Kunden väljer betalningssätt i sitt svar. Texterna kan ändras per projekt under Prislista.
+const TILLVAL_BETAL_NAMN = { insats: 'Höjning av insats', faktura: 'Faktura' };
+const TILLVAL_BETAL_STD = {
+  insats: 'Kostnaden för tillvalen läggs på bostadsrättens insats och betalas tillsammans med slutbetalningen på tillträdesdagen. Beloppet kan då ingå i ditt bolån, om din bank godkänner det.',
+  faktura: 'Solvinkeln skickar en separat faktura på tillvalen. Den betalas med egna medel och ingår inte i bostadsrättens insats.'
+};
 let tillvalLista = { poster: [], villkor: '' };
 let tillvalOfferter = [];
 let tillvalLaddatFor = null;
@@ -16751,7 +16757,7 @@ function renderTillval(){
       h += '<tr' + (o.status === 'besvarad' ? ' class="tv-vantar"' : '') + '>' + (i === 0 ? lgh.replace(/<td>/g, '<td' + (off.length > 1 ? ' rowspan="' + off.length + '"' : '') + '>') : '') +
         '<td>' + escapeHtml(o.data.nr || '') + '<div class="tv-liten">' + escapeHtml(o.data.datum || '') + '</div></td>' +
         '<td><span class="tv-pill tv-' + o.status + '">' + TILLVAL_STATUS[o.status] + '</span></td>' +
-        '<td class="tv-h">' + tvKr(tvSumma(o.data.rader)) + '</td><td class="tv-h">' + (valda ? tvKr(tvSumma(o.data.rader, valda)) : '') + '</td>' +
+        '<td class="tv-h">' + tvKr(tvSumma(o.data.rader)) + '</td><td class="tv-h">' + (valda ? tvKr(tvSumma(o.data.rader, valda)) + (o.svar && TILLVAL_BETAL_NAMN[o.svar.betalning] ? '<div class="tv-liten">' + TILLVAL_BETAL_NAMN[o.svar.betalning] + '</div>' : '') : '') + '</td>' +
         '<td class="tv-h"><button type="button" class="tv-knapp" data-tv-oppna="' + tvAttr(o.id) + '">Öppna</button>' + (i === off.length - 1 ? ' <button type="button" class="tv-knapp tv-diskret" data-tv-ny="' + tvAttr(apt.id) + '" title="Ny offert för samma lägenhet">+ Ny</button>' : '') + '</td></tr>';
     });
   });
@@ -16777,6 +16783,12 @@ function tillvalListaPopup(){
     p.body.innerHTML = h;
     document.getElementById('tvListaNy').onclick = async () => { tillvalLista.poster.push({ id: uid(), kategori: '', namn: '', beskrivning: '', pris: '' }); rita(); const rader = p.body.querySelectorAll('tr[data-id]'); const sista = rader[rader.length - 1]; if(sista) sista.querySelector('input[data-f="namn"]').focus(); await tillvalSparaLista(); };
     document.getElementById('tvListaVillkor').onchange = async e => { tillvalLista.villkor = e.target.value.trim(); await tillvalSparaLista(); };
+    const betalBox = document.createElement('div');
+    betalBox.innerHTML = '<label class="tv-etikett">Text till kunden om betalning genom höjning av insats</label><textarea id="tvListaBetalInsats" class="tv-text" rows="2">' + escapeHtml(tillvalLista.betalInsats || TILLVAL_BETAL_STD.insats) + '</textarea>' +
+      '<label class="tv-etikett">Text till kunden om betalning genom faktura</label><textarea id="tvListaBetalFaktura" class="tv-text" rows="2">' + escapeHtml(tillvalLista.betalFaktura || TILLVAL_BETAL_STD.faktura) + '</textarea>';
+    p.body.appendChild(betalBox);
+    document.getElementById('tvListaBetalInsats').onchange = async e => { tillvalLista.betalInsats = e.target.value.trim(); await tillvalSparaLista(); };
+    document.getElementById('tvListaBetalFaktura').onchange = async e => { tillvalLista.betalFaktura = e.target.value.trim(); await tillvalSparaLista(); };
     document.getElementById('tvListaKopiera').onclick = async () => {
       const fran = document.getElementById('tvListaFran').value; if(!fran){ showToast('Välj projekt att kopiera från.'); return; }
       let kalla = null; try{ const res = await window.storage.get(tillvalListaKey(fran), true); kalla = res && res.value ? JSON.parse(res.value) : null; }catch(e){ kalla = null; }
@@ -16804,17 +16816,24 @@ function tillvalListaPopup(){
 }
 
 // ----- Offerten (internt) -----
+// Brevtexten överst i nya offerter (kan ändras per offert).
+const TILLVAL_BREV_STD = 'Hej!\n\nTack för dina frågor om tillval till ditt nya hem. Vi har nu fått prisuppgifter från vår entreprenör och sammanställer dem här, så att du i lugn och ro kan välja vad du vill gå vidare med. Alla priser är inklusive moms, material och montering, om inget annat anges.';
 async function tillvalNyOffert(aptId){
   const apt = apartments.find(a => a.id === aptId); if(!apt) return;
   const proj = projects.find(x => x.id === activeProjectId);
   const n = tvOfferterFor(aptId).length + 1;
+  const k = tillvalLista.kontakt || {};
   const row = {
     id: 'tv-' + uid() + uid(), share_id: uid() + uid() + uid(), typ: 'offert', project_id: activeProjectId, apt_id: aptId, status: 'utkast', created_by_name: myName || '',
     data: {
       nr: 'T-' + (apt.lgh || '0') + '-' + n, projektNamn: proj ? proj.name : '', lgh: apt.lgh || '', adress: apt.address || '',
+      avser: (proj ? proj.name : '') + (apt.lgh ? ', hus ' + apt.lgh : '') + (apt.address ? ' · ' + apt.address : ''),
       kund: tvKopare(apt), epost: (apt.sald && apt.sald.buyer1 && apt.sald.buyer1.email) || '',
       datum: new Date().toLocaleDateString('sv-SE'), giltigTill: new Date(Date.now() + 14 * 864e5).toLocaleDateString('sv-SE'),
-      meddelande: '', villkor: tillvalLista.villkor || TILLVAL_VILLKOR_STD, rader: []
+      meddelande: TILLVAL_BREV_STD, notRubrik: '', notText: '', villkor: tillvalLista.villkor || TILLVAL_VILLKOR_STD,
+      betalInsats: tillvalLista.betalInsats || TILLVAL_BETAL_STD.insats, betalFaktura: tillvalLista.betalFaktura || TILLVAL_BETAL_STD.faktura,
+      kontaktNamn: k.namn || myName || '', kontaktRoll: k.roll || '', kontaktEpost: k.epost || myEmail || '', kontaktTelefon: k.telefon || '',
+      rader: []
     }
   };
   try{
@@ -16824,10 +16843,12 @@ async function tillvalNyOffert(aptId){
     tillvalOppnaOffert(row.id);
   }catch(e){ showDebugError('Kunde inte skapa offerten', e); }
 }
+// En rad utan pris är "pris på förfrågan": kunden kryssar i att hen vill ha en offert på den.
+function tvUtanPris(r){ return r.pris === '' || r.pris == null; }
 function tillvalOppnaOffert(id){
   const o = tillvalOfferter.find(x => x.id === id); if(!o) return;
   const d = o.data;
-  const p = ekoPopup({ title: 'Tillvalsoffert ' + (d.nr || ''), sub: 'LGH ' + (d.lgh || '—') + (d.adress ? ' · ' + d.adress : ''), maxWidth: 940 });
+  const p = ekoPopup({ title: 'Tillvalsoffert ' + (d.nr || ''), sub: 'LGH ' + (d.lgh || '—') + (d.adress ? ' · ' + d.adress : ''), maxWidth: 1000 });
   const stang = p.close; p.close = () => { stang(); renderTillval(); };
   const stangKnapp = p.actions.querySelector('button'); stangKnapp.onclick = p.close;
   const last = () => o.status === 'besvarad' || o.status === 'godkand';
@@ -16835,41 +16856,48 @@ function tillvalOppnaOffert(id){
     try{ await DB.updateTillvalOffert(o.id, patch || { data: o.data }); const s = p.box.querySelector('.tv-sparat'); if(s){ s.textContent = 'Sparat ' + new Date().toLocaleTimeString('sv-SE').slice(0, 5); } renderTillval(); return true; }
     catch(e){ showDebugError('Kunde inte spara offerten', e); return false; }
   };
+  const radSummaText = r => tvUtanPris(r) ? 'offert' : tvKr(tvRadSumma(r));
   const summor = () => {
     const tot = p.body.querySelector('[data-tv-total]'); if(tot) tot.textContent = tvKr(tvSumma(d.rader));
-    p.body.querySelectorAll('tr[data-rad]').forEach(tr => { const r = d.rader.find(x => x.id === tr.dataset.rad); const c = tr.querySelector('[data-tv-radsumma]'); if(r && c) c.textContent = tvKr(tvRadSumma(r)); });
+    p.body.querySelectorAll('tr[data-rad]').forEach(tr => { const r = d.rader.find(x => x.id === tr.dataset.rad); const c = tr.querySelector('[data-tv-radsumma]'); if(r && c) c.textContent = radSummaText(r); });
   };
   const rita = () => {
     const valda = tvValda(o), las = last();
+    const av = las ? ' disabled' : '';
     let h = '<div class="tv-statusrad"><span class="tv-pill tv-' + o.status + '">' + TILLVAL_STATUS[o.status] + '</span><span class="tv-sparat tv-liten"></span></div>';
     if(o.svar && las){
       h += '<div class="tv-svar"><b>Kundens svar</b> · ' + escapeHtml(o.svar.namn || '') + (o.svar.at ? ' · ' + new Date(o.svar.at).toLocaleString('sv-SE').slice(0, 16) : '') +
-        '<div>Beställer ' + (valda ? valda.length : 0) + ' av ' + d.rader.length + ' tillval för ' + tvKr(tvSumma(d.rader, valda || [])) + '.</div>' +
+        '<div>Beställer ' + (valda ? valda.length : 0) + ' av ' + d.rader.length + ' tillval för ' + tvKr(tvSumma(d.rader, valda || [])) + '.' + (TILLVAL_BETAL_NAMN[o.svar.betalning] ? ' Betalning: <b>' + TILLVAL_BETAL_NAMN[o.svar.betalning] + '</b>.' : '') + '</div>' +
         (o.svar.kommentar ? '<div class="tv-kommentar">' + escapeHtml(o.svar.kommentar) + '</div>' : '') + '</div>';
     }
     if(o.status === 'godkand' && d.godkand) h += '<div class="tv-liten" style="margin-bottom:10px;">Godkänd av ' + escapeHtml(d.godkand.av || '') + ' ' + tvDatum(d.godkand.at) + '. Lägenhetens tillval är uppdaterade.</div>';
-    const falt = (etikett, f, typ) => '<label class="tv-falt"><span>' + etikett + '</span><input type="' + (typ || 'text') + '" data-f="' + f + '" value="' + tvAttr(d[f] || '') + '"' + (las ? ' disabled' : '') + '></label>';
-    h += '<div class="tv-faltrad">' + falt('Kund', 'kund') + falt('E-post', 'epost', 'email') + falt('Giltig till', 'giltigTill', 'date') + '</div>';
-    h += '<label class="tv-etikett">Meddelande till kunden</label><textarea class="tv-text" data-f="meddelande" rows="2"' + (las ? ' disabled' : '') + ' placeholder="Visas överst i offerten">' + escapeHtml(d.meddelande || '') + '</textarea>';
-    h += '<table class="tv-tabell tv-redigera" style="margin-top:12px;"><thead><tr>' + (valda ? '<th style="width:70px;">Kunden</th>' : '') + '<th>Tillval</th><th>Beskrivning</th><th style="width:70px;" class="tv-h">Antal</th><th style="width:110px;" class="tv-h">Pris</th><th style="width:110px;" class="tv-h">Summa</th>' + (las ? '' : '<th style="width:34px;"></th>') + '</tr></thead><tbody>';
+    const falt = (etikett, f, typ, stil) => '<label class="tv-falt"' + (stil ? ' style="' + stil + '"' : '') + '><span>' + etikett + '</span><input type="' + (typ || 'text') + '" data-f="' + f + '" value="' + tvAttr(d[f] || '') + '"' + av + '></label>';
+    h += '<div class="tv-faltrad">' + falt('Till (kund)', 'kund') + falt('Kundens e-post', 'epost', 'email') + falt('Svar önskas senast', 'giltigTill', 'date') + '</div>';
+    h += '<div class="tv-faltrad" style="margin-top:8px;">' + falt('Avser (står under rubriken)', 'avser', 'text', 'flex-basis:100%;') + '</div>';
+    h += '<label class="tv-etikett">Brevtext överst</label><textarea class="tv-text" data-f="meddelande" rows="4"' + av + '>' + escapeHtml(d.meddelande || '') + '</textarea>';
+    h += '<table class="tv-tabell tv-redigera" style="margin-top:12px;"><thead><tr>' + (valda ? '<th style="width:64px;">Kunden</th>' : '') + '<th>Tillval</th><th>Beskrivning</th><th style="width:64px;" class="tv-h">Antal</th>' + (las ? '' : '<th style="width:104px;" class="tv-h" title="Fyll i om kunden får rabatt. Visas överstruket.">Ord. pris</th>') + '<th style="width:104px;" class="tv-h" title="Lämna tomt för pris på förfrågan">Pris</th><th style="width:100px;" class="tv-h">Summa</th>' + (las ? '' : '<th style="width:34px;"></th>') + '</tr></thead><tbody>';
     d.rader.forEach(r => {
       const vald = valda ? valda.indexOf(r.id) >= 0 : null;
       h += '<tr data-rad="' + tvAttr(r.id) + '"' + (vald === false ? ' class="tv-ejvald"' : '') + '>' + (valda ? '<td>' + (vald ? '<span class="tv-ja">Ja</span>' : '<span class="tv-nej">Nej</span>') + '</td>' : '');
-      if(las) h += '<td>' + escapeHtml(r.namn || '') + (r.kategori ? '<div class="tv-liten">' + escapeHtml(r.kategori) + '</div>' : '') + '</td><td>' + escapeHtml(r.beskrivning || '') + '</td><td class="tv-h">' + tvAntalText(r) + '</td><td class="tv-h">' + tvKr(tvTal(r.pris)) + '</td><td class="tv-h">' + tvKr(tvRadSumma(r)) + '</td>';
-      else h += '<td><input type="text" data-r="namn" value="' + tvAttr(r.namn || '') + '" placeholder="Tillval"></td><td><input type="text" data-r="beskrivning" value="' + tvAttr(r.beskrivning || '') + '"></td><td><input type="number" data-r="antal" value="' + tvAttr(r.antal) + '" min="0" step="any" style="text-align:right;"></td><td><input type="number" data-r="pris" value="' + tvAttr(r.pris) + '" step="1" style="text-align:right;"></td><td class="tv-h" data-tv-radsumma>' + tvKr(tvRadSumma(r)) + '</td><td><button type="button" class="tv-knapp tv-diskret" data-rad-bort="1" title="Ta bort raden">✕</button></td>';
+      if(las) h += '<td>' + escapeHtml(r.namn || '') + '</td><td>' + escapeHtml(r.beskrivning || '') + '</td><td class="tv-h">' + tvAntalText(r) + '</td><td class="tv-h">' + (tvUtanPris(r) ? 'offert' : tvKr(tvTal(r.pris))) + '</td><td class="tv-h">' + radSummaText(r) + '</td>';
+      else h += '<td><input type="text" data-r="namn" value="' + tvAttr(r.namn || '') + '" placeholder="Tillval"></td><td><input type="text" data-r="beskrivning" value="' + tvAttr(r.beskrivning || '') + '"></td><td><input type="number" data-r="antal" value="' + tvAttr(r.antal) + '" min="0" step="any" style="text-align:right;"></td><td><input type="number" data-r="ordPris" value="' + tvAttr(r.ordPris == null ? '' : r.ordPris) + '" step="1" style="text-align:right;"></td><td><input type="number" data-r="pris" value="' + tvAttr(r.pris == null ? '' : r.pris) + '" step="1" placeholder="offert" style="text-align:right;"></td><td class="tv-h" data-tv-radsumma>' + radSummaText(r) + '</td><td><button type="button" class="tv-knapp tv-diskret" data-rad-bort="1" title="Ta bort raden">✕</button></td>';
       h += '</tr>';
     });
-    if(!d.rader.length) h += '<tr><td colspan="7" class="tv-liten" style="padding:14px; text-align:center;">Offerten har inga rader än.</td></tr>';
-    h += '</tbody><tfoot><tr><td colspan="' + ((valda ? 1 : 0) + 4) + '" class="tv-h"><b>Summa offererat</b></td><td class="tv-h"><b data-tv-total>' + tvKr(tvSumma(d.rader)) + '</b></td>' + (las ? '' : '<td></td>') + '</tr>' +
-      (valda ? '<tr><td colspan="5" class="tv-h"><b>Summa beställt</b></td><td class="tv-h"><b>' + tvKr(tvSumma(d.rader, valda)) + '</b></td>' + (las ? '' : '<td></td>') + '</tr>' : '') + '</tfoot></table>';
+    if(!d.rader.length) h += '<tr><td colspan="8" class="tv-liten" style="padding:14px; text-align:center;">Offerten har inga rader än.</td></tr>';
+    const kol = (valda ? 1 : 0) + (las ? 4 : 5);
+    h += '</tbody><tfoot><tr><td colspan="' + kol + '" class="tv-h"><b>Summa offererat</b></td><td class="tv-h"><b data-tv-total>' + tvKr(tvSumma(d.rader)) + '</b></td>' + (las ? '' : '<td></td>') + '</tr>' +
+      (valda ? '<tr><td colspan="' + kol + '" class="tv-h"><b>Summa beställt</b></td><td class="tv-h"><b>' + tvKr(tvSumma(d.rader, valda)) + '</b></td>' + (las ? '' : '<td></td>') + '</tr>' : '') + '</tfoot></table>';
     if(!las){
       const grupper = {}; tillvalLista.poster.filter(x => x.namn).forEach(x => { (grupper[x.kategori || 'Övrigt'] = grupper[x.kategori || 'Övrigt'] || []).push(x); });
       h += '<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0 4px;"><select id="tvVal" class="tv-val" style="flex:1 1 260px;"><option value="">Välj från prislistan…</option>' +
-        Object.keys(grupper).map(k => '<optgroup label="' + tvAttr(k) + '">' + grupper[k].map(x => '<option value="' + tvAttr(x.id) + '">' + escapeHtml(x.namn) + ' · ' + tvKr(tvTal(x.pris)) + '</option>').join('') + '</optgroup>').join('') +
+        Object.keys(grupper).map(g => '<optgroup label="' + tvAttr(g) + '">' + grupper[g].map(x => '<option value="' + tvAttr(x.id) + '">' + escapeHtml(x.namn) + ' · ' + tvKr(tvTal(x.pris)) + '</option>').join('') + '</optgroup>').join('') +
         '</select><button type="button" class="upload-btn" id="tvLaggTill">Lägg till</button><button type="button" class="upload-btn" id="tvEgenRad">+ Egen rad</button></div>';
-      if(!tillvalLista.poster.length) h += '<div class="tv-liten">Prislistan är tom. Lägg upp den under knappen Prislista, eller skriv egna rader här.</div>';
+      h += '<div class="tv-liten">' + (tillvalLista.poster.length ? '' : 'Prislistan är tom. Lägg upp den under knappen Prislista, eller skriv egna rader här. ') + 'Lämna Pris tomt om kunden ska få pris på förfrågan. Fyll i Ord. pris om ni ger rabatt.</div>';
     }
-    h += '<label class="tv-etikett">Villkor</label><textarea class="tv-text" data-f="villkor" rows="2"' + (las ? ' disabled' : '') + '>' + escapeHtml(d.villkor || '') + '</textarea>';
+    h += '<div class="tv-faltrad" style="margin-top:12px;">' + falt('Informationsruta, rubrik (valfri)', 'notRubrik', 'text', 'flex-basis:100%;') + '</div>';
+    h += '<label class="tv-etikett">Informationsruta, text (till exempel ett förbehåll)</label><textarea class="tv-text" data-f="notText" rows="3"' + av + '>' + escapeHtml(d.notText || '') + '</textarea>';
+    h += '<label class="tv-etikett">Villkor (finstilt under tabellen)</label><textarea class="tv-text" data-f="villkor" rows="2"' + av + '>' + escapeHtml(d.villkor || '') + '</textarea>';
+    h += '<label class="tv-etikett">Kontaktperson som står längst ner</label><div class="tv-faltrad">' + falt('Namn', 'kontaktNamn') + falt('Roll', 'kontaktRoll') + falt('E-post', 'kontaktEpost', 'email') + falt('Telefon', 'kontaktTelefon') + '</div>';
     if(o.status !== 'utkast') h += '<label class="tv-etikett">Kundens länk</label><div style="display:flex; gap:8px;"><input type="text" readonly class="tv-lank" value="' + tvAttr(tvLank(o)) + '"><button type="button" class="upload-btn" id="tvKopieraLank">Kopiera</button></div>';
     p.body.innerHTML = h;
     // Knappar längst ner, till vänster om Stäng
@@ -16883,7 +16911,7 @@ function tillvalOppnaOffert(id){
       knapp('Dra tillbaka', async () => { if(!confirm('Dra tillbaka offerten? Kundens länk slutar fungera tills ni skapar länken igen.')) return; o.status = 'utkast'; if(await spara({ status: 'utkast', data: o.data })) rita(); });
       knapp('Förhandsgranska', () => tillvalForhandsgranska(o));
       knapp('Öppna länken', () => window.open(tvLank(o), '_blank'));
-      if(d.epost) knapp('E-posta kunden', () => { location.href = 'mailto:' + d.epost.replace(/[^\w.@+-]/g, '') + '?subject=' + encodeURIComponent('Offert tillval, ' + (d.projektNamn || '') + ' lägenhet ' + (d.lgh || '')) + '&body=' + encodeURIComponent('Hej!\n\nHär är er offert på tillval. Öppna länken, välj de tillval ni vill ha och skicka in beställningen senast ' + (d.giltigTill || '') + '.\n\n' + tvLank(o) + '\n\nMed vänlig hälsning\n' + (myName || '') + '\nSolvinkeln Fastigheter'); });
+      if(d.epost) knapp('E-posta kunden', () => { location.href = 'mailto:' + d.epost.replace(/[^\w.@+-]/g, '') + '?subject=' + encodeURIComponent('Dina tillval, ' + (d.projektNamn || '') + (d.lgh ? ' hus ' + d.lgh : '')) + '&body=' + encodeURIComponent('Hej!\n\nHär är sammanställningen av dina tillval. Öppna länken, kryssa i de tillval du vill beställa och skicka in svaret senast ' + tvLangtDatum(d.giltigTill) + '.\n\n' + tvLank(o) + '\n\nMed vänlig hälsning\n' + (d.kontaktNamn || myName || '') + '\nSolvinkeln Fastigheter'); });
     } else if(o.status === 'besvarad'){
       knapp('Öppna igen för kunden', async () => { if(!confirm('Öppna offerten igen? Kunden kan då ändra sina val, och ni kan ändra raderna.')) return; o.status = 'skickad'; if(await spara({ status: 'skickad' })) rita(); });
       knapp('Godkänn beställningen', godkann, 'primar');
@@ -16899,11 +16927,11 @@ function tillvalOppnaOffert(id){
     const lt = document.getElementById('tvLaggTill');
     if(lt) lt.onclick = async () => {
       const x = tillvalLista.poster.find(y => y.id === document.getElementById('tvVal').value); if(!x){ showToast('Välj ett tillval i listan.'); return; }
-      d.rader.push({ id: uid(), namn: x.namn, beskrivning: x.beskrivning || '', kategori: x.kategori || '', antal: 1, pris: tvTal(x.pris), listaId: x.id });
+      d.rader.push({ id: uid(), namn: x.namn, beskrivning: x.beskrivning || '', kategori: x.kategori || '', antal: 1, ordPris: '', pris: x.pris === '' || x.pris == null ? '' : tvTal(x.pris), listaId: x.id });
       rita(); await spara();
     };
     const er = document.getElementById('tvEgenRad');
-    if(er) er.onclick = async () => { d.rader.push({ id: uid(), namn: '', beskrivning: '', kategori: '', antal: 1, pris: 0 }); rita(); const rader = p.body.querySelectorAll('tr[data-rad]'); const sista = rader[rader.length - 1]; if(sista) sista.querySelector('input[data-r="namn"]').focus(); await spara(); };
+    if(er) er.onclick = async () => { d.rader.push({ id: uid(), namn: '', beskrivning: '', kategori: '', antal: 1, ordPris: '', pris: '' }); rita(); const rader = p.body.querySelectorAll('tr[data-rad]'); const sista = rader[rader.length - 1]; if(sista) sista.querySelector('input[data-r="namn"]').focus(); await spara(); };
   };
   const taBort = async () => {
     if(!confirm('Ta bort offerten ' + (d.nr || '') + '?')) return;
@@ -16919,10 +16947,12 @@ function tillvalOppnaOffert(id){
   const godkann = async () => {
     const apt = apartments.find(a => a.id === o.apt_id);
     const valda = (o.svar && Array.isArray(o.svar.valda) ? o.svar.valda : []).filter(vid => d.rader.some(r => r.id === vid));
+    const utanPris = d.rader.filter(r => valda.indexOf(r.id) >= 0 && tvUtanPris(r));
+    if(utanPris.length && !confirm('Kunden vill ha pris på: ' + utanPris.map(r => r.namn).join(', ') + '. De raderna godkänns utan belopp. Öppna hellre offerten igen och sätt ett pris först. Godkänna ändå?')) return;
     if(apt && apt.tillval.done && !apt.tillval.offert && (apt.tillval.amount || apt.tillval.note)){
       if(!confirm('Lägenheten har redan tillval inlagt för hand' + (apt.tillval.amount ? ' (' + tvKr(parseKr(apt.tillval.amount)) + ')' : '') + '. Det ersätts av de godkända offerterna. Fortsätta?')) return;
     }
-    o.status = 'godkand'; d.godkand = { av: myName || '', at: new Date().toISOString(), valda, summa: tvSumma(d.rader, valda) };
+    o.status = 'godkand'; d.godkand = { av: myName || '', at: new Date().toISOString(), valda, summa: tvSumma(d.rader, valda), betalning: (o.svar && TILLVAL_BETAL_NAMN[o.svar.betalning]) ? o.svar.betalning : '' };
     if(await spara({ status: 'godkand', data: o.data })){
       await tillvalSynkaLagenhet(o.apt_id); await tillvalRapportSynka(); rita();
       showToast('Beställningen är godkänd och lägenheten uppdaterad.');
@@ -16931,10 +16961,16 @@ function tillvalOppnaOffert(id){
   p.body.addEventListener('change', async e => {
     if(last()) return;
     const t = e.target;
-    if(t.dataset.f){ d[t.dataset.f] = t.value.trim(); await spara(); return; }
+    if(t.dataset.f){
+      d[t.dataset.f] = t.value.trim();
+      // Kontaktpersonen följer med till nästa offert i projektet.
+      if(/^kontakt/.test(t.dataset.f)){ tillvalLista.kontakt = { namn: d.kontaktNamn || '', roll: d.kontaktRoll || '', epost: d.kontaktEpost || '', telefon: d.kontaktTelefon || '' }; tillvalSparaLista(); }
+      await spara(); return;
+    }
     const tr = t.closest('tr[data-rad]'); if(!tr || !t.dataset.r) return;
     const r = d.rader.find(x => x.id === tr.dataset.rad); if(!r) return;
-    r[t.dataset.r] = (t.dataset.r === 'antal' || t.dataset.r === 'pris') ? tvTal(t.value) : t.value.trim();
+    const f = t.dataset.r;
+    r[f] = f === 'antal' ? tvTal(t.value) : (f === 'pris' || f === 'ordPris') ? (t.value.trim() === '' ? '' : tvTal(t.value)) : t.value.trim();
     summor(); await spara();
   });
   p.body.addEventListener('click', async e => {
@@ -16954,7 +16990,7 @@ async function tillvalSynkaLagenhet(aptId){
   const apt = apartments.find(a => a.id === aptId); if(!apt) return;
   const godk = tvOfferterFor(aptId).filter(o => o.status === 'godkand');
   if(!godk.length){
-    if(apt.tillval.offert){ apt.tillval.note = ''; apt.tillval.amount = ''; apt.tillval.done = false; apt.tillval.by = ''; apt.tillval.at = ''; apt.tillval.offert = false; }
+    if(apt.tillval.offert){ apt.tillval.note = ''; apt.tillval.amount = ''; apt.tillval.done = false; apt.tillval.by = ''; apt.tillval.at = ''; apt.tillval.offert = false; apt.tillval.betalning = ''; apt.tillval.invoicedLoan = false; }
   } else {
     const rader = [];
     godk.forEach(o => o.data.rader.forEach(r => { if(((o.data.godkand && o.data.godkand.valda) || []).indexOf(r.id) >= 0) rader.push(r); }));
@@ -16963,6 +16999,10 @@ async function tillvalSynkaLagenhet(aptId){
     if(text.length > 160) text = text.slice(0, 157) + '…';
     apt.tillval.note = text; apt.tillval.amount = summa ? String(summa) : '';
     apt.tillval.done = true; apt.tillval.by = myName || ''; apt.tillval.at = new Date().toISOString(); apt.tillval.offert = true;
+    // Betalningssättet från den senast godkända offerten. Höjd insats betalas med slutbetalningen,
+    // vilket är samma sak som bocken "Bolån" i tillvalsrutan (den styr Betalningar-fliken).
+    const medVal = godk.filter(o => o.data.godkand && o.data.godkand.betalning).sort((a, b) => String(a.data.godkand.at).localeCompare(String(b.data.godkand.at))).pop();
+    if(medVal){ apt.tillval.betalning = medVal.data.godkand.betalning; apt.tillval.invoicedLoan = apt.tillval.betalning === 'insats'; }
   }
   renderTable();
   await persistApartments();
@@ -17058,70 +17098,98 @@ async function tillvalAvisera(){
 }
 
 // ----- Kundens sida och entreprenörens sida (öppnas via ?tillval=<share_id>, ingen inloggning) -----
-function tillvalSidhuvud(rubrik, raderHoger){
-  const logga = tvLogga();
-  return '<div class="tvo-huvud"><div>' + (logga ? '<img src="' + logga + '" alt="Solvinkeln Fastigheter">' : '<b>Solvinkeln Fastigheter</b>') + '</div><div class="tvo-hoger"><div class="tvo-rubrik">' + rubrik + '</div>' + raderHoger.filter(x => x[1]).map(x => '<div><span>' + x[0] + '</span> ' + escapeHtml(x[1]) + '</div>').join('') + '</div></div>';
+// Utseendet följer Solvinkelns tillvalsbrev: grönt sidhuvud med loggan, brevtext, tillval med pris,
+// informationsruta, villkor och ett svarsformulär i stället för svarsblanketten på papper.
+function tvLangtDatum(iso){ const x = new Date(String(iso || '') + 'T12:00:00'); return isNaN(x) ? String(iso || '') : x.toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' }); }
+function tvStycken(text){ return escapeHtml(String(text || '')).split(/\n\s*\n/).map(s => s.trim()).filter(Boolean).map(s => '<p>' + s.replace(/\n/g, '<br>') + '</p>').join(''); }
+function tvHarRabatt(r){ return !tvUtanPris(r) && tvTal(r.ordPris) > tvTal(r.pris); }
+function tvPrisHtml(r){
+  if(tvUtanPris(r)) return '<span class="tvo-offert">offert</span>';
+  if(tvHarRabatt(r)) return '<s>' + tvKr(tvTal(r.ordPris) * tvTal(r.antal)) + '</s><span class="tvo-rabattpris">' + tvKr(tvRadSumma(r)) + '</span>';
+  return tvKr(tvRadSumma(r));
 }
+function tillvalBand(rubrik, under){
+  const logga = tvLogga();
+  return '<div class="tvo-band">' + (logga ? '<img src="' + logga + '" alt="Solvinkeln Fastigheter">' : '<div class="tvo-marke">Solvinkeln Fastigheter</div>') + '<h1>' + rubrik + '</h1><div class="tvo-under">' + escapeHtml(under || '') + '</div></div>';
+}
+function tillvalFot(hoger){ return '<div class="tvo-fot"><span><b>Solvinkeln Fastigheter</b> · Det ska vara lätt att leva. · solvinkeln.se</span><span>' + escapeHtml(hoger || '') + '</span></div>'; }
 // lage: 'valj' (kunden väljer), 'skickat' (kunden har svarat), 'bekraftad' (vi har godkänt), 'forhands', 'utgangen'
 function tillvalOffertHtml(o, lage){
   const d = o.data || {}, rader = d.rader || [];
   const tidigare = o.svar && Array.isArray(o.svar.valda) ? o.svar.valda : null;
-  const valda = lage === 'bekraftad' ? ((d.godkand && d.godkand.valda) || []) : (tidigare || rader.map(r => r.id));
   const valj = lage === 'valj' || lage === 'forhands';
-  const visa = lage === 'bekraftad' || lage === 'skickat' ? rader.filter(r => valda.indexOf(r.id) >= 0) : rader;
-  let h = '<div class="tvo-blad">' + tillvalSidhuvud(lage === 'bekraftad' ? 'Orderbekräftelse tillval' : 'Offert tillval', [['Offertnr', d.nr], ['Datum', d.datum], [lage === 'bekraftad' ? '' : 'Giltig till', lage === 'bekraftad' ? '' : d.giltigTill]]);
-  h += '<div class="tvo-parter"><div><span>Kund</span><b>' + escapeHtml(d.kund || '') + '</b></div><div><span>Avser</span><b>' + escapeHtml(d.projektNamn || '') + '</b><div>Lägenhet ' + escapeHtml(d.lgh || '') + (d.adress ? ' · ' + escapeHtml(d.adress) : '') + '</div></div></div>';
-  if(lage === 'bekraftad') h += '<div class="tvo-ruta tvo-ok">Beställningen är bekräftad av Solvinkeln ' + tvDatum(d.godkand && d.godkand.at) + '.</div>';
-  if(lage === 'skickat') h += '<div class="tvo-ruta tvo-ok">Tack! Er beställning är mottagen' + (o.svar && o.svar.at ? ' ' + new Date(o.svar.at).toLocaleString('sv-SE').slice(0, 16) : '') + '. Den gäller när vi har bekräftat den. Fram till dess kan ni ändra era val.</div>';
-  if(lage === 'utgangen') h += '<div class="tvo-ruta tvo-varning">Offerten gällde till ' + escapeHtml(d.giltigTill || '') + ' och kan inte längre besvaras. Kontakta oss så tar vi fram en ny.</div>';
-  if(d.meddelande && lage !== 'bekraftad') h += '<p class="tvo-meddelande">' + escapeHtml(d.meddelande).replace(/\n/g, '<br>') + '</p>';
-  if(valj) h += '<p class="tvo-hjalp">Bocka i de tillval ni vill beställa. Summan räknas om automatiskt.</p>';
-  h += '<table class="tvo-tabell"><thead><tr>' + (valj ? '<th class="tvo-bockkol"></th>' : '') + '<th>Tillval</th><th class="tvo-h tvo-d">Antal</th><th class="tvo-h tvo-d">Pris</th><th class="tvo-h">Summa</th></tr></thead><tbody>';
-  let kategori = null;
-  const ordnade = visa.slice().sort((a, b) => String(a.kategori || '').localeCompare(String(b.kategori || ''), 'sv'));
-  const harKategorier = ordnade.some(r => r.kategori);
-  ordnade.forEach(r => {
-    if(harKategorier && (r.kategori || 'Övrigt') !== kategori){ kategori = r.kategori || 'Övrigt'; h += '<tr class="tvo-kat"><td colspan="' + (valj ? 5 : 4) + '">' + escapeHtml(kategori) + '</td></tr>'; }
-    const vald = valda.indexOf(r.id) >= 0;
-    h += '<tr data-rad="' + tvAttr(r.id) + '"' + (valj && !vald ? ' class="tvo-av"' : '') + '>' + (valj ? '<td class="tvo-bockkol"><input type="checkbox" data-tvo-bock value="' + tvAttr(r.id) + '"' + (vald ? ' checked' : '') + (lage === 'forhands' ? ' disabled' : '') + ' aria-label="Beställ ' + tvAttr(r.namn) + '"></td>' : '') +
-      '<td><b>' + escapeHtml(r.namn || '') + '</b>' + (r.beskrivning ? '<div class="tvo-besk">' + escapeHtml(r.beskrivning) + '</div>' : '') + (tvTal(r.antal) !== 1 ? '<div class="tvo-besk tvo-m">' + tvAntalText(r) + ' × ' + tvKr(tvTal(r.pris)) + '</div>' : '') + '</td><td class="tvo-h tvo-d">' + tvAntalText(r) + '</td><td class="tvo-h tvo-d">' + tvKr(tvTal(r.pris)) + '</td><td class="tvo-h">' + tvKr(tvRadSumma(r)) + '</td></tr>';
+  const klar = lage === 'skickat' || lage === 'bekraftad';
+  const valda = lage === 'bekraftad' ? ((d.godkand && d.godkand.valda) || []) : (tidigare || []);
+  const visa = klar ? rader.filter(r => valda.indexOf(r.id) >= 0) : rader;
+  const avser = d.avser || ((d.projektNamn || '') + (d.lgh ? ', hus ' + d.lgh : '') + (d.adress ? ' · ' + d.adress : ''));
+  const las = lage === 'forhands' ? ' disabled' : '';
+  let h = '<div class="tvo-blad">' + tillvalBand(lage === 'bekraftad' ? 'Orderbekräftelse.' : lage === 'skickat' ? 'Tack för ditt svar.' : 'Dina tillval.', avser) + '<div class="tvo-inne">';
+  h += '<div class="tvo-meta"><div><span>Till</span>' + escapeHtml(d.kund || '') + '</div><div><span>Datum</span>' + escapeHtml(tvLangtDatum(d.datum)) + '</div><div><span>' + (klar ? 'Offert' : 'Svar önskas senast') + '</span>' + escapeHtml(klar ? (d.nr || '') : tvLangtDatum(d.giltigTill)) + '</div></div>';
+  if(lage === 'bekraftad') h += '<div class="tvo-ruta tvo-ok">Beställningen är bekräftad av Solvinkeln ' + escapeHtml(tvLangtDatum(String((d.godkand && d.godkand.at) || '').slice(0, 10))) + '.</div>';
+  if(lage === 'skickat') h += '<div class="tvo-ruta tvo-ok">Vi har tagit emot ditt svar' + (o.svar && o.svar.at ? ' ' + new Date(o.svar.at).toLocaleString('sv-SE').slice(0, 16) : '') + '. Beställningen gäller när vi har bekräftat den. Fram till dess kan du ändra dina val.</div>';
+  if(lage === 'utgangen') h += '<div class="tvo-ruta tvo-varning">Svarstiden gick ut ' + escapeHtml(tvLangtDatum(d.giltigTill)) + ' och offerten kan inte längre besvaras här. Hör av dig så tar vi fram en ny.</div>';
+  if(!klar && d.meddelande) h += '<div class="tvo-brev">' + tvStycken(d.meddelande) + '</div>';
+  h += '<table class="tvo-tabell"><thead><tr><th>Tillval</th><th class="tvo-h">Pris</th></tr></thead><tbody>';
+  visa.forEach(r => {
+    const a = tvTal(r.antal);
+    h += '<tr><td><div class="tvo-namn">' + escapeHtml(r.namn || '') + (tvHarRabatt(r) ? '<span class="tvo-rabatt">Rabatt</span>' : '') + '</div>' +
+      (r.beskrivning ? '<div class="tvo-besk">' + escapeHtml(r.beskrivning) + '</div>' : '') +
+      (a !== 1 && !tvUtanPris(r) ? '<div class="tvo-besk">' + tvAntalText(r) + ' st à ' + tvKr(tvTal(r.pris)) + '</div>' : '') + '</td><td class="tvo-h">' + tvPrisHtml(r) + '</td></tr>';
   });
-  if(!visa.length) h += '<tr><td colspan="5" class="tvo-besk" style="text-align:center; padding:18px;">' + (lage === 'bekraftad' || lage === 'skickat' ? 'Inga tillval beställda.' : 'Offerten har inga rader.') + '</td></tr>';
-  h += '</tbody><tfoot><tr>' + (valj ? '<td></td>' : '') + '<td class="tvo-h">' + (valj ? 'Summa valda tillval' : 'Summa') + '</td><td class="tvo-d"></td><td class="tvo-d"></td><td class="tvo-h" data-tvo-summa>' + tvKr(tvSumma(rader, valda)) + '</td></tr></tfoot></table>';
-  if(d.villkor) h += '<p class="tvo-villkor">' + escapeHtml(d.villkor).replace(/\n/g, '<br>') + '</p>';
-  if(lage === 'skickat' || lage === 'bekraftad'){
-    if(o.svar && (o.svar.namn || o.svar.kommentar)) h += '<p class="tvo-villkor">Beställt av ' + escapeHtml(o.svar.namn || '') + (o.svar.kommentar ? '. Kommentar: ' + escapeHtml(o.svar.kommentar) : '') + '</p>';
+  if(!visa.length) h += '<tr><td colspan="2" class="tvo-besk" style="text-align:center; padding:20px 6px;">' + (klar ? 'Inga tillval beställda.' : 'Offerten har inga rader.') + '</td></tr>';
+  h += '</tbody></table><div class="tvo-summarad"><span>' + (klar ? 'Summa beställda tillval' : 'Summa om samtliga väljs') + '</span><b>' + tvKr(klar ? tvSumma(rader, valda) : tvSumma(rader)) + '</b></div>';
+  if(!klar && (d.notRubrik || d.notText)) h += '<div class="tvo-not">' + (d.notRubrik ? '<h3>' + escapeHtml(d.notRubrik) + '</h3>' : '') + tvStycken(d.notText) + '</div>';
+  if(d.villkor) h += '<div class="tvo-villkor">' + tvStycken(d.villkor) + '</div>';
+  if(klar){
+    const betalt = lage === 'bekraftad' ? (d.godkand && d.godkand.betalning) : (o.svar && o.svar.betalning);
+    if(TILLVAL_BETAL_NAMN[betalt]) h += '<div class="tvo-betalvald"><span>Betalningssätt</span><b>' + TILLVAL_BETAL_NAMN[betalt] + '</b><p>' + escapeHtml(betalt === 'insats' ? (d.betalInsats || TILLVAL_BETAL_STD.insats) : (d.betalFaktura || TILLVAL_BETAL_STD.faktura)) + '</p></div>';
+    if(o.svar && (o.svar.namn || o.svar.kommentar)) h += '<div class="tvo-villkor"><p>Beställt av ' + escapeHtml(o.svar.namn || '') + (o.svar.kommentar ? '. Kommentar: ' + escapeHtml(o.svar.kommentar) : '.') + '</p></div>';
     h += '<div class="tvo-knappar tvo-ejprint">' + (lage === 'skickat' ? '<button type="button" class="tvo-sekundar" data-tvo-andra>Ändra mina val</button>' : '') + '<button type="button" class="tvo-sekundar" data-tvo-skrivut>Skriv ut eller spara som PDF</button></div>';
   }
   if(valj){
-    h += '<div class="tvo-svar tvo-ejprint"><label>Kommentar (valfritt)<textarea data-tvo-kommentar rows="2"' + (lage === 'forhands' ? ' disabled' : '') + '>' + escapeHtml((o.svar && o.svar.kommentar) || '') + '</textarea></label>' +
-      '<label>Ert namn<input type="text" data-tvo-namn autocomplete="name" value="' + tvAttr((o.svar && o.svar.namn) || '') + '"' + (lage === 'forhands' ? ' disabled' : '') + '></label>' +
-      '<div class="tvo-fel" data-tvo-fel></div><div class="tvo-knappar"><button type="button" class="tvo-primar" data-tvo-skicka' + (lage === 'forhands' ? ' disabled' : '') + '>Skicka beställning</button></div></div>';
+    h += '<h2 class="tvo-h2">Ditt svar.</h2><p class="tvo-hjalp">Kryssa i Ja för de tillval du vill beställa och skicka in svaret. Du kan ändra dig fram till att vi har bekräftat beställningen.</p><div class="tvo-svarslista">';
+    rader.forEach(r => {
+      const vald = valda.indexOf(r.id) >= 0;
+      h += '<label class="tvo-svarsrad' + (vald ? ' vald' : '') + '"><span class="tvo-svarsnamn">' + escapeHtml(r.namn || '') + '</span><span class="tvo-svarspris">' + tvPrisHtml(r) + '</span><span class="tvo-ja"><input type="checkbox" data-tvo-bock value="' + tvAttr(r.id) + '"' + (vald ? ' checked' : '') + las + '> Ja</span></label>';
+    });
+    h += '</div><div class="tvo-summarad"><span>Summa valda tillval</span><b data-tvo-summa>' + tvKr(tvSumma(rader, valda)) + '</b></div>';
+    const betalNu = o.svar && o.svar.betalning;
+    const betalKort = (kod, text) => '<label class="tvo-betal' + (betalNu === kod ? ' vald' : '') + '"><input type="radio" name="tvoBetalning" data-tvo-betal value="' + kod + '"' + (betalNu === kod ? ' checked' : '') + las + '><span><b>' + TILLVAL_BETAL_NAMN[kod] + '</b><em>' + escapeHtml(text) + '</em></span></label>';
+    h += '<h3 class="tvo-h3">Hur vill du betala?</h3><div class="tvo-betalval">' + betalKort('insats', d.betalInsats || TILLVAL_BETAL_STD.insats) + betalKort('faktura', d.betalFaktura || TILLVAL_BETAL_STD.faktura) + '</div>';
+    h += '<div class="tvo-villkor"><p>Genom att skicka in bekräftar jag beställningen av de tillval jag godkänt ovan, till angivet pris och med det betalningssätt jag valt.</p></div>';
+    h += '<label class="tvo-falt">Namn<input type="text" data-tvo-namn autocomplete="name" value="' + tvAttr((o.svar && o.svar.namn) || '') + '"' + las + '></label>' +
+      '<label class="tvo-falt">Kommentar (valfritt)<textarea data-tvo-kommentar rows="2"' + las + '>' + escapeHtml((o.svar && o.svar.kommentar) || '') + '</textarea></label>' +
+      '<div class="tvo-fel" data-tvo-fel></div><div class="tvo-knappar"><button type="button" class="tvo-primar" data-tvo-skicka' + las + '>Skicka in mitt svar</button></div>';
   }
-  return h + '</div>';
+  if(d.kontaktNamn || d.kontaktEpost || d.kontaktTelefon){
+    const epost = String(d.kontaktEpost || '').replace(/[^\w.@+-]/g, '');
+    h += '<div class="tvo-kontakt"><span>Frågor eller svar skickas till</span><b>' + escapeHtml(d.kontaktNamn || '') + '</b>' + (d.kontaktRoll ? ', ' + escapeHtml(d.kontaktRoll) : '') +
+      '<div>' + [epost ? '<a href="mailto:' + epost + '">' + escapeHtml(epost) + '</a>' : '', escapeHtml(d.kontaktTelefon || '')].filter(Boolean).join(' · ') + '</div></div>';
+  }
+  return h + tillvalFot(klar ? '' : d.nr) + '</div></div>';
 }
 function tillvalRapportHtml(d){
-  let h = '<div class="tvo-blad tvo-bred">' + tillvalSidhuvud('Tillvalsrapport', [['Projekt', d.projektNamn], ['Uppdaterad', new Date(d.uppdaterad).toLocaleString('sv-SE').slice(0, 16)]]);
   const hus = d.hus || [];
-  h += '<div class="tvo-ruta">' + hus.length + ' hus · ' + hus.filter(x => x.rader && x.rader.length).length + ' med tillval · totalt ' + tvKr(d.total) + '</div>';
+  let h = '<div class="tvo-blad tvo-bred">' + tillvalBand('Tillvalsrapport.', d.projektNamn) + '<div class="tvo-inne">';
+  h += '<div class="tvo-meta"><div><span>Uppdaterad</span>' + escapeHtml(new Date(d.uppdaterad).toLocaleString('sv-SE').slice(0, 16)) + '</div><div><span>Hus</span>' + hus.length + ' st, varav ' + hus.filter(x => x.rader && x.rader.length).length + ' med tillval</div><div><span>Totalt</span>' + tvKr(d.total) + '</div></div>';
   hus.forEach(x => {
-    h += '<div class="tvo-hus"><div class="tvo-husrubrik"><b>LGH ' + escapeHtml(x.lgh || '—') + '</b>' + (x.adress ? ' · ' + escapeHtml(x.adress) : '') + '<span class="tvo-husstatus' + (x.status === 'Klart' ? ' klar' : '') + '">' + escapeHtml(x.status || '') + '</span></div>';
-    if(!x.rader || !x.rader.length) h += '<div class="tvo-besk" style="padding:8px 0;">Inga tillval.</div>';
+    h += '<div class="tvo-hus"><div class="tvo-husrubrik"><b>Hus ' + escapeHtml(x.lgh || '—') + '</b>' + (x.adress ? ' · ' + escapeHtml(x.adress) : '') + '<span class="tvo-husstatus' + (x.status === 'Klart' ? ' klar' : '') + '">' + escapeHtml(x.status || '') + '</span></div>';
+    if(!x.rader || !x.rader.length) h += '<div class="tvo-besk" style="padding:10px 6px;">Inga tillval.</div>';
     else {
-      h += '<table class="tvo-tabell"><thead><tr><th>Tillval</th><th>Beskrivning</th><th class="tvo-h">Antal</th><th class="tvo-h">Pris</th><th class="tvo-h">Summa</th></tr></thead><tbody>' +
-        x.rader.map(r => '<tr><td><b>' + escapeHtml(r.namn) + '</b>' + (r.kategori ? '<div class="tvo-besk">' + escapeHtml(r.kategori) + '</div>' : '') + '</td><td>' + escapeHtml(r.beskrivning || '') + '</td><td class="tvo-h">' + String(r.antal).replace('.', ',') + '</td><td class="tvo-h">' + tvKr(r.pris) + '</td><td class="tvo-h">' + tvKr(r.antal * r.pris) + '</td></tr>').join('') +
-        '</tbody><tfoot><tr><td colspan="4" class="tvo-h">Summa lägenhet</td><td class="tvo-h">' + tvKr(x.summa) + '</td></tr></tfoot></table>';
+      h += '<table class="tvo-tabell tvo-fast"><thead><tr><th>Tillval</th><th>Beskrivning</th><th class="tvo-h">Antal</th><th class="tvo-h">Pris</th><th class="tvo-h">Summa</th></tr></thead><tbody>' +
+        x.rader.map(r => '<tr><td><div class="tvo-namn">' + escapeHtml(r.namn) + '</div></td><td class="tvo-besk">' + escapeHtml(r.beskrivning || '') + '</td><td class="tvo-h">' + String(r.antal).replace('.', ',') + '</td><td class="tvo-h">' + tvKr(r.pris) + '</td><td class="tvo-h">' + tvKr(r.antal * r.pris) + '</td></tr>').join('') +
+        '</tbody><tfoot><tr><td colspan="4" class="tvo-h">Summa hus ' + escapeHtml(x.lgh || '') + '</td><td class="tvo-h">' + tvKr(x.summa) + '</td></tr></tfoot></table>';
     }
     h += '</div>';
   });
-  h += '<div class="tvo-total">Totalt projektet <b>' + tvKr(d.total) + '</b></div><div class="tvo-knappar tvo-ejprint"><button type="button" class="tvo-sekundar" data-tvo-skrivut>Skriv ut eller spara som PDF</button></div>';
-  return h + '</div>';
+  h += '<div class="tvo-summarad" style="margin-top:28px;"><span>Totalt projektet</span><b>' + tvKr(d.total) + '</b></div><div class="tvo-knappar tvo-ejprint"><button type="button" class="tvo-sekundar" data-tvo-skrivut>Skriv ut eller spara som PDF</button></div>';
+  return h + tillvalFot('') + '</div></div>';
 }
 async function renderPublicTillvalView(shareId){
   const root = showPublicPropaOnly();
   root.className = 'tvo';
-  document.body.style.padding = '0'; document.body.style.margin = '0'; document.body.style.background = '#F3F0E8';
-  const medd = t => { root.innerHTML = '<div class="tvo-blad" style="text-align:center; color:var(--ink-soft);">' + t + '</div>'; };
+  document.body.style.padding = '0'; document.body.style.margin = '0'; document.body.style.background = '#EFEBE2';
+  const medd = t => { root.innerHTML = '<div class="tvo-blad">' + tillvalBand('Dina tillval.', '') + '<div class="tvo-inne" style="text-align:center; color:#77726A; font-size:14px;">' + t + '</div></div>'; };
   medd('Läser in…');
   let o = null;
   const hamta = async () => { const r = await DB.getPublicTillval(shareId); if(r && (!r.data || typeof r.data !== 'object')) r.data = {}; return r; };
@@ -17133,7 +17201,7 @@ async function renderPublicTillvalView(shareId){
     root.querySelector('[data-tvo-skrivut]').onclick = () => window.print();
     return;
   }
-  document.title = 'Offert tillval · ' + (o.data.projektNamn || '');
+  document.title = 'Dina tillval · ' + (o.data.projektNamn || '');
   let andrar = false;
   const rita = () => {
     const idag = new Date().toLocaleDateString('sv-SE');
@@ -17141,25 +17209,29 @@ async function renderPublicTillvalView(shareId){
     const lage = o.status === 'godkand' ? 'bekraftad' : (o.status === 'besvarad' && !andrar) ? 'skickat' : utgangen ? 'utgangen' : 'valj';
     root.innerHTML = tillvalOffertHtml(o, lage);
     const su = root.querySelector('[data-tvo-skrivut]'); if(su) su.onclick = () => window.print();
-    const an = root.querySelector('[data-tvo-andra]'); if(an) an.onclick = () => { andrar = true; rita(); window.scrollTo(0, 0); };
+    const an = root.querySelector('[data-tvo-andra]'); if(an) an.onclick = () => { andrar = true; rita(); const s = root.querySelector('.tvo-h2'); if(s) s.scrollIntoView(); };
     if(lage !== 'valj') return;
     const bockar = [...root.querySelectorAll('[data-tvo-bock]')];
     const valdaNu = () => bockar.filter(b => b.checked).map(b => b.value);
-    const rakna = () => { root.querySelector('[data-tvo-summa]').textContent = tvKr(tvSumma(o.data.rader, valdaNu())); bockar.forEach(b => b.closest('tr').classList.toggle('tvo-av', !b.checked)); };
-    bockar.forEach(b => b.onchange = rakna);
+    const rakna = () => { root.querySelector('[data-tvo-summa]').textContent = tvKr(tvSumma(o.data.rader, valdaNu())); bockar.forEach(b => b.closest('.tvo-svarsrad').classList.toggle('vald', b.checked)); };
+    const betalval = [...root.querySelectorAll('[data-tvo-betal]')];
+    betalval.forEach(b => { b.onchange = () => betalval.forEach(x => x.closest('.tvo-betal').classList.toggle('vald', x.checked)); });
+    bockar.forEach(b => { b.onchange = rakna; });
     const skicka = root.querySelector('[data-tvo-skicka]'), fel = root.querySelector('[data-tvo-fel]');
     skicka.onclick = async () => {
       const namn = root.querySelector('[data-tvo-namn]').value.trim(), kommentar = root.querySelector('[data-tvo-kommentar]').value.trim().slice(0, 2000), valda = valdaNu();
       fel.textContent = '';
-      if(!namn){ fel.textContent = 'Skriv ert namn innan ni skickar.'; root.querySelector('[data-tvo-namn]').focus(); return; }
-      if(!valda.length && !confirm('Ni har inte valt några tillval. Vill ni skicka in att ni avstår från tillval?')) return;
+      if(!namn){ fel.textContent = 'Skriv ditt namn innan du skickar.'; root.querySelector('[data-tvo-namn]').focus(); return; }
+      const betalning = (betalval.find(b => b.checked) || {}).value || '';
+      if(valda.length && !betalning){ fel.textContent = 'Välj hur du vill betala innan du skickar.'; root.querySelector('.tvo-h3').scrollIntoView({ block: 'center' }); return; }
+      if(!valda.length && !confirm('Du har inte kryssat i något tillval. Vill du skicka in att du avstår från tillval?')) return;
       skicka.disabled = true; skicka.textContent = 'Skickar…';
       try{
-        const res = await DB.svaraTillval(shareId, { valda, namn: namn.slice(0, 200), kommentar });
+        const res = await DB.svaraTillval(shareId, { valda, namn: namn.slice(0, 200), kommentar, betalning: valda.length ? betalning : '' });
         if(res === 'ok'){ o = await hamta(); andrar = false; rita(); window.scrollTo(0, 0); return; }
-        fel.textContent = res === 'utgangen' ? 'Offerten har gått ut och kan inte längre besvaras. Kontakta oss.' : 'Beställningen kunde inte tas emot eftersom offerten redan är hanterad. Kontakta oss om något ska ändras.';
+        fel.textContent = res === 'utgangen' ? 'Svarstiden har gått ut och offerten kan inte längre besvaras här. Hör av dig till oss.' : 'Svaret kunde inte tas emot eftersom offerten redan är hanterad. Hör av dig om något ska ändras.';
       }catch(e){ fel.textContent = 'Det gick inte att skicka just nu. Försök igen om en stund.'; }
-      skicka.disabled = false; skicka.textContent = 'Skicka beställning';
+      skicka.disabled = false; skicka.textContent = 'Skicka in mitt svar';
     };
   };
   rita();
