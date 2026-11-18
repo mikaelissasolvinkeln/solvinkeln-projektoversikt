@@ -16449,22 +16449,31 @@ async function avstAndra(fn){
   }
   return false;
 }
+function avstManadAv(iso){ const d = new Date(iso); return isNaN(d) ? '' : d.getFullYear() + '-' + avstPad(d.getMonth() + 1); }
+// Var avbockningen för en uppgift lagras: förfallomånaden, eller 'utan' för enstaka uppgifter utan datum.
+function avstFack(p, ym){ return p.typ === 'engang' ? (p.datum ? String(p.datum).slice(0, 7) : 'utan') : ym; }
 function avstGaller(p, ym){
-  if(p.typ === 'engang') return String(p.datum || '').slice(0, 7) === ym;
+  if(p.typ === 'engang'){
+    if(p.datum) return String(p.datum).slice(0, 7) === ym;
+    // Utan datum: ligger kvar i innevarande månad tills den bockas av, och visas sedan den månad den blev klar.
+    const st = (avstamningData.manader.utan || {})[p.id];
+    return st && st.klar ? avstManadAv(st.nar) === ym : ym === avstManadNu();
+  }
   return (p.fran || '0000-00') <= ym && (!p.till || ym <= p.till);
 }
 // Förfallodag i månaden. Dag 31 blir sista dagen i kortare månader.
 function avstForfall(p, ym){
-  if(p.typ === 'engang') return p.datum;
+  if(p.typ === 'engang') return p.datum || '';
   const [y, m] = ym.split('-').map(Number);
   const sista = new Date(y, m, 0).getDate();
   return ym + '-' + avstPad(Math.min(Math.max(parseInt(p.dag, 10) || 1, 1), sista));
 }
+// Månadens uppgifter i datumordning. Uppgifter utan datum hamnar sist.
 function avstUppgifter(ym){
-  const man = avstamningData.manader[ym] || {};
+  const nyckel = u => u.forfall || '9999';
   return avstamningData.punkter.filter(p => avstGaller(p, ym))
-    .map(p => ({ p, ym, forfall: avstForfall(p, ym), st: man[p.id] || {} }))
-    .sort((a, b) => a.forfall < b.forfall ? -1 : a.forfall > b.forfall ? 1 : String(a.p.text).localeCompare(String(b.p.text), 'sv'));
+    .map(p => { const fack = avstFack(p, ym); return { p, ym: fack, forfall: avstForfall(p, ym), st: (avstamningData.manader[fack] || {})[p.id] || {} }; })
+    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : String(a.p.text).localeCompare(String(b.p.text), 'sv'));
 }
 // Det som inte bockats av månaderna före den visade (ett år bakåt).
 function avstEfterslap(ym){
@@ -16473,11 +16482,11 @@ function avstEfterslap(ym){
   return ut;
 }
 function avstRadHtml(u, idag){
-  const p = u.p, klar = !!u.st.klar, sen = !klar && u.forfall < idag;
+  const p = u.p, klar = !!u.st.klar, sen = !klar && !!u.forfall && u.forfall < idag;
   let h = '<div class="avst-rad' + (klar ? ' klar' : '') + '" data-id="' + avstAttr(p.id) + '" data-ym="' + u.ym + '">';
   h += '<input type="checkbox" class="avst-bock" data-avst="klar"' + (klar ? ' checked' : '') + ' title="Markera som klar">';
   h += '<div class="avst-huvud"><div class="avst-text">' + escapeHtml(p.text || '') + '</div><div class="avst-meta">' + (p.typ === 'engang' ? 'En gång' : 'Varje månad') + (p.skapadAv ? ' · upplagd av ' + escapeHtml(p.skapadAv) : '') + '</div></div>';
-  h += '<div class="avst-datum">' + avstDatumText(u.forfall) + (sen ? '<span>Försenad</span>' : '') + '</div>';
+  h += '<div class="avst-datum">' + (u.forfall ? avstDatumText(u.forfall) : '<span class="avst-inget">Inget datum</span>') + (sen ? '<span>Försenad</span>' : '') + '</div>';
   h += '<input type="text" class="avst-not" data-avst="not" placeholder="Anteckning" value="' + avstAttr(u.st.not || '') + '">';
   h += '<div class="avst-vem">' + (klar ? 'Klar' + (u.st.av ? ' · ' + escapeHtml(u.st.av) : '') + (u.st.nar ? ' · ' + avstDatumText(new Date(u.st.nar)) : '') : 'Ej klar') + '</div>';
   if(avstamningRedigera) h += '<button type="button" class="avst-knapp" data-avst="andra" title="Ändra uppgiften">✎</button><button type="button" class="avst-knapp" data-avst="bort" title="Ta bort uppgiften">✕</button>';
@@ -16511,7 +16520,7 @@ function avstFormSatt(p){
 function avstFormVisa(){
   const engang = document.getElementById('avstNyTyp').value === 'engang';
   document.getElementById('avstNyDagWrap').style.display = engang ? 'none' : '';
-  document.getElementById('avstNyDatum').style.display = engang ? '' : 'none';
+  document.getElementById('avstNyDatumWrap').style.display = engang ? '' : 'none';
   document.getElementById('avstNyBtn').textContent = avstamningRedigerarId ? 'Spara ändring' : 'Lägg till';
   document.getElementById('avstNyAvbryt').style.display = avstamningRedigerarId ? '' : 'none';
 }
@@ -16525,28 +16534,29 @@ async function avstSparaUppgift(){
     if(!(dag >= 1 && dag <= 31)){ showToast('Ange en dag mellan 1 och 31.'); return; }
   } else {
     datum = document.getElementById('avstNyDatum').value;
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(datum)){ showToast('Välj ett datum.'); return; }
+    if(datum && !/^\d{4}-\d{2}-\d{2}$/.test(datum)){ showToast('Datumet går inte att läsa.'); return; }
   }
   const redId = avstamningRedigerarId, nyttId = uid(), ym = avstamningManad || avstManadNu(), av = myName || myEmail || '';
   const ok = await avstAndra(d => {
     let p = redId ? d.punkter.find(x => x.id === redId) : null;
     if(redId && !p) return; // borttagen av den andra under tiden
     if(!p){ p = { id: nyttId, skapadAv: av, skapad: new Date().toISOString() }; d.punkter.push(p); }
-    const gammalManad = p.typ === 'engang' ? String(p.datum || '').slice(0, 7) : null;
+    const gammaltFack = p.typ === 'engang' ? avstFack(p, ym) : null;
     p.text = text; p.typ = typ;
     if(typ === 'manad'){ p.dag = dag; delete p.datum; if(!p.fran) p.fran = ym; }
     else {
-      p.datum = datum; delete p.dag; delete p.fran; delete p.till;
-      // Flyttas en enstaka uppgift till en annan månad följer avbockningen med.
-      const nyManad = datum.slice(0, 7);
-      if(gammalManad && gammalManad !== nyManad && d.manader[gammalManad] && d.manader[gammalManad][p.id]){
-        (d.manader[nyManad] || (d.manader[nyManad] = {}))[p.id] = d.manader[gammalManad][p.id];
-        delete d.manader[gammalManad][p.id];
+      if(datum) p.datum = datum; else delete p.datum;
+      delete p.dag; delete p.fran; delete p.till;
+      // Får en enstaka uppgift nytt datum följer avbockningen med.
+      const nyttFack = avstFack(p, ym);
+      if(gammaltFack && gammaltFack !== nyttFack && d.manader[gammaltFack] && d.manader[gammaltFack][p.id]){
+        (d.manader[nyttFack] || (d.manader[nyttFack] = {}))[p.id] = d.manader[gammaltFack][p.id];
+        delete d.manader[gammaltFack][p.id];
       }
     }
   });
   if(ok){
-    if(typ === 'engang') avstamningManad = datum.slice(0, 7);
+    if(typ === 'engang') avstamningManad = datum ? datum.slice(0, 7) : avstManadNu();
     avstFormSatt(null);
     showToast(redId ? 'Uppgiften är ändrad.' : 'Uppgiften är upplagd.');
   }
