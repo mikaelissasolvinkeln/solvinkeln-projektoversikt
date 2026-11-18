@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118150445';
+const APP_BUILD = '20261118161936';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15569,19 +15569,33 @@ function ekonomiSchemaSkapaFranAndelar(){
 function ekonomiSchemaBarn(noder, parentId){ return noder.filter(x => (x.parentId || null) === (parentId || null)).sort((a, b) => (b.procent || 0) - (a.procent || 0) || (a.ordning || 0) - (b.ordning || 0)); }
 function ekonomiSchemaArAttling(noder, id, kandidat){ let cur = noder.find(x => x.id === kandidat); let guard = 0; while(cur && guard++ < 100){ if(cur.id === id) return true; cur = noder.find(x => x.id === cur.parentId); } return false; }
 // HTML för trädet (används av både adminvyn och portalen). extra(nod) kan ge en rad till per nod.
+// Ett bolag längre ner i trädet som har minst så här många egna bolag ritas som ett eget
+// underkoncernschema under huvudschemat, i stället för som en lista inne i sitt kort.
+const KSCHEMA_UNDER_MIN = 4;
 function koncernTradHtml(noder, extra){
   // Ryms på bladets bredd: moderbolaget överst, därunder bolagen i radbrytande rutnät grupperade per typ.
-  // Bolag längre ner i trädet (t.ex. dotterbolag till ett dotterbolag) visas som en lista inne i sitt kort.
+  // Bolag längre ner i trädet (t.ex. dotterbolag till ett dotterbolag) visas som en lista inne i sitt kort,
+  // utom underkoncerner (se KSCHEMA_UNDER_MIN) som får ett eget schema längre ner.
   const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : 'ovrigt';
   const proc = x => x.procent != null ? String(x.procent).replace('.', ',') + ' %' : '';
-  const barnLista = (pid, djup) => { const barn = ekonomiSchemaBarn(noder, pid); return barn.length ? '<div class="knod-barn">' + barn.map(b => '<div class="knod-barn-rad" style="padding-left:' + (djup * 10) + 'px;">' + (proc(b) ? '<span class="knod-barn-proc">' + proc(b) + '</span>' : '') + escapeHtml(b.namn || '') + '</div>' + barnLista(b.id, djup + 1)).join('') + '</div>' : ''; };
-  const kort = (x, medBarn) => '<div class="knod ' + typKlass(x.typ) + '">' + (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + escapeHtml(x.beskrivning || x.typ || '') + '</div>' + (extra ? extra(x) : '') + (medBarn ? barnLista(x.id, 0) : '') + '</div>';
-  const rotter = ekonomiSchemaBarn(noder, null);
+  const barnAv = id => ekonomiSchemaBarn(noder, id);
+  const arUnder = x => !!x.parentId && barnAv(x.id).length >= KSCHEMA_UNDER_MIN;
+  const underRad = (x, djup) => '<div class="knod-barn-rad knod-under" style="padding-left:' + (djup * 10) + 'px;">' + barnAv(x.id).length + ' bolag, se underkoncernen nedan</div>';
+  const barnLista = (pid, djup) => { const barn = barnAv(pid); return barn.length ? '<div class="knod-barn">' + barn.map(b => '<div class="knod-barn-rad" style="padding-left:' + (djup * 10) + 'px;">' + (proc(b) ? '<span class="knod-barn-proc">' + proc(b) + '</span>' : '') + escapeHtml(b.namn || '') + '</div>' + (arUnder(b) ? underRad(b, djup + 1) : barnLista(b.id, djup + 1))).join('') + '</div>' : ''; };
+  // Beskrivningen delas på " · " till egna rader (t.ex. org.nr · förening · delägare).
+  const subHtml = t => escapeHtml(t).replace(/ %/g, '&nbsp;%').split(' · ').join('<br>');
+  const kort = (x, medBarn, klass) => '<div class="knod ' + (klass || typKlass(x.typ)) + '">' + (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + subHtml(x.beskrivning || (klass ? 'Moderbolag i underkoncernen' : x.typ) || '') + '</div>' + (extra ? extra(x) : '') + (medBarn ? (arUnder(x) ? '<div class="knod-barn">' + underRad(x, 0) + '</div>' : barnLista(x.id, 0)) : '') + '</div>';
+  const rotter = barnAv(null);
   if(!rotter.length) return '<p class="eko-sub">Inget koncernschema ännu.</p>';
   const grupper = [['Dotterbolag', 'Dotterbolag (över 50 %)'], ['Intressebolag', 'Intressebolag (20–50 %)'], ['Övrigt innehav', 'Övriga innehav']];
-  const block = rot => {
-    const barn = ekonomiSchemaBarn(noder, rot.id);
-    let h = '<div class="kschema"><div class="kschema-rot">' + kort(rot, false) + '</div>';
+  const block = (rot, under) => {
+    const barn = barnAv(rot.id);
+    let h = '<div class="kschema' + (under ? ' kschema-under' : '') + '">';
+    if(under){
+      const agare = noder.find(y => y.id === rot.parentId);
+      h += '<div class="kschema-under-rubrik">Underkoncern<span>' + escapeHtml(rot.namn || '') + (agare ? ', ägs ' + (proc(rot) ? 'till ' + proc(rot) + ' ' : '') + 'av ' + escapeHtml(agare.namn || '') : '') + '</span></div>';
+    }
+    h += '<div class="kschema-rot">' + kort(rot, false, under ? 'moder' : null) + '</div>';
     if(barn.length){
       h += '<div class="kschema-stam"></div>';
       const kanda = grupper.map(g => g[0]);
@@ -15593,7 +15607,71 @@ function koncernTradHtml(noder, extra){
     }
     return h + '</div>';
   };
-  return rotter.map(block).join('') + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
+  // Underkoncernerna kommer direkt efter sitt huvudschema, i samma ordning som i trädet.
+  const underTill = rot => { const ut = []; const sok = (id, vakt) => { if(vakt > 50) return; barnAv(id).forEach(b => { if(arUnder(b)) ut.push(b); sok(b.id, vakt + 1); }); }; sok(rot.id, 0); return ut; };
+  return rotter.map(r => block(r, false) + underTill(r).map(u => block(u, true)).join('')).join('') + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
+}
+// Klistra in en lista med bolag i schemat. En rad per bolag med kolumnerna
+// Bolag; Ägs av; Andel i procent; Beskrivning, åtskilda med semikolon eller tabb (Excel).
+// Ägaren ska stå på en tidigare rad eller redan finnas i schemat. Ett bolag som redan finns
+// under samma ägare läggs inte in en gång till, så listan kan klistras in igen utan dubbletter.
+function ekonomiSchemaTolkaLista(text){
+  const noder = ekonomiSchemaNoder();
+  const exakt = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const sok = (lista, namn, villkor) => lista.find(x => exakt(x.namn, namn) && (!villkor || villkor(x))) || lista.find(x => namnLika(x.namn, namn) && (!villkor || villkor(x)));
+  const nya = [], fel = [], kanda = []; let fanns = 0;
+  String(text || '').split(/\r?\n/).forEach((rad, i) => {
+    if(!rad.trim() || /^\s*#/.test(rad)) return;
+    const c = rad.split(rad.includes('\t') ? '\t' : ';').map(s => s.trim());
+    const namn = c[0]; if(!namn) return;
+    if(/^bolag$/i.test(namn) && /^ägs av$/i.test(c[1] || '')) return;
+    const agare = c[1] || '';
+    const pTxt = (c[2] || '').replace('%', '').replace(',', '.').trim();
+    const procent = pTxt === '' ? null : parseFloat(pTxt);
+    if(pTxt !== '' && !isFinite(procent)){ fel.push('Rad ' + (i + 1) + ': förstår inte andelen "' + c[2] + '".'); return; }
+    let parent = null;
+    if(agare){
+      parent = sok(kanda, agare) || sok(noder, agare);
+      if(!parent){ fel.push('Rad ' + (i + 1) + ': hittar inte ägaren "' + agare + '". Ägaren ska stå på en tidigare rad eller redan finnas i schemat.'); return; }
+    }
+    const bef = parent ? (sok(kanda, namn, x => x.parentId === parent.id) || sok(noder, namn, x => x.parentId === parent.id)) : (sok(kanda, namn) || sok(noder, namn));
+    if(bef){ if(!kanda.includes(bef)) kanda.push(bef); fanns++; return; }
+    const nod = { id: uid(), namn, parentId: parent ? parent.id : null, procent: parent ? procent : null, typ: parent ? ekonomiSchemaTypFor(procent) : 'Moderbolag', beskrivning: c.slice(3).filter(Boolean).join('; '), bolagId: null, aktorKey: null, ordning: noder.length + nya.length };
+    kanda.push(nod); nya.push(nod);
+  });
+  return { nya, fanns, fel };
+}
+function ekonomiSchemaKlistraPopup(){
+  const p = ekoPopup({ title: 'Klistra in bolag', sub: 'En rad per bolag: Bolag; Ägs av; Andel i procent; Beskrivning. Skilj kolumnerna med semikolon, eller klistra in direkt från Excel. Ägaren ska stå på en tidigare rad eller redan finnas i schemat. Lämna Ägs av tomt för ett bolag på toppnivå.', maxWidth: 760 });
+  const ta = document.createElement('textarea'); ta.rows = 14; ta.spellcheck = false;
+  ta.style.cssText = "width:100%; box-sizing:border-box; font-family:'JetBrains Mono', monospace; font-size:12px; line-height:1.5; border:1px solid var(--line-soft); border-radius:6px; padding:8px; white-space:pre; overflow:auto; background:#fff; color:var(--ink);";
+  ta.placeholder = 'Moderbolaget AB\nDotterbolaget AB; Moderbolaget AB; 100; 556000-0000';
+  p.body.appendChild(ta);
+  const info = document.createElement('div'); info.className = 'eko-sub'; info.style.margin = '8px 0 0'; p.body.appendChild(info);
+  const ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Lägg in'; ok.style.cssText = 'background:var(--ink); color:#fff;'; ok.disabled = true; ok.style.opacity = '0.5';
+  const stang = p.actions.querySelector('button'); if(stang){ stang.textContent = 'Avbryt'; stang.style.cssText = ''; }
+  p.actions.appendChild(ok);
+  const visa = () => {
+    const r = ekonomiSchemaTolkaLista(ta.value);
+    let h = '';
+    if(ta.value.trim()) h = '<b>' + r.nya.length + '</b> nya bolag läggs in' + (r.fanns ? ', ' + r.fanns + ' finns redan och hoppas över' : '') + '.';
+    if(r.fel.length) h += '<div style="color:var(--danger); margin-top:6px;">' + r.fel.slice(0, 8).map(f => escapeHtml(f)).join('<br>') + (r.fel.length > 8 ? '<br>… och ' + (r.fel.length - 8) + ' rader till.' : '') + '<br>Rätta raderna ovan, sedan går det att lägga in.</div>';
+    info.innerHTML = h;
+    const kan = r.nya.length > 0 && !r.fel.length;
+    ok.disabled = !kan; ok.style.opacity = kan ? '1' : '0.5';
+    return r;
+  };
+  ta.addEventListener('input', visa);
+  ok.onclick = async () => {
+    const r = visa(); if(!r.nya.length || r.fel.length) return;
+    ok.disabled = true;
+    const noder = ekonomiSchemaNoder();
+    r.nya.forEach(x => noder.push(x));
+    await saveEkonomiKoncern();
+    p.close(); renderEkonomiKoncernSchema();
+    showToast(r.nya.length + ' bolag inlagda i koncernschemat.');
+  };
+  setTimeout(() => ta.focus(), 50);
 }
 function renderEkonomiKoncernSchema(){
   const wrap = document.getElementById('ekoSchemaWrap'); if(!wrap) return;
@@ -15603,6 +15681,7 @@ function renderEkonomiKoncernSchema(){
   const add = document.createElement('button'); add.type = 'button'; add.className = 'add-inline-btn'; add.textContent = '+ Lägg till bolag i schemat';
   add.onclick = async () => { const namn = prompt('Bolagets namn:', ''); if(namn === null || !namn.trim()) return; const root = noder.find(x => !x.parentId); noder.push({ id: uid(), namn: namn.trim(), parentId: root ? root.id : null, procent: root ? 100 : null, typ: root ? 'Dotterbolag' : 'Moderbolag', beskrivning: '', bolagId: null, aktorKey: null, ordning: noder.length }); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
   bar.appendChild(add);
+  const klistra = document.createElement('button'); klistra.type = 'button'; klistra.className = 'add-inline-btn'; klistra.textContent = 'Klistra in lista'; klistra.onclick = () => ekonomiSchemaKlistraPopup(); bar.appendChild(klistra);
   if(ekonomiAndelarList().length){ const seed = document.createElement('button'); seed.type = 'button'; seed.className = 'add-inline-btn'; seed.textContent = noder.length ? 'Komplettera från andelar' : 'Skapa från andelar (balansrapporten)'; seed.onclick = async () => { ekonomiSchemaSkapaFranAndelar(); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); }; bar.appendChild(seed); }
   wrap.appendChild(bar);
   if(noder.length){

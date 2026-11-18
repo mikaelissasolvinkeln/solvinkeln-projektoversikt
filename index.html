@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261118150445">
+<meta name="app-build" content="20261118161936">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=Lora:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -791,9 +791,13 @@
   .kschema-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:22px 12px; }
   .kschema-grid .knod{ display:block; min-width:0; max-width:none; }
   .knod-barn{ margin-top:8px; padding-top:6px; border-top:1px solid var(--line-soft); text-align:left; }
-  .knod-barn-rad{ font-size:11px; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .knod-barn-rad{ font-size:11px; line-height:1.4; padding-top:1px; padding-bottom:1px; overflow-wrap:anywhere; }
   .knod-barn-proc{ font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--ink-soft); margin-right:5px; }
-  @media print{ .kschema-grid{ grid-template-columns:repeat(5, 1fr); } }
+  .kschema-under{ margin-top:30px; padding-top:20px; border-top:1px solid var(--line-soft); }
+  .kschema-under-rubrik{ font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); font-weight:600; text-align:center; margin:0 0 22px; }
+  .kschema-under-rubrik span{ display:block; font-size:12.5px; font-weight:400; letter-spacing:0; text-transform:none; margin-top:3px; }
+  .knod-barn-rad.knod-under{ color:var(--ink-soft); font-style:italic; }
+  @media print{ .kschema-grid{ grid-template-columns:repeat(5, 1fr); } .kschema .knod{ break-inside:avoid; } }
   /* ---------- Ägarportal (Prosavio) ---------- */
   .portal{ min-height:100vh; background:var(--bg); color:var(--ink); font-family:Inter, system-ui, sans-serif; }
   .portal-wrap{ max-width:1180px; margin:0 auto; padding:28px 24px 60px; }
@@ -1666,7 +1670,7 @@
 
     <div id="ekonomiKoncernSchemaView" style="display:none;">
       <h3 style="margin:0 0 4px;">Koncernschema</h3>
-      <p class="eko-sub" style="margin:0 0 12px;">Fyll i vem som äger vad så ritas koncernträdet nedan. Samma träd visas i ägarportalen och i delningslänkarna.</p>
+      <p class="eko-sub" style="margin:0 0 12px;">Fyll i vem som äger vad så ritas koncernträdet nedan. Ett bolag som i sin tur äger minst fyra bolag får ett eget underkoncernschema. Samma träd visas i ägarportalen och i delningslänkarna.</p>
       <div id="ekoSchemaWrap"></div>
     </div>
 
@@ -3066,7 +3070,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261118150445"></script>
-<script src="app.js?v=20261118150445"></script>
+<script src="db.js?v=20261118161936"></script>
+<script src="app.js?v=20261118161936"></script>
 </body>
 </html>
