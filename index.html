@@ -2,10 +2,10 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261118142551">
+<meta name="app-build" content="20261118143810">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=Lora:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg: #FFFFFF;
@@ -608,68 +608,106 @@
   .tv-avis{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:#FFF7E8; border:1px solid #F0DDB5; border-radius:10px; padding:12px 14px; margin-bottom:18px; font-size:13.5px; }
   .tv-avis > div{ display:flex; gap:6px; flex-wrap:wrap; flex-basis:100%; }
 
-  .tvo{ background:#F3F0E8; min-height:100vh; padding:28px 16px 60px; font-family:'Inter', sans-serif; color:var(--ink); box-sizing:border-box; }
+  .tvo{ --tvo-gron:#2F4A3D; --tvo-rod:#A93A2C; --tvo-linje:#DAD5C9; --tvo-stark:#9AA39C; --tvo-dov:#77726A; --tvo-sand:#EAE4D6;
+    background:#EFEBE2; min-height:100vh; padding:28px 16px 60px; font-family:'Inter', sans-serif; color:#22201C; box-sizing:border-box; }
   .tvo.tvo-inbaddad{ min-height:0; padding:12px; border-radius:10px; }
-  .tvo-blad{ max-width:820px; margin:0 auto; background:#fff; border:1px solid var(--line-soft); border-radius:6px; box-shadow:0 6px 30px rgba(31,26,20,.08); padding:44px 48px; box-sizing:border-box; }
+  .tvo-blad{ max-width:800px; margin:0 auto; background:#fff; box-shadow:0 8px 34px rgba(31,26,20,.10); border-radius:4px; overflow:hidden; }
   .tvo-blad.tvo-bred{ max-width:980px; }
-  .tvo-huvud{ display:flex; justify-content:space-between; gap:24px; align-items:flex-start; padding-bottom:22px; border-bottom:2px solid var(--ink); margin-bottom:22px; }
-  .tvo-huvud img{ height:44px; width:auto; display:block; }
-  .tvo-hoger{ text-align:right; font-size:13px; line-height:1.6; }
-  .tvo-hoger span{ color:var(--ink-soft); }
-  .tvo-rubrik{ font-family:'Fraunces', serif; font-size:26px; font-weight:600; line-height:1.15; margin-bottom:8px; }
-  .tvo-parter{ display:flex; gap:32px; flex-wrap:wrap; margin-bottom:20px; font-size:13.5px; }
-  .tvo-parter > div{ flex:1 1 220px; }
-  .tvo-parter span{ display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:3px; }
-  .tvo-parter b{ display:block; font-size:15px; }
-  .tvo-ruta{ border-radius:8px; padding:12px 14px; font-size:13.5px; margin-bottom:16px; background:var(--paper); border:1px solid var(--line-soft); }
-  .tvo-ok{ background:#EAF4EA; border-color:#C5DEC6; color:#1F4D25; }
-  .tvo-varning{ background:#FBEDED; border-color:#EBC8C8; color:#7C2A2A; }
-  .tvo-meddelande{ font-size:14px; line-height:1.55; margin:0 0 14px; }
-  .tvo-hjalp{ font-size:13px; color:var(--ink-soft); margin:0 0 8px; }
-  .tvo-tabell{ width:100%; border-collapse:collapse; table-layout:auto !important; font-size:13.5px; }
-  .tvo-tabell th{ text-align:left; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--ink); font-weight:700; }
-  .tvo-tabell td{ padding:11px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
-  .tvo-tabell .tvo-h{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .tvo-bockkol{ width:34px; }
-  .tvo-bockkol input{ width:20px; height:20px; accent-color:var(--amber); cursor:pointer; margin:0; }
-  .tvo-kat td{ font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); padding:6px 10px; }
-  .tvo-besk{ font-size:12.5px; color:var(--ink-soft); margin-top:2px; font-weight:400; }
-  .tvo-m{ display:none; }
-  .tvo-av td{ color:#A39A8C; }
-  .tvo-av b{ font-weight:500; }
-  .tvo-tabell tfoot td{ border-bottom:0; border-top:2px solid var(--ink); font-weight:700; font-size:15px; padding-top:12px; }
-  .tvo-villkor{ font-size:12px; color:var(--ink-soft); line-height:1.5; margin:16px 0 0; }
-  .tvo-svar{ margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft); display:flex; flex-direction:column; gap:12px; }
-  .tvo-svar label{ display:flex; flex-direction:column; gap:5px; font-size:12.5px; font-weight:600; }
-  .tvo-svar input, .tvo-svar textarea{ font:400 15px 'Inter', sans-serif; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); width:100%; box-sizing:border-box; }
-  .tvo-fel{ color:var(--danger); font-size:13px; min-height:1em; }
-  .tvo-knappar{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:16px; }
-  .tvo-primar{ font:600 15px 'Inter', sans-serif; padding:12px 26px; border:0; border-radius:8px; background:var(--ink); color:#fff; cursor:pointer; }
+  .tvo-band{ background:var(--tvo-gron); color:#fff; padding:38px 56px 36px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .tvo-band img{ height:42px; width:auto; display:block; filter:brightness(0) invert(1); opacity:.96; margin-bottom:36px; }
+  .tvo-marke{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; margin-bottom:36px; font-weight:600; }
+  .tvo-band h1{ font-family:'Lora', 'Fraunces', serif; font-weight:500; font-size:36px; line-height:1.1; margin:0 0 10px; color:#fff; letter-spacing:-.2px; }
+  .tvo-under{ font-size:14px; opacity:.88; }
+  .tvo-inne{ padding:32px 56px 30px; }
+  .tvo-meta{ display:flex; gap:24px; flex-wrap:wrap; padding-bottom:18px; border-bottom:1px solid var(--tvo-linje); margin-bottom:26px; font-size:13.5px; }
+  .tvo-meta > div{ flex:1 1 150px; }
+  .tvo-meta span{ display:block; font-size:11px; color:var(--tvo-dov); margin-bottom:3px; }
+  .tvo-brev p{ font-size:14px; line-height:1.6; margin:0 0 12px; }
+  .tvo-ruta{ border-radius:6px; padding:13px 16px; font-size:13.5px; line-height:1.5; margin-bottom:22px; background:var(--tvo-sand); }
+  .tvo-ok{ background:#E6F0E8; color:#1F4D30; }
+  .tvo-varning{ background:#F8E9E6; color:#7C2A20; }
+  .tvo-tabell{ width:100%; border-collapse:collapse; table-layout:auto !important; margin-top:10px; }
+  .tvo-tabell th{ text-align:left; font:500 11px 'Inter', sans-serif; text-transform:none; letter-spacing:0; background:none; color:var(--tvo-dov); padding:8px 6px; border-bottom:2px solid var(--tvo-stark); }
+  .tvo-tabell th.tvo-h{ font-size:11px; }
+  .tvo-h3{ font-family:'Lora', 'Fraunces', serif; font-weight:500; font-size:19px; margin:30px 0 10px; }
+  .tvo-betalval{ display:flex; gap:12px; flex-wrap:wrap; }
+  .tvo-betal{ flex:1 1 260px; display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border:1px solid #BDB7AA; border-radius:8px; cursor:pointer; background:#fff; }
+  .tvo-betal:hover{ background:#FAF8F3; }
+  .tvo-betal.vald{ border-color:var(--tvo-gron); box-shadow:inset 0 0 0 1px var(--tvo-gron); background:#F3F7F4; }
+  .tvo-betal input{ width:20px; height:20px; flex:0 0 20px; margin:1px 0 0; accent-color:var(--tvo-gron); cursor:pointer; }
+  .tvo-betal b{ display:block; font-size:14.5px; font-weight:600; margin-bottom:4px; }
+  .tvo-betal em{ display:block; font-style:normal; font-size:12.5px; line-height:1.5; color:var(--tvo-dov); }
+  .tvo-betalvald{ margin-top:20px; font-size:13.5px; }
+  .tvo-betalvald span{ display:block; font-size:11px; color:var(--tvo-dov); margin-bottom:3px; }
+  .tvo-betalvald p{ margin:4px 0 0; font-size:12.5px; line-height:1.5; color:var(--tvo-dov); }
+  .tvo-tabell td{ padding:13px 6px; border-bottom:1px solid var(--tvo-linje); vertical-align:top; }
+  .tvo-namn{ font-size:14.5px; font-weight:500; }
+  .tvo-rabatt{ display:inline-block; margin-left:10px; font-size:10px; font-weight:700; background:var(--tvo-rod); color:#fff; border-radius:999px; padding:1px 8px; vertical-align:2px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .tvo-besk{ font-size:12px; color:var(--tvo-dov); margin-top:4px; line-height:1.45; }
+  .tvo-tabell .tvo-h, .tvo-svarspris{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; font-size:14.5px; }
+  .tvo-h s, .tvo-svarspris s{ display:block; font-size:12px; color:var(--tvo-dov); }
+  .tvo-rabattpris{ color:var(--tvo-rod); font-weight:700; }
+  .tvo-offert{ color:var(--tvo-dov); font-style:italic; }
+  .tvo-summarad{ display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:16px 6px 6px; font-family:'Lora', 'Fraunces', serif; font-size:17.5px; border-top:2px solid var(--tvo-stark); margin-top:-1px; }
+  .tvo-summarad b{ font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .tvo-not{ background:var(--tvo-sand); padding:18px 20px; margin:22px 0 4px; font-size:13px; line-height:1.55; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .tvo-not h3{ font-family:'Lora', 'Fraunces', serif; font-size:14.5px; font-weight:600; margin:0 0 6px; }
+  .tvo-not p{ margin:0 0 9px; }
+  .tvo-not p:last-child{ margin-bottom:0; }
+  .tvo-villkor{ font-size:11.5px; color:var(--tvo-dov); line-height:1.5; margin:16px 0 0; }
+  .tvo-villkor p{ margin:0 0 6px; }
+  .tvo-h2{ font-family:'Lora', 'Fraunces', serif; font-weight:500; font-size:28px; margin:44px 0 8px; padding-top:32px; border-top:1px solid var(--tvo-linje); letter-spacing:-.2px; }
+  .tvo-hjalp{ font-size:14px; line-height:1.55; margin:0 0 16px; }
+  .tvo-svarslista{ border-top:2px solid var(--tvo-stark); }
+  .tvo-svarsrad{ display:flex; align-items:center; gap:16px; padding:13px 6px; border-bottom:1px solid var(--tvo-linje); cursor:pointer; font-size:14.5px; }
+  .tvo-svarsrad:hover{ background:#FAF8F3; }
+  .tvo-svarsnamn{ flex:1; min-width:0; }
+  .tvo-ja{ display:flex; align-items:center; gap:7px; font-size:13px; color:var(--tvo-dov); flex:0 0 auto; }
+  .tvo-ja input{ width:22px; height:22px; accent-color:var(--tvo-gron); margin:0; cursor:pointer; }
+  .tvo-svarsrad.vald .tvo-ja{ color:var(--tvo-gron); font-weight:700; }
+  .tvo-svarsrad.vald .tvo-svarsnamn{ font-weight:600; }
+  .tvo-falt{ display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--tvo-dov); margin-top:16px; }
+  .tvo-falt input, .tvo-falt textarea{ font:400 15px 'Inter', sans-serif; padding:11px 12px; border:1px solid #BDB7AA; border-radius:6px; background:#fff; color:#22201C; width:100%; box-sizing:border-box; }
+  .tvo-falt input:focus, .tvo-falt textarea:focus{ outline:2px solid var(--tvo-gron); outline-offset:1px; border-color:var(--tvo-gron); }
+  .tvo-fel{ color:var(--tvo-rod); font-size:13px; min-height:1.2em; margin-top:10px; }
+  .tvo-knappar{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:14px; }
+  .tvo-primar{ font:600 15px 'Inter', sans-serif; padding:13px 28px; border:0; border-radius:6px; background:var(--tvo-gron); color:#fff; cursor:pointer; }
+  .tvo-primar:hover{ background:#263D32; }
   .tvo-primar:disabled{ opacity:.5; cursor:default; }
-  .tvo-sekundar{ font:600 13px 'Inter', sans-serif; padding:9px 16px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); cursor:pointer; }
-  .tvo-hus{ margin-top:22px; overflow-x:auto; }
-  .tvo-husrubrik{ display:flex; align-items:center; gap:8px; font-size:14.5px; padding-bottom:6px; border-bottom:1px solid var(--line); }
-  .tvo-husstatus{ margin-left:auto; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; background:var(--blue-soft); white-space:nowrap; }
-  .tvo-husstatus.klar{ background:#DDEEDD; color:#255C2B; }
-  .tvo-hus .tvo-tabell th{ border-bottom-color:var(--line-soft); }
-  .tvo-hus .tvo-tabell tfoot td{ border-top:1px solid var(--line); font-size:13.5px; padding-top:8px; }
-  .tvo-total{ margin-top:26px; padding-top:14px; border-top:2px solid var(--ink); text-align:right; font-size:16px; }
-  .tvo-total b{ margin-left:14px; font-size:19px; }
+  .tvo-sekundar{ font:600 13px 'Inter', sans-serif; padding:10px 16px; border:1px solid #BDB7AA; border-radius:6px; background:#fff; color:#22201C; cursor:pointer; }
+  .tvo-kontakt{ margin-top:44px; font-size:13.5px; line-height:1.55; }
+  .tvo-kontakt span{ display:block; font-size:11px; color:var(--tvo-dov); margin-bottom:3px; }
+  .tvo-kontakt a{ color:inherit; }
+  .tvo-fot{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:44px; padding-top:14px; border-top:1px solid var(--tvo-linje); font-size:11px; color:var(--tvo-dov); }
+  .tvo-fot b{ color:#22201C; }
+  .tvo-hus{ margin-top:26px; overflow-x:auto; }
+  .tvo-husrubrik{ display:flex; align-items:center; gap:8px; font-size:15px; padding:0 6px 2px; }
+  .tvo-husrubrik b{ font-family:'Lora', 'Fraunces', serif; font-weight:600; font-size:17px; }
+  .tvo-husstatus{ margin-left:auto; font-size:11px; font-weight:700; padding:2px 10px; border-radius:999px; background:var(--tvo-sand); white-space:nowrap; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .tvo-husstatus.klar{ background:#DCEADF; color:#1F4D30; }
+  .tvo-tabell.tvo-fast{ table-layout:fixed !important; min-width:620px; margin-top:4px; }
+  .tvo-fast th:nth-child(1){ width:30%; } .tvo-fast th:nth-child(2){ width:32%; } .tvo-fast th:nth-child(3){ width:9%; } .tvo-fast th:nth-child(4){ width:14%; } .tvo-fast th:nth-child(5){ width:15%; }
+  .tvo-fast td{ overflow-wrap:anywhere; padding-top:10px; padding-bottom:10px; }
+  .tvo-fast td.tvo-besk{ margin:0; font-size:12.5px; }
+  .tvo-fast tfoot td{ border-bottom:0; font-weight:600; font-size:13.5px; }
   @media (max-width:640px){
     .tvo{ padding:0; }
-    .tvo-blad{ padding:22px 16px 40px; border:0; border-radius:0; box-shadow:none; }
-    .tvo-huvud{ flex-direction:column; gap:14px; }
-    .tvo-hoger{ text-align:left; }
-    .tvo-d{ display:none; }
-    .tvo-m{ display:block; }
-    .tvo-tabell td, .tvo-tabell th{ padding-left:6px; padding-right:6px; }
+    .tvo-blad{ border-radius:0; box-shadow:none; }
+    .tvo-band{ padding:26px 20px 26px; }
+    .tvo-band img{ height:34px; margin-bottom:26px; }
+    .tvo-band h1{ font-size:30px; }
+    .tvo-inne{ padding:24px 20px 28px; }
+    .tvo-meta{ gap:14px; }
+    .tvo-meta > div{ flex-basis:100%; }
     .tvo-primar{ width:100%; }
+    .tvo-svarsrad{ gap:10px; }
   }
   @media print{
     .tvo-ejprint{ display:none !important; }
     .tvo{ background:#fff; padding:0; min-height:0; }
-    .tvo-blad{ border:0; box-shadow:none; padding:0; max-width:none; }
-    .tvo-hus{ break-inside:avoid; }
+    .tvo-blad{ box-shadow:none; max-width:none; border-radius:0; }
+    .tvo-hus{ break-inside:avoid; overflow:visible; }
+    .tvo-svarsrad{ break-inside:avoid; }
   }
 
   /* ---------- Helhetsbild (koncernlikviditet, ägarportal) ---------- */
@@ -3028,7 +3066,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261118142551"></script>
-<script src="app.js?v=20261118142551"></script>
+<script src="db.js?v=20261118143810"></script>
+<script src="app.js?v=20261118143810"></script>
 </body>
 </html>
