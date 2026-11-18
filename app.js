@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118163051';
+const APP_BUILD = '20261118163553';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15552,7 +15552,7 @@ document.getElementById('ekoBolagImportInput').addEventListener('change', async 
 // (där Mikael fyller i) och i ägarportalen/delningslänkarna. koncern._schema = [{ id, namn,
 //   parentId, procent, typ, beskrivning, bolagId, aktorKey, ordning }]. "Skapa från andelar"
 // bygger ett förslag ur balansrapportens andelsposter (Prosavio som moderbolag).
-// Typen Underkoncern: bolaget visas inte som kort hos sin ägare, bara som eget schema längre ner.
+// Typen Underkoncern: bolaget visas i en egen grupp hos sin ägare, inte bland dotter- eller intressebolagen.
 const SCHEMA_TYPER = ['Moderbolag', 'Dotterbolag', 'Intressebolag', 'Övrigt innehav', 'Underkoncern'];
 function ekonomiSchemaNoder(){ return ekonomiKoncernList('_schema'); }
 function ekonomiSchemaTypFor(procent){ return procent == null ? 'Övrigt innehav' : procent > 50 ? 'Dotterbolag' : procent >= 20 ? 'Intressebolag' : 'Övrigt innehav'; }
@@ -15570,49 +15570,80 @@ function ekonomiSchemaSkapaFranAndelar(){
 function ekonomiSchemaBarn(noder, parentId){ return noder.filter(x => (x.parentId || null) === (parentId || null)).sort((a, b) => (b.procent || 0) - (a.procent || 0) || (a.ordning || 0) - (b.ordning || 0)); }
 function ekonomiSchemaArAttling(noder, id, kandidat){ let cur = noder.find(x => x.id === kandidat); let guard = 0; while(cur && guard++ < 100){ if(cur.id === id) return true; cur = noder.find(x => x.id === cur.parentId); } return false; }
 // HTML för trädet (används av både adminvyn och portalen). extra(nod) kan ge en rad till per nod.
-// Ett bolag längre ner i trädet som har minst så här många egna bolag ritas som ett eget
-// underkoncernschema under huvudschemat, i stället för som en lista inne i sitt kort.
-const KSCHEMA_UNDER_MIN = 4;
+// Schemat visar ett bolag i taget: bolaget överst och det som bolaget äger därunder. Klick på ett
+// bolag som i sin tur äger bolag öppnar det bolagets schema, och brödsmulorna leder tillbaka.
+// Kortet listar upp till så här många egna bolag vid namn. Äger bolaget fler visas bara antalet.
+const KSCHEMA_LISTA_MAX = 3;
+// Varje ritat schema får ett nummer så att klicken hittar tillbaka till sina bolag.
+const koncernTradVyer = new Map();
+let koncernTradNr = 0;
+// Senast öppnade bolag. Adminvyn ritas om vid varje ändring och ska då stå kvar på samma bolag.
+let koncernTradFokusSenast = null;
 function koncernTradHtml(noder, extra){
-  // Ryms på bladets bredd: moderbolaget överst, därunder bolagen i radbrytande rutnät grupperade per typ.
-  // Bolag längre ner i trädet (t.ex. dotterbolag till ett dotterbolag) visas som en lista inne i sitt kort,
-  // utom underkoncerner (se KSCHEMA_UNDER_MIN) som får ett eget schema längre ner.
-  const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : 'ovrigt';
+  const id = 'kt' + (++koncernTradNr);
+  koncernTradVyer.set(id, { noder, extra });
+  if(koncernTradVyer.size > 12) koncernTradVyer.delete(koncernTradVyer.keys().next().value);
+  const fokus = noder.some(x => x.id === koncernTradFokusSenast) ? koncernTradFokusSenast : null;
+  return '<div class="ktrad-vy" data-ktrad="' + id + '">' + koncernTradInre(noder, extra, fokus) + '</div>';
+}
+function koncernTradInre(noder, extra, fokusId){
+  // Ryms på bladets bredd: bolaget överst, därunder det som bolaget äger i radbrytande rutnät grupperat per typ.
+  const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : t === 'Underkoncern' ? 'under' : 'ovrigt';
   const proc = x => x.procent != null ? String(x.procent).replace('.', ',') + ' %' : '';
+  const attr = s => escapeHtml(String(s == null ? '' : s)).replace(/"/g, '&quot;');
   const barnAv = id => ekonomiSchemaBarn(noder, id);
-  const baraUnder = x => x.typ === 'Underkoncern' && barnAv(x.id).length > 0;
-  const arUnder = x => !!x.parentId && (baraUnder(x) || barnAv(x.id).length >= KSCHEMA_UNDER_MIN);
-  const underRad = (x, djup) => '<div class="knod-barn-rad knod-under" style="padding-left:' + (djup * 10) + 'px;">' + barnAv(x.id).length + ' bolag, se underkoncernen nedan</div>';
-  const barnLista = (pid, djup) => { const barn = barnAv(pid); return barn.length ? '<div class="knod-barn">' + barn.map(b => '<div class="knod-barn-rad" style="padding-left:' + (djup * 10) + 'px;">' + (proc(b) ? '<span class="knod-barn-proc">' + proc(b) + '</span>' : '') + escapeHtml(b.namn || '') + '</div>' + (arUnder(b) ? underRad(b, djup + 1) : barnLista(b.id, djup + 1))).join('') + '</div>' : ''; };
-  // Beskrivningen delas på " · " till egna rader (t.ex. org.nr · förening · delägare).
-  const subHtml = t => escapeHtml(t).replace(/ %/g, '&nbsp;%').split(' · ').join('<br>');
-  const kort = (x, medBarn, klass) => '<div class="knod ' + (klass || typKlass(x.typ)) + '">' + (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + subHtml(x.beskrivning || (klass ? 'Moderbolag i underkoncernen' : x.typ) || '') + '</div>' + (extra ? extra(x) : '') + (medBarn ? (arUnder(x) ? '<div class="knod-barn">' + underRad(x, 0) + '</div>' : barnLista(x.id, 0)) : '') + '</div>';
   const rotter = barnAv(null);
   if(!rotter.length) return '<p class="eko-sub">Inget koncernschema ännu.</p>';
-  const grupper = [['Dotterbolag', 'Dotterbolag (över 50 %)'], ['Intressebolag', 'Intressebolag (20–50 %)'], ['Övrigt innehav', 'Övriga innehav']];
-  const block = (rot, under) => {
-    const barn = barnAv(rot.id).filter(b => !baraUnder(b));
-    let h = '<div class="kschema' + (under ? ' kschema-under' : '') + '">';
-    if(under){
-      const agare = noder.find(y => y.id === rot.parentId);
-      h += '<div class="kschema-under-rubrik">Underkoncern<span>' + escapeHtml(rot.namn || '') + (agare ? ', ägs ' + (proc(rot) ? 'till ' + proc(rot) + ' ' : '') + 'av ' + escapeHtml(agare.namn || '') : '') + '</span></div>';
-    }
-    h += '<div class="kschema-rot">' + kort(rot, false, under ? 'moder' : null) + '</div>';
+  let fokus = fokusId ? noder.find(x => x.id === fokusId && barnAv(x.id).length > 0) : null;
+  if(fokus && !fokus.parentId && rotter.length === 1) fokus = null;
+  const antalRad = (x, djup) => '<div class="knod-barn-rad knod-under" style="padding-left:' + (djup * 10) + 'px;">' + barnAv(x.id).length + ' bolag</div>';
+  const barnLista = (pid, djup) => { const barn = barnAv(pid); return barn.length ? '<div class="knod-barn">' + barn.map(b => '<div class="knod-barn-rad" style="padding-left:' + (djup * 10) + 'px;">' + (proc(b) ? '<span class="knod-barn-proc">' + proc(b) + '</span>' : '') + escapeHtml(b.namn || '') + '</div>' + (barnAv(b.id).length > KSCHEMA_LISTA_MAX ? antalRad(b, djup + 1) : barnLista(b.id, djup + 1))).join('') + '</div>' : ''; };
+  // Beskrivningen delas på " · " till egna rader (t.ex. org.nr · förening · delägare).
+  const subHtml = t => escapeHtml(t).replace(/ %/g, '&nbsp;%').split(' · ').join('<br>');
+  const agdAv = x => { const a = x.parentId ? noder.find(y => y.id === x.parentId) : null; return a ? 'Ägs ' + (proc(x) ? 'till ' + proc(x) + ' ' : '') + 'av ' + (a.namn || '') : ''; };
+  const kort = (x, arRot) => {
+    const n = barnAv(x.id).length;
+    const oppna = !arRot && n > 0;
+    return '<div class="knod ' + (arRot && fokus ? 'moder' : typKlass(x.typ)) + (oppna ? ' knod-oppna' : '') + '"' + (oppna ? ' data-knod="' + attr(x.id) + '" role="button" tabindex="0" title="Öppna koncernschemat för ' + attr(x.namn) + '"' : '') + '>' +
+      (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + subHtml(x.beskrivning || (arRot && fokus ? agdAv(x) : '') || x.typ || '') + '</div>' + (extra ? extra(x) : '') +
+      (oppna ? (n > KSCHEMA_LISTA_MAX || x.typ === 'Underkoncern' ? '<div class="knod-barn">' + antalRad(x, 0) + '</div>' : barnLista(x.id, 0)) + '<div class="knod-oppna-rad">Öppna ›</div>' : '') + '</div>';
+  };
+  const grupper = [['Dotterbolag', 'Dotterbolag (över 50 %)'], ['Intressebolag', 'Intressebolag (20–50 %)'], ['Underkoncern', 'Underkoncerner'], ['Övrigt innehav', 'Övriga innehav']];
+  const block = rot => {
+    const barn = barnAv(rot.id);
+    let h = '<div class="kschema"><div class="kschema-rot">' + kort(rot, true) + '</div>';
     if(barn.length){
       h += '<div class="kschema-stam"></div>';
       const kanda = grupper.map(g => g[0]);
       grupper.forEach(([typ, rubrik]) => {
         const rs = barn.filter(b => b.typ === typ || (typ === 'Övrigt innehav' && !kanda.includes(b.typ)));
         if(!rs.length) return;
-        h += '<div class="kschema-grupp"><div class="kschema-rubrik">' + rubrik + ' <span>' + rs.length + ' bolag</span></div><div class="kschema-grid">' + rs.map(b => kort(b, true)).join('') + '</div></div>';
+        h += '<div class="kschema-grupp"><div class="kschema-rubrik">' + rubrik + ' <span>' + rs.length + ' bolag</span></div><div class="kschema-grid">' + rs.map(b => kort(b, false)).join('') + '</div></div>';
       });
     }
     return h + '</div>';
   };
-  // Underkoncernerna kommer direkt efter sitt huvudschema, i samma ordning som i trädet.
-  const underTill = rot => { const ut = []; const sok = (id, vakt) => { if(vakt > 50) return; barnAv(id).forEach(b => { if(arUnder(b)) ut.push(b); sok(b.id, vakt + 1); }); }; sok(rot.id, 0); return ut; };
-  return rotter.map(r => block(r, false) + underTill(r).map(u => block(u, true)).join('')).join('') + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav</div>';
+  let h = '';
+  if(fokus){
+    const led = []; let cur = fokus, vakt = 0;
+    while(cur && vakt++ < 50){ led.unshift(cur); cur = cur.parentId ? noder.find(y => y.id === cur.parentId) : null; }
+    h += '<div class="ktrad-smulor">' + (rotter.length > 1 ? '<button type="button" class="ktrad-smula" data-knod="">Hela koncernen</button><span class="ktrad-smul-sep">›</span>' : '') +
+      led.map((x, i) => i === led.length - 1 ? '<span class="ktrad-smula-nu">' + escapeHtml(x.namn || '') + '</span>' : '<button type="button" class="ktrad-smula" data-knod="' + attr(x.id) + '">' + escapeHtml(x.namn || '') + '</button><span class="ktrad-smul-sep">›</span>').join('') + '</div>';
+    h += block(fokus);
+  } else h += rotter.map(block).join('');
+  return h + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav <span class="ktrad-legend-tips">Klicka på ett bolag som äger andra bolag för att öppna dess schema.</span></div>';
 }
+document.addEventListener('click', e => {
+  const t = e.target && e.target.closest ? e.target.closest('[data-knod]') : null; if(!t) return;
+  const vyEl = t.closest('.ktrad-vy'); if(!vyEl) return;
+  const vy = koncernTradVyer.get(vyEl.dataset.ktrad); if(!vy) return;
+  koncernTradFokusSenast = t.dataset.knod || null;
+  vyEl.innerHTML = koncernTradInre(vy.noder, vy.extra, koncernTradFokusSenast);
+  if(vyEl.getBoundingClientRect().top < 0) vyEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+});
+document.addEventListener('keydown', e => {
+  if((e.key === 'Enter' || e.key === ' ') && e.target && e.target.matches && e.target.matches('.knod-oppna[data-knod]')){ e.preventDefault(); e.target.click(); }
+});
 // Klistra in en lista med bolag i schemat. En rad per bolag med kolumnerna
 // Bolag; Ägs av; Andel i procent; Beskrivning, åtskilda med semikolon eller tabb (Excel).
 // Ägaren ska stå på en tidigare rad eller redan finnas i schemat. Ett bolag som redan finns
@@ -15683,13 +15714,16 @@ function ekonomiSchemaKlistraPopup(){
   };
   setTimeout(() => ta.focus(), 50);
 }
+// Tabellen med alla bolag visar bara de första raderna tills man klickar på Visa mer.
+const EKO_SCHEMA_RADER_KORT = 4;
+let ekoSchemaVisaAlla = false;
 function renderEkonomiKoncernSchema(){
   const wrap = document.getElementById('ekoSchemaWrap'); if(!wrap) return;
   const noder = ekonomiSchemaNoder();
   wrap.innerHTML = '';
   const bar = document.createElement('div'); bar.style.cssText = 'display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;';
   const add = document.createElement('button'); add.type = 'button'; add.className = 'add-inline-btn'; add.textContent = '+ Lägg till bolag i schemat';
-  add.onclick = async () => { const namn = prompt('Bolagets namn:', ''); if(namn === null || !namn.trim()) return; const root = noder.find(x => !x.parentId); noder.push({ id: uid(), namn: namn.trim(), parentId: root ? root.id : null, procent: root ? 100 : null, typ: root ? 'Dotterbolag' : 'Moderbolag', beskrivning: '', bolagId: null, aktorKey: null, ordning: noder.length }); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
+  add.onclick = async () => { const namn = prompt('Bolagets namn:', ''); if(namn === null || !namn.trim()) return; ekoSchemaVisaAlla = true; const root = noder.find(x => !x.parentId); noder.push({ id: uid(), namn: namn.trim(), parentId: root ? root.id : null, procent: root ? 100 : null, typ: root ? 'Dotterbolag' : 'Moderbolag', beskrivning: '', bolagId: null, aktorKey: null, ordning: noder.length }); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); };
   bar.appendChild(add);
   const klistra = document.createElement('button'); klistra.type = 'button'; klistra.className = 'add-inline-btn'; klistra.textContent = 'Klistra in lista'; klistra.onclick = () => ekonomiSchemaKlistraPopup(); bar.appendChild(klistra);
   if(ekonomiAndelarList().length){ const seed = document.createElement('button'); seed.type = 'button'; seed.className = 'add-inline-btn'; seed.textContent = noder.length ? 'Komplettera från andelar' : 'Skapa från andelar (balansrapporten)'; seed.onclick = async () => { ekonomiSchemaSkapaFranAndelar(); await saveEkonomiKoncern(); renderEkonomiKoncernSchema(); }; bar.appendChild(seed); }
@@ -15727,6 +15761,17 @@ function renderEkonomiKoncernSchema(){
       tb.appendChild(tr);
     });
     t.appendChild(tb); scroll.appendChild(t); wrap.appendChild(scroll);
+    if(ordnade.length > EKO_SCHEMA_RADER_KORT){
+      const rader = [...tb.children];
+      const mer = document.createElement('button'); mer.type = 'button'; mer.className = 'add-inline-btn'; mer.style.marginBottom = '18px';
+      const satt = () => {
+        rader.forEach((tr, i) => { tr.style.display = (ekoSchemaVisaAlla || i < EKO_SCHEMA_RADER_KORT) ? '' : 'none'; });
+        mer.textContent = ekoSchemaVisaAlla ? 'Visa färre' : 'Visa mer (' + (ordnade.length - EKO_SCHEMA_RADER_KORT) + ' bolag till)';
+      };
+      mer.onclick = () => { ekoSchemaVisaAlla = !ekoSchemaVisaAlla; satt(); };
+      scroll.style.marginBottom = '8px';
+      wrap.appendChild(mer); satt();
+    }
   } else {
     const p = document.createElement('p'); p.className = 'eko-sub'; p.textContent = 'Lägg till bolagen och ange vem som äger vad, eller skapa ett förslag från andelarna i balansrapporten.'; wrap.appendChild(p);
   }

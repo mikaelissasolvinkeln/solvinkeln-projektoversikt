@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261118163051">
+<meta name="app-build" content="20261118163553">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=Lora:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -797,6 +797,19 @@
   .kschema-under-rubrik{ font-size:11px; letter-spacing:0.8px; text-transform:uppercase; color:var(--ink-soft); font-weight:600; text-align:center; margin:0 0 22px; }
   .kschema-under-rubrik span{ display:block; font-size:12.5px; font-weight:400; letter-spacing:0; text-transform:none; margin-top:3px; }
   .knod-barn-rad.knod-under{ color:var(--ink-soft); font-style:italic; }
+  .ktrad-vy{ scroll-margin-top:90px; }
+  .ktrad-smulor{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 20px; font-size:12.5px; }
+  .ktrad-smulor .ktrad-smula{ border:1px solid var(--line-soft); background:var(--paper); border-radius:999px; padding:5px 13px; font-size:12.5px; font-weight:400; color:var(--ink); cursor:pointer; font-family:inherit; text-transform:none; letter-spacing:0; width:auto; margin:0; }
+  .ktrad-smulor .ktrad-smula:hover{ border-color:var(--ink-soft); }
+  .ktrad-smula-nu{ font-weight:600; padding:5px 2px; }
+  .ktrad-smul-sep{ color:var(--ink-soft); }
+  .knod.under{ border-color:var(--ink); }
+  .knod.under .knod-proc{ border-color:var(--ink); }
+  .knod-oppna{ cursor:pointer; transition:box-shadow .12s, transform .12s; }
+  .knod-oppna:hover, .knod-oppna:focus-visible{ box-shadow:0 5px 16px rgba(34,25,15,0.14); transform:translateY(-1px); outline:none; }
+  .knod-oppna-rad{ margin-top:8px; font-size:11px; font-weight:600; color:var(--ink); text-align:right; }
+  .ktrad-legend-tips{ margin-left:auto; font-style:italic; }
+  @media print{ .knod-oppna-rad, .ktrad-legend-tips{ display:none; } }
   @media print{ .kschema-grid{ grid-template-columns:repeat(5, 1fr); } .kschema .knod{ break-inside:avoid; } }
   /* ---------- Ägarportal (Prosavio) ---------- */
   .portal{ min-height:100vh; background:var(--bg); color:var(--ink); font-family:Inter, system-ui, sans-serif; }
@@ -1669,8 +1682,6 @@
     </div>
 
     <div id="ekonomiKoncernSchemaView" style="display:none;">
-      <h3 style="margin:0 0 4px;">Koncernschema</h3>
-      <p class="eko-sub" style="margin:0 0 12px;">Fyll i vem som äger vad så ritas koncernträdet nedan. Ett bolag som i sin tur äger minst fyra bolag får ett eget underkoncernschema. Välj typen Underkoncern för ett bolag som bara ska visas som eget schema och inte som kort hos sin ägare. Samma träd visas i ägarportalen och i delningslänkarna.</p>
       <div id="ekoSchemaWrap"></div>
     </div>
 
@@ -3070,7 +3081,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261118163051"></script>
-<script src="app.js?v=20261118163051"></script>
+<script src="db.js?v=20261118163553"></script>
+<script src="app.js?v=20261118163553"></script>
 </body>
 </html>
