@@ -33,22 +33,43 @@
   const SESSION_FLAG = 'sf-access-granted';
   const LOCAL_PREFIX = 'sf-local:';
 
+  // Inloggningen sparas bara i fliken (sessionStorage): den överlever en omladdning men inte att
+  // fliken eller webbläsaren stängs, så man loggar in varje gång man öppnar appen. Lösenordet kan
+  // webbläsaren själv spara om man väljer det. Dessutom krävs ny inloggning efter LOGIN_MAX_MS,
+  // vilket bara kontrolleras när sidan laddas (ingen kastas ut mitt i arbetet).
+  const LOGIN_AT_KEY = 'sf-login-at';
+  const LOGIN_MAX_MS = 12 * 60 * 60 * 1000;
+
   let sb = null;
   if(hasSupabase){
-    sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+    sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+      auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
+    });
+    // Äldre versioner sparade inloggningen permanent i localStorage - städa bort den.
+    try{
+      Object.keys(localStorage).forEach(k => { if(/^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); });
+    }catch(e){ /* localStorage kan vara avstängt */ }
   }
 
   // ---------- Inloggning (eget konto per medarbetare) ----------
   async function isAuthenticated(){
     if(!hasSupabase) return sessionStorage.getItem(SESSION_FLAG) === '1';
     const { data } = await sb.auth.getSession();
-    return !!(data && data.session);
+    if(!(data && data.session)) return false;
+    const at = parseInt(sessionStorage.getItem(LOGIN_AT_KEY), 10);
+    if(!at || Date.now() - at > LOGIN_MAX_MS){
+      try{ await sb.auth.signOut({ scope: 'local' }); }catch(e){ /* sessionen tas bort lokalt ändå */ }
+      sessionStorage.removeItem(LOGIN_AT_KEY);
+      sessionStorage.removeItem(SESSION_FLAG);
+      return false;
+    }
+    return true;
   }
 
   async function signIn(email, password){
     if(!hasSupabase) return { ok: false, error: 'Kräver att Supabase är påkopplat' };
     const { error } = await sb.auth.signInWithPassword({ email, password });
-    if(!error) sessionStorage.setItem(SESSION_FLAG, '1');
+    if(!error){ sessionStorage.setItem(SESSION_FLAG, '1'); sessionStorage.setItem(LOGIN_AT_KEY, String(Date.now())); }
     return { ok: !error, error: error ? error.message : null };
   }
 

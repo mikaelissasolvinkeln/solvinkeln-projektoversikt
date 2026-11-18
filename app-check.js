@@ -15159,10 +15159,9 @@ async function attemptPersonalLogin(){
     btn.disabled = false;
   }
 }
-document.getElementById('personalLoginSubmit').onclick = attemptPersonalLogin;
-document.getElementById('personalLoginPassword').addEventListener('keydown', e => {
-  if(e.key === 'Enter') attemptPersonalLogin();
-});
+// Formuläret skickas aldrig till någon server: inloggningen görs av attemptPersonalLogin. Att det är
+// ett riktigt formulär gör att webbläsaren kan spara lösenordet. Enter i fälten skickar formuläret.
+document.getElementById('personalLoginFields').addEventListener('submit', e => { e.preventDefault(); attemptPersonalLogin(); });
 
 // ---------- Realtidssynk: ersätter/kompletterar 30-minuterspollningen ovan ----------
 // När någon annan sparar en ändring (i Supabase, eller i en annan flik lokalt i mock-läge)
@@ -16473,7 +16472,7 @@ function avstUppgifter(ym){
   const nyckel = u => u.forfall || '9999';
   return avstamningData.punkter.filter(p => avstGaller(p, ym))
     .map(p => { const fack = avstFack(p, ym); return { p, ym: fack, forfall: avstForfall(p, ym), st: (avstamningData.manader[fack] || {})[p.id] || {} }; })
-    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : String(a.p.text).localeCompare(String(b.p.text), 'sv'));
+    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : 0); // samma dag: i den ordning de lades upp
 }
 // Det som inte bockats av månaderna före den visade (ett år bakåt).
 function avstEfterslap(ym){
