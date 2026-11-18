@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118113031';
+const APP_BUILD = '20261118113215';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16473,7 +16473,7 @@ function avstUppgifter(ym){
   const nyckel = u => u.forfall || '9999';
   return avstamningData.punkter.filter(p => avstGaller(p, ym))
     .map(p => { const fack = avstFack(p, ym); return { p, ym: fack, forfall: avstForfall(p, ym), st: (avstamningData.manader[fack] || {})[p.id] || {} }; })
-    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : String(a.p.text).localeCompare(String(b.p.text), 'sv'));
+    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : 0); // samma dag: i den ordning de lades upp
 }
 // Det som inte bockats av månaderna före den visade (ett år bakåt).
 function avstEfterslap(ym){
