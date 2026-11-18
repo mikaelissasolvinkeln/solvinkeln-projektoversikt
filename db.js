@@ -78,23 +78,78 @@
     return result;
   }
 
+  // ---------- Delad ekonomi ----------
+  // Ekonomin ligger i Mikaels rader i personal_data. Kontona i EKONOMI_MEDADMIN läser och skriver samma
+  // rader (kräver schema-ekonomi-delning.sql). Det gäller nycklar som börjar med "ekonomi-" och kalkylmallen.
+  const EKONOMI_AGARE_ID = '5e35722c-d763-4c54-ab20-ee68acf74bb5';
+  const EKONOMI_MEDADMIN = ['micheline.touma@solvinkeln.se'];
+  function arDeladNyckel(key){ return /^ekonomi-/.test(key) || key === 'nya-projekt-mall'; }
+  function radAgare(user, key){
+    return arDeladNyckel(key) && EKONOMI_MEDADMIN.indexOf(String(user.email || '').toLowerCase()) >= 0 ? EKONOMI_AGARE_ID : user.id;
+  }
+  // Varje delad nyckel är ett helt JSON-block. För att två personer inte ska skriva över varandra sparas
+  // ett block bara om det är oförändrat på servern sedan vi läste det (updated_at). Annars DELAD_KONFLIKT.
+  const deladVersion = {};  // key -> updated_at vid senaste läsning eller sparning (null = raden fanns inte)
+  const deladLasFel = {};   // key -> true om senaste läsningen misslyckades
+  const deladKo = {};       // key -> kö, så egna läsningar och sparningar av samma nyckel sker i tur och ordning
+  function iKo(key, fn){
+    const p = (deladKo[key] || Promise.resolve()).then(fn);
+    deladKo[key] = p.catch(() => {});
+    return p;
+  }
+  function deladKonflikt(key, opts){
+    const e = new Error('Någon annan har sparat ändringar sedan du öppnade sidan. Ladda om sidan och gör om ändringen.');
+    e.code = 'DELAD_KONFLIKT';
+    if(!(opts && opts.tyst) && window.DB && typeof window.DB.onDeladKonflikt === 'function'){ try{ window.DB.onDeladKonflikt(key); }catch(_){ /* visningen får inte stoppa felet */ } }
+    return e;
+  }
+
   // ---------- Privat, personlig data (egen tabell, egen RLS - se schema-personal.sql) ----------
   async function getPersonalData(key){
     if(!hasSupabase) return localGet('personal:' + key);
     const { data: userData } = await sb.auth.getUser();
     if(!userData || !userData.user) return null;
-    const { data, error } = await withCacheRetry(() => sb.from('personal_data')
-      .select('value').eq('user_id', userData.user.id).eq('key', key).maybeSingle());
-    if(error) throw error;
-    return data ? { value: data.value } : null;
+    const delad = arDeladNyckel(key);
+    const las = async () => {
+      const { data, error } = await withCacheRetry(() => sb.from('personal_data')
+        .select('value, updated_at').eq('user_id', radAgare(userData.user, key)).eq('key', key).maybeSingle());
+      if(error){ if(delad) deladLasFel[key] = true; throw error; }
+      if(delad){ deladVersion[key] = data ? data.updated_at : null; deladLasFel[key] = false; }
+      return data ? { value: data.value } : null;
+    };
+    return delad ? iKo(key, las) : las();
   }
-  async function setPersonalData(key, value){
+  async function setPersonalData(key, value, opts){
     if(!hasSupabase){ localSet('personal:' + key, value); return; }
     const { data: userData } = await sb.auth.getUser();
     if(!userData || !userData.user) throw new Error('Inte inloggad');
-    const row = { user_id: userData.user.id, key, value, updated_at: new Date().toISOString() };
-    const { error } = await withCacheRetry(() => sb.from('personal_data').upsert(row));
-    if(error) throw error;
+    const agare = radAgare(userData.user, key);
+    if(!arDeladNyckel(key)){
+      const row = { user_id: agare, key, value, updated_at: new Date().toISOString() };
+      const { error } = await withCacheRetry(() => sb.from('personal_data').upsert(row));
+      if(error) throw error;
+      return;
+    }
+    return iKo(key, async () => {
+      const ny = new Date().toISOString();
+      const row = { user_id: agare, key, value, updated_at: ny };
+      const kand = deladVersion[key];
+      if(kand === undefined){
+        // Aldrig läst i den här sessionen: spara som förut, men inte om läsningen misslyckades.
+        if(deladLasFel[key]) throw new Error('Datan kunde inte läsas in. Ladda om sidan innan du sparar.');
+        const { error } = await withCacheRetry(() => sb.from('personal_data').upsert(row));
+        if(error) throw error;
+      } else if(kand === null){
+        const { error } = await withCacheRetry(() => sb.from('personal_data').insert(row));
+        if(error){ if(error.code === '23505') throw deladKonflikt(key, opts); throw error; }
+      } else {
+        const { data, error } = await withCacheRetry(() => sb.from('personal_data')
+          .update({ value, updated_at: ny }).eq('user_id', agare).eq('key', key).eq('updated_at', kand).select('key'));
+        if(error) throw error;
+        if(!data || !data.length) throw deladKonflikt(key, opts);
+      }
+      deladVersion[key] = ny;
+    });
   }
 
   // ---------- Liggaren: ärenden som kan tilldelas en kollega (egen tabell,
@@ -317,6 +372,7 @@
     getPortalRapport,
     upsertPortalRapport,
     signOut,
+    onDeladKonflikt: null,
     onRemoteChange(cb){ listeners.push(cb); },
     hasSupabase
   };

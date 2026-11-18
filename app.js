@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261117165642';
+const APP_BUILD = '20261118113031';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -36,11 +36,12 @@ const LIGGAREN_PEOPLE = [
 const PERSONAL_NAMES_BY_EMAIL = LIGGAREN_PEOPLE.reduce((acc, p) => { acc[p.email.toLowerCase()] = p.name; return acc; }, {});
 
 // ---------- Ekonomi (företagsövergripande, bara synlig/nåbar för detta konto) ----------
-// Datan lagras privat via DB.getPersonalData/setPersonalData (personal_data-
-// tabellen, RLS: auth.uid() = user_id) - se schema-personal.sql. Ingen extra
-// databasspärr behövs utöver den, eftersom ingen annan användares konto kan nå
-// dessa rader ändå. E-postkollen nedan är bara en UI-spärr.
-const EKONOMI_ADMIN_EMAIL = 'mikael.issa@jwk.se';
+// Datan lagras i Mikaels rader i personal_data via DB.getPersonalData/setPersonalData
+// (RLS: auth.uid() = user_id, se schema-personal.sql). Övriga konton i listan nedan läser och
+// skriver samma rader: db.js pekar om nycklarna och schema-ekonomi-delning.sql släpper in dem.
+// E-postkollen här är bara en UI-spärr, databasen avgör vem som faktiskt kommer åt datan.
+const EKONOMI_ADMIN_EMAILS = ['mikael.issa@jwk.se', 'micheline.touma@solvinkeln.se'];
+PERSONAL_NAMES_BY_EMAIL['micheline.touma@solvinkeln.se'] = 'Micheline';
 const EKONOMI_KEYS = {
   meta: 'ekonomi-projekt-meta',
   budgetDetalj: 'ekonomi-budget-detalj',
@@ -2833,6 +2834,7 @@ function setEkonomiSubView(view){
   document.getElementById('ekonomiKoncernKostnaderView').style.display = view === 'koncernkostnader' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernBolagView').style.display = view === 'koncernbolag' ? 'block' : 'none';
   document.getElementById('ekonomiKoncernSchemaView').style.display = view === 'koncernschema' ? 'block' : 'none';
+  document.getElementById('ekonomiAvstamningView').style.display = view === 'avstamning' ? 'block' : 'none';
   document.getElementById('ekonomiOversiktView').style.display = view === 'oversikt' ? 'block' : 'none';
   document.getElementById('ekonomiProjektView').style.display = view === 'projekt' ? 'block' : 'none';
   document.getElementById('ekonomiBudgetView').style.display = view === 'budget' ? 'block' : 'none';
@@ -2858,6 +2860,7 @@ function setEkonomiSubView(view){
   else if(view === 'koncernkostnader') renderEkonomiKoncernKostnader();
   else if(view === 'koncernbolag') renderEkonomiKoncernBolag();
   else if(view === 'koncernschema') renderEkonomiKoncernSchema();
+  else if(view === 'avstamning') oppnaEkonomiAvstamning();
   else renderEkonomiNumberTab(view);
   if(typeof nyMenyUppdatera === 'function') nyMenyUppdatera();
 }
@@ -15118,7 +15121,7 @@ async function init(){
   await loadProjects();
   const info = await DB.getCurrentUserInfo();
   myEmail = (info.email || '').toLowerCase();
-  isEkonomiAdmin = myEmail === EKONOMI_ADMIN_EMAIL;
+  isEkonomiAdmin = EKONOMI_ADMIN_EMAILS.includes(myEmail);
   document.getElementById('goToEkonomiCard').style.display = isEkonomiAdmin ? 'block' : 'none';
   if(isEkonomiAdmin) await loadEkonomiData();
   else { try{ const prefs = await DB.getPersonalData(EKONOMI_KEYS.prefs); uiPrefs = (prefs && JSON.parse(prefs.value)) || {}; }catch(e){ uiPrefs = {}; } if(uiPrefsMigrera()) saveUiPrefs(); }
@@ -16405,6 +16408,238 @@ function portalDetaljHtml(data, id, state){
 }
 
 // ---------- Ny layout: sidomeny och topprad ----------
+// ---------- Checklista ekonomi ----------
+// Uppgifter som bara ekonomiadministratörerna ser (EKONOMI_ADMIN_EMAILS). Två sorter: "manad" återkommer
+// en viss dag varje månad (t.ex. löner den 20:e), "engang" har ett datum och kommer en gång.
+// Lagras i den delade nyckeln ekonomi-avstamning: { punkter: [{id, text, typ, dag, datum, fran, till, skapadAv}],
+// manader: { 'YYYY-MM': { [id]: { klar, av, nar, not } } } }. Avbockningen hör till förfallomånaden.
+const AVSTAMNING_KEY = 'ekonomi-avstamning';
+let avstamningData = { punkter: [], manader: {} };
+let avstamningManad = null;       // visad månad, 'YYYY-MM'
+let avstamningRedigera = false;   // visar ändra- och ta bort-knappar
+let avstamningRedigerarId = null; // uppgiften som ligger i formuläret för ändring
+const avstPad = n => String(n).padStart(2, '0');
+const avstAttr = s => escapeHtml(String(s == null ? '' : s)).replace(/"/g, '&quot;');
+function avstManadNu(){ const d = new Date(); return d.getFullYear() + '-' + avstPad(d.getMonth() + 1); }
+function avstIdag(){ return avstManadNu() + '-' + avstPad(new Date().getDate()); }
+function avstManadSteg(ym, steg){ const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + steg, 1); return d.getFullYear() + '-' + avstPad(d.getMonth() + 1); }
+function avstManadNamn(ym){ const [y, m] = ym.split('-').map(Number); const s = new Date(y, m - 1, 1).toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' }); return s.charAt(0).toUpperCase() + s.slice(1); }
+function avstDatumText(d){ const x = d instanceof Date ? d : new Date(d + 'T12:00:00'); return isNaN(x) ? '' : x.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' }).replace(/\.$/, ''); }
+function avstNorm(d){
+  d = d && typeof d === 'object' ? d : {};
+  if(!Array.isArray(d.punkter)) d.punkter = [];
+  if(!d.manader || typeof d.manader !== 'object') d.manader = {};
+  return d;
+}
+async function avstLas(){
+  const r = await DB.getPersonalData(AVSTAMNING_KEY);
+  let d = null; try{ d = r ? JSON.parse(r.value) : null; }catch(e){ d = null; }
+  avstamningData = avstNorm(d);
+}
+// Gör en ändring och sparar. Har den andra hunnit spara emellan läses listan om och ändringen görs om ovanpå,
+// så ingen skriver över den andras avbockningar. fn ska leta upp det den ändrar via id.
+async function avstAndra(fn){
+  for(let i = 0; i < 4; i++){
+    fn(avstamningData);
+    try{ await DB.setPersonalData(AVSTAMNING_KEY, JSON.stringify(avstamningData), { tyst: true }); return true; }
+    catch(e){
+      if(e && e.code === 'DELAD_KONFLIKT' && i < 3){ try{ await avstLas(); }catch(e2){ showDebugError('Kunde inte läsa checklistan', e2); return false; } continue; }
+      showDebugError('Kunde inte spara checklistan', e); return false;
+    }
+  }
+  return false;
+}
+function avstManadAv(iso){ const d = new Date(iso); return isNaN(d) ? '' : d.getFullYear() + '-' + avstPad(d.getMonth() + 1); }
+// Var avbockningen för en uppgift lagras: förfallomånaden, eller 'utan' för enstaka uppgifter utan datum.
+function avstFack(p, ym){ return p.typ === 'engang' ? (p.datum ? String(p.datum).slice(0, 7) : 'utan') : ym; }
+function avstGaller(p, ym){
+  if(p.typ === 'engang'){
+    if(p.datum) return String(p.datum).slice(0, 7) === ym;
+    // Utan datum: ligger kvar i innevarande månad tills den bockas av, och visas sedan den månad den blev klar.
+    const st = (avstamningData.manader.utan || {})[p.id];
+    return st && st.klar ? avstManadAv(st.nar) === ym : ym === avstManadNu();
+  }
+  return (p.fran || '0000-00') <= ym && (!p.till || ym <= p.till);
+}
+// Förfallodag i månaden. Dag 31 blir sista dagen i kortare månader.
+function avstForfall(p, ym){
+  if(p.typ === 'engang') return p.datum || '';
+  const [y, m] = ym.split('-').map(Number);
+  const sista = new Date(y, m, 0).getDate();
+  return ym + '-' + avstPad(Math.min(Math.max(parseInt(p.dag, 10) || 1, 1), sista));
+}
+// Månadens uppgifter i datumordning. Uppgifter utan datum hamnar sist.
+function avstUppgifter(ym){
+  const nyckel = u => u.forfall || '9999';
+  return avstamningData.punkter.filter(p => avstGaller(p, ym))
+    .map(p => { const fack = avstFack(p, ym); return { p, ym: fack, forfall: avstForfall(p, ym), st: (avstamningData.manader[fack] || {})[p.id] || {} }; })
+    .sort((a, b) => nyckel(a) < nyckel(b) ? -1 : nyckel(a) > nyckel(b) ? 1 : String(a.p.text).localeCompare(String(b.p.text), 'sv'));
+}
+// Det som inte bockats av månaderna före den visade (ett år bakåt).
+function avstEfterslap(ym){
+  const ut = [];
+  for(let i = 12; i >= 1; i--) avstUppgifter(avstManadSteg(ym, -i)).forEach(u => { if(!u.st.klar) ut.push(u); });
+  return ut;
+}
+function avstRadHtml(u, idag){
+  const p = u.p, klar = !!u.st.klar, sen = !klar && !!u.forfall && u.forfall < idag;
+  let h = '<div class="avst-rad' + (klar ? ' klar' : '') + '" data-id="' + avstAttr(p.id) + '" data-ym="' + u.ym + '">';
+  h += '<input type="checkbox" class="avst-bock" data-avst="klar"' + (klar ? ' checked' : '') + ' title="Markera som klar">';
+  h += '<div class="avst-huvud"><div class="avst-text">' + escapeHtml(p.text || '') + '</div><div class="avst-meta">' + (p.typ === 'engang' ? 'En gång' : 'Varje månad') + (p.skapadAv ? ' · upplagd av ' + escapeHtml(p.skapadAv) : '') + '</div></div>';
+  h += '<div class="avst-datum">' + (u.forfall ? avstDatumText(u.forfall) : '<span class="avst-inget">Inget datum</span>') + (sen ? '<span>Försenad</span>' : '') + '</div>';
+  h += '<input type="text" class="avst-not" data-avst="not" placeholder="Anteckning" value="' + avstAttr(u.st.not || '') + '">';
+  h += '<div class="avst-vem">' + (klar ? 'Klar' + (u.st.av ? ' · ' + escapeHtml(u.st.av) : '') + (u.st.nar ? ' · ' + avstDatumText(new Date(u.st.nar)) : '') : 'Ej klar') + '</div>';
+  if(avstamningRedigera) h += '<button type="button" class="avst-knapp" data-avst="andra" title="Ändra uppgiften">✎</button><button type="button" class="avst-knapp" data-avst="bort" title="Ta bort uppgiften">✕</button>';
+  return h + '</div>';
+}
+function renderEkonomiAvstamning(){
+  const lista = document.getElementById('avstLista'); if(!lista) return;
+  const ym = avstamningManad || (avstamningManad = avstManadNu());
+  const idag = avstIdag();
+  const upp = avstUppgifter(ym), slap = avstEfterslap(ym);
+  document.getElementById('avstManadNamn').textContent = avstManadNamn(ym);
+  document.getElementById('avstRaknare').textContent = upp.length ? upp.filter(u => u.st.klar).length + ' av ' + upp.length + ' klara' : '';
+  document.getElementById('avstRedigeraBtn').textContent = avstamningRedigera ? 'Klar med ändringar' : 'Ändra uppgifter';
+  document.getElementById('avstRedigeraBtn').style.display = avstamningData.punkter.length ? '' : 'none';
+  document.getElementById('avstIdagBtn').style.display = ym === avstManadNu() ? 'none' : '';
+  let h = '';
+  if(slap.length) h += '<div class="avst-rubrik">Ej klart från tidigare månader</div>' + slap.map(u => avstRadHtml(u, idag)).join('') + '<div class="avst-rubrik">' + escapeHtml(avstManadNamn(ym)) + '</div>';
+  h += upp.length ? upp.map(u => avstRadHtml(u, idag)).join('') : '<div class="avst-tomt">Inga uppgifter den här månaden. Lägg till en nedan.</div>';
+  lista.innerHTML = h;
+}
+function avstFormSatt(p){
+  avstamningRedigerarId = p ? p.id : null;
+  const typ = p ? (p.typ === 'engang' ? 'engang' : 'manad') : document.getElementById('avstNyTyp').value;
+  document.getElementById('avstNyText').value = p ? (p.text || '') : '';
+  document.getElementById('avstNyTyp').value = typ;
+  if(p && typ === 'manad') document.getElementById('avstNyDag').value = p.dag || 1;
+  if(p && typ === 'engang') document.getElementById('avstNyDatum').value = p.datum || '';
+  if(!p) document.getElementById('avstNyDatum').value = '';
+  avstFormVisa();
+}
+function avstFormVisa(){
+  const engang = document.getElementById('avstNyTyp').value === 'engang';
+  document.getElementById('avstNyDagWrap').style.display = engang ? 'none' : '';
+  document.getElementById('avstNyDatumWrap').style.display = engang ? '' : 'none';
+  document.getElementById('avstNyBtn').textContent = avstamningRedigerarId ? 'Spara ändring' : 'Lägg till';
+  document.getElementById('avstNyAvbryt').style.display = avstamningRedigerarId ? '' : 'none';
+}
+async function avstSparaUppgift(){
+  const text = document.getElementById('avstNyText').value.trim();
+  if(!text){ showToast('Skriv vad som ska göras.'); return; }
+  const typ = document.getElementById('avstNyTyp').value === 'engang' ? 'engang' : 'manad';
+  let dag = null, datum = null;
+  if(typ === 'manad'){
+    dag = parseInt(document.getElementById('avstNyDag').value, 10);
+    if(!(dag >= 1 && dag <= 31)){ showToast('Ange en dag mellan 1 och 31.'); return; }
+  } else {
+    datum = document.getElementById('avstNyDatum').value;
+    if(datum && !/^\d{4}-\d{2}-\d{2}$/.test(datum)){ showToast('Datumet går inte att läsa.'); return; }
+  }
+  const redId = avstamningRedigerarId, nyttId = uid(), ym = avstamningManad || avstManadNu(), av = myName || myEmail || '';
+  const ok = await avstAndra(d => {
+    let p = redId ? d.punkter.find(x => x.id === redId) : null;
+    if(redId && !p) return; // borttagen av den andra under tiden
+    if(!p){ p = { id: nyttId, skapadAv: av, skapad: new Date().toISOString() }; d.punkter.push(p); }
+    const gammaltFack = p.typ === 'engang' ? avstFack(p, ym) : null;
+    p.text = text; p.typ = typ;
+    if(typ === 'manad'){ p.dag = dag; delete p.datum; if(!p.fran) p.fran = ym; }
+    else {
+      if(datum) p.datum = datum; else delete p.datum;
+      delete p.dag; delete p.fran; delete p.till;
+      // Får en enstaka uppgift nytt datum följer avbockningen med.
+      const nyttFack = avstFack(p, ym);
+      if(gammaltFack && gammaltFack !== nyttFack && d.manader[gammaltFack] && d.manader[gammaltFack][p.id]){
+        (d.manader[nyttFack] || (d.manader[nyttFack] = {}))[p.id] = d.manader[gammaltFack][p.id];
+        delete d.manader[gammaltFack][p.id];
+      }
+    }
+  });
+  if(ok){
+    if(typ === 'engang') avstamningManad = datum ? datum.slice(0, 7) : avstManadNu();
+    avstFormSatt(null);
+    showToast(redId ? 'Uppgiften är ändrad.' : 'Uppgiften är upplagd.');
+  }
+  renderEkonomiAvstamning();
+}
+async function avstTaBort(id){
+  const p = avstamningData.punkter.find(x => x.id === id); if(!p) return;
+  const ym = avstamningManad || avstManadNu();
+  // Återkommande uppgifter som redan bockats av tidigare månader avslutas i stället, så historiken finns kvar.
+  const harHistorik = p.typ !== 'engang' && Object.keys(avstamningData.manader).some(m => m < ym && avstamningData.manader[m] && avstamningData.manader[m][id] && avstamningData.manader[m][id].klar);
+  const fraga = harHistorik ? 'Ta bort "' + p.text + '" från och med ' + avstManadNamn(ym).toLowerCase() + '? Tidigare månader finns kvar.' : 'Ta bort "' + p.text + '"?';
+  if(!confirm(fraga)) return;
+  await avstAndra(d => {
+    const i = d.punkter.findIndex(x => x.id === id); if(i < 0) return;
+    if(harHistorik) d.punkter[i].till = avstManadSteg(ym, -1); else d.punkter.splice(i, 1);
+    Object.keys(d.manader).forEach(m => { if(d.manader[m] && (!harHistorik || m >= ym)) delete d.manader[m][id]; });
+  });
+  if(avstamningRedigerarId === id) avstFormSatt(null);
+  renderEkonomiAvstamning();
+}
+async function avstSattStatus(ym, id, andring){
+  const av = myName || myEmail || '';
+  await avstAndra(d => {
+    if(!d.punkter.some(x => x.id === id)) return;
+    const m = d.manader[ym] || (d.manader[ym] = {});
+    const s = m[id] || (m[id] = {});
+    if('klar' in andring){ s.klar = !!andring.klar; if(s.klar){ s.av = av; s.nar = new Date().toISOString(); } else { delete s.av; delete s.nar; } }
+    if('not' in andring){ if(andring.not) s.not = andring.not; else delete s.not; }
+    if(!s.klar && !s.not) delete m[id];
+  });
+  renderEkonomiAvstamning();
+}
+async function oppnaEkonomiAvstamning(){
+  renderEkonomiAvstamning();
+  try{ await avstLas(); }catch(e){ showDebugError('Kunde inte läsa checklistan', e); }
+  if(ekonomiSubView === 'avstamning') renderEkonomiAvstamning();
+}
+(function(){
+  const lista = document.getElementById('avstLista'); if(!lista) return;
+  lista.addEventListener('change', e => {
+    const rad = e.target.closest('.avst-rad'); if(!rad) return;
+    if(e.target.dataset.avst === 'klar') avstSattStatus(rad.dataset.ym, rad.dataset.id, { klar: e.target.checked });
+    else if(e.target.dataset.avst === 'not') avstSattStatus(rad.dataset.ym, rad.dataset.id, { not: e.target.value.trim() });
+  });
+  lista.addEventListener('click', e => {
+    const b = e.target.closest('button[data-avst]'); if(!b) return;
+    const rad = b.closest('.avst-rad'); if(!rad) return;
+    if(b.dataset.avst === 'bort') avstTaBort(rad.dataset.id);
+    else if(b.dataset.avst === 'andra'){ const p = avstamningData.punkter.find(x => x.id === rad.dataset.id); if(p){ avstFormSatt(p); document.getElementById('avstNyText').focus(); } }
+  });
+  document.getElementById('avstForra').onclick = () => { avstamningManad = avstManadSteg(avstamningManad || avstManadNu(), -1); renderEkonomiAvstamning(); };
+  document.getElementById('avstNasta').onclick = () => { avstamningManad = avstManadSteg(avstamningManad || avstManadNu(), 1); renderEkonomiAvstamning(); };
+  document.getElementById('avstIdagBtn').onclick = () => { avstamningManad = avstManadNu(); renderEkonomiAvstamning(); };
+  document.getElementById('avstRedigeraBtn').onclick = () => { avstamningRedigera = !avstamningRedigera; if(!avstamningRedigera) avstFormSatt(null); renderEkonomiAvstamning(); };
+  document.getElementById('avstNyTyp').onchange = avstFormVisa;
+  document.getElementById('avstNyBtn').onclick = avstSparaUppgift;
+  document.getElementById('avstNyAvbryt').onclick = () => avstFormSatt(null);
+  document.getElementById('avstNyText').addEventListener('keydown', e => { if(e.key === 'Enter') avstSparaUppgift(); });
+  // Hämtar den andras avbockningar när man kommer tillbaka till fönstret.
+  window.addEventListener('focus', () => {
+    if(screen !== 'companyEkonomi' || ekonomiSubView !== 'avstamning') return;
+    const a = document.activeElement;
+    if(a && a.closest && a.closest('#ekonomiAvstamningView') && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    oppnaEkonomiAvstamning();
+  });
+})();
+
+// Ekonomin sparas som hela block. Om någon annan (eller ett annat fönster) har sparat sedan sidan
+// öppnades stoppar db.js sparningen i stället för att skriva över, och den här rutan visas.
+DB.onDeladKonflikt = function(){
+  if(document.getElementById('deladKonfliktRuta')) return;
+  const d = document.createElement('div');
+  d.id = 'deladKonfliktRuta';
+  d.style.cssText = 'position:fixed;inset:0;background:rgba(31,26,20,.45);z-index:10000;display:grid;place-items:center;padding:16px;';
+  d.innerHTML = '<div style="background:#fff;border-radius:12px;padding:22px 24px;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,.25);font-family:Inter,sans-serif;">' +
+    '<h3 style="margin:0 0 8px;font-family:Fraunces,serif;">Ekonomin har ändrats på annat håll</h3>' +
+    '<p style="margin:0 0 16px;font-size:14px;line-height:1.5;">Någon annan, eller du själv i ett annat fönster, har sparat ändringar i ekonomin sedan du öppnade sidan. Din senaste ändring sparades därför inte. Ladda om sidan för att få den senaste versionen och gör sedan om ändringen.</p>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;"><button type="button" class="upload-btn" id="deladKonfliktStang">Stäng</button><button type="button" class="upload-btn" id="deladKonfliktLadda" style="background:var(--ink);color:#fff;border-color:var(--ink);">Ladda om sidan</button></div></div>';
+  document.body.appendChild(d);
+  document.getElementById('deladKonfliktStang').onclick = () => d.remove();
+  document.getElementById('deladKonfliktLadda').onclick = () => location.reload();
+};
+
 // Ramen runt appen. Vyerna och all logik är desamma som förut – menyn anropar de befintliga
 // funktionerna (openPersonal, openHome, openProject, setProjectSubView, setEkonomiSubView …).
 // Layouten slås på med klassen "ny-layout" på <body>. Utan klassen visas den gamla layouten
@@ -16420,6 +16655,7 @@ const NY_IKON = {
   koncern: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
   nyaprojekt: '<path d="M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5M3 17l9 5 9-5"/>',
   agarrapport: '<path d="M5 4h10l4 4v12H5zM14 4v5h5M9 13h6M9 17h6"/>',
+  avstamning: '<path d="M10 6h10M10 12h10M10 18h10M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>',
   mini: '<path d="M4 5v14M20 12H9M13 8l-4 4 4 4"/>',
   gammal: '<path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5"/>'
 };
@@ -16432,7 +16668,8 @@ const NY_MENY = [
   { id: 'ekonomi', label: 'Ekonomi', admin: true, barn: [['oversikt', 'Översikt'], ['projekt', 'Projekt'], ['budget', 'Budget och förväntad vinst'], ['mark', 'Mark'], ['likviditet', 'Likviditet'], ['lan', 'Lån'], ['vinstsolvinkeln', 'Förväntad vinst Solvinkeln']] },
   { id: 'koncern', label: 'Koncernekonomi', admin: true, barn: [['koncern', 'Koncernlikviditet'], ['koncernbolag', 'Bolag'], ['koncernschema', 'Koncernschema'], ['koncernfordran', 'Fordran'], ['koncernlan', 'Lån'], ['koncernkostnader', 'Kostnader']] },
   { id: 'nyaprojekt', label: 'Nya projekt', admin: true },
-  { id: 'agarrapport', label: 'Ägarrapport', admin: true }
+  { id: 'agarrapport', label: 'Ägarrapport', admin: true },
+  { id: 'avstamning', label: 'Checklista ekonomi', admin: true }
 ];
 function nyLayoutPa(){ return document.body.classList.contains('ny-layout'); }
 function nyLagra(k, v){ try{ if(v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch(e){} }
@@ -16478,6 +16715,7 @@ async function nyMenyKlick(id, barn){
   if(id === 'ekonomi') return nyOppnaEkonomi(barn || 'oversikt');
   if(id === 'koncern') return nyOppnaEkonomi(barn || 'koncern');
   if(id === 'nyaprojekt') return nyOppnaEkonomi('nyaprojekt');
+  if(id === 'avstamning') return nyOppnaEkonomi('avstamning');
   if(id === 'agarrapport'){ await nyOppnaEkonomi('koncernbolag'); showEkonomiPortalPopup(); }
 }
 // Markerar rätt rad i menyn och sätter sidans rubrik utifrån var man är.
@@ -16497,6 +16735,7 @@ function nyMenyUppdatera(){
   else if(screen === 'companyEkonomi'){
     const v = ekonomiSubView || 'oversikt';
     if(v === 'nyaprojekt'){ grupp = 'nyaprojekt'; titel = 'Nya projekt'; }
+    else if(v === 'avstamning'){ grupp = 'avstamning'; titel = 'Checklista ekonomi'; }
     else if(/^koncern/.test(v)){ grupp = 'koncern'; barn = v; titel = etikett('koncern', v); }
     else { grupp = 'ekonomi'; barn = v; titel = v === 'oversikt' ? 'Ekonomi' : etikett('ekonomi', v); }
   }

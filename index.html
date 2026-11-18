@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261117165642">
+<meta name="app-build" content="20261118113031">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -548,6 +548,32 @@
     .ny-user{ display:none; }
   }
   @media print{ body.ny-layout .ny-top, body.ny-layout .ny-side{ display:none !important; } body.ny-layout .wrap{ margin:0; padding:0; } }
+  /* ---------- Checklista ekonomi ---------- */
+  .avst-topp{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 14px; }
+  .avst-manad{ font-family:'Fraunces', serif; font-weight:700; font-size:19px; min-width:170px; text-align:center; }
+  .avst-raknare{ font-size:13px; color:var(--ink-soft); margin-left:8px; }
+  .avst-rubrik{ font-size:11.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-soft); margin:16px 0 6px; }
+  .avst-rad{ display:flex; align-items:center; gap:14px; padding:10px 14px; background:#fff; border:1px solid var(--line-soft); border-radius:10px; margin-bottom:6px; }
+  .avst-rad.klar .avst-text{ text-decoration:line-through; color:var(--ink-soft); }
+  .avst-bock{ width:18px; height:18px; flex:0 0 18px; margin:0; accent-color:var(--amber); cursor:pointer; }
+  .avst-huvud{ flex:1 1 220px; min-width:0; }
+  .avst-text{ font-weight:600; font-size:14px; overflow-wrap:anywhere; }
+  .avst-meta{ font-size:11.5px; color:var(--ink-soft); margin-top:2px; }
+  .avst-datum{ flex:0 0 84px; font-size:13px; font-weight:600; }
+  .avst-datum span{ display:block; font-size:11px; font-weight:700; color:var(--danger); }
+  .avst-datum span.avst-inget{ font-size:12px; font-weight:400; color:var(--ink-soft); }
+  .avst-not{ flex:1 1 180px; min-width:120px; width:auto; font:400 13px 'Inter', sans-serif; padding:6px 9px; border:1px solid var(--line-soft); border-radius:7px; background:var(--paper); color:var(--ink); }
+  .avst-vem{ flex:0 0 170px; font-size:12px; color:var(--ink-soft); text-align:right; }
+  .avst-rad.klar .avst-vem{ color:var(--ink); }
+  .avst-knapp{ flex:0 0 28px; width:28px; height:28px; border:1px solid var(--line-soft); border-radius:7px; background:#fff; color:var(--ink-soft); cursor:pointer; font-size:13px; padding:0; }
+  .avst-knapp:hover{ color:var(--ink); border-color:var(--line); }
+  .avst-tomt{ padding:18px; text-align:center; color:var(--ink-soft); font-size:13.5px; border:1px dashed var(--line); border-radius:10px; }
+  .avst-ny{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:16px; padding:14px; background:var(--paper); border:1px solid var(--line-soft); border-radius:10px; font-size:13px; }
+  .avst-ny input, .avst-ny select{ width:auto; font:400 13.5px 'Inter', sans-serif; padding:7px 10px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); }
+  .avst-ny #avstNyText{ flex:1 1 240px; min-width:180px; }
+  .avst-ny #avstNyDag{ width:64px; }
+  @media (max-width:900px){ .avst-rad{ flex-wrap:wrap; } .avst-vem{ flex-basis:100%; text-align:left; } }
+
   /* ---------- Helhetsbild (koncernlikviditet, ägarportal) ---------- */
   .hb-wrap{ border:1px solid var(--line-soft); border-radius:14px; padding:16px 18px 18px; margin:0 0 22px; background:#fff; }
   .hb-top{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
@@ -1238,6 +1264,7 @@
       <button class="ekonomi-sub-tab" data-ekonomi-view="projekt">Projekt</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="koncern">Koncern</button>
       <button class="ekonomi-sub-tab" data-ekonomi-view="nyaprojekt">Nya projekt</button>
+      <button class="ekonomi-sub-tab" data-ekonomi-view="avstamning">Checklista ekonomi</button>
     </div>
     <div class="sub-tabs" id="ekonomiSubTabsBar2" style="margin:0 0 16px; display:none; font-size:12px;"></div>
 
@@ -1472,6 +1499,30 @@
       <input type="file" id="ekoBolagImportInput" accept=".xlsx,.xls,.csv" style="display:none;">
       <input type="file" id="ekoBolagKontoInput" accept=".pdf,application/pdf" multiple style="display:none;">
       <input type="file" id="ekoBolagBrInput" accept=".pdf,application/pdf" style="display:none;">
+    </div>
+
+    <div id="ekonomiAvstamningView" style="display:none;">
+      <div class="avst-topp">
+        <button type="button" id="avstForra" class="upload-btn" title="Föregående månad">‹</button>
+        <div id="avstManadNamn" class="avst-manad"></div>
+        <button type="button" id="avstNasta" class="upload-btn" title="Nästa månad">›</button>
+        <button type="button" id="avstIdagBtn" class="upload-btn" style="display:none;">Den här månaden</button>
+        <span id="avstRaknare" class="avst-raknare"></span>
+        <span style="flex:1;"></span>
+        <button type="button" id="avstRedigeraBtn" class="upload-btn">Ändra uppgifter</button>
+      </div>
+      <div id="avstLista"></div>
+      <div class="avst-ny">
+        <input type="text" id="avstNyText" placeholder="Ny uppgift, till exempel Löner" maxlength="200">
+        <select id="avstNyTyp">
+          <option value="manad">Varje månad</option>
+          <option value="engang">En gång</option>
+        </select>
+        <span id="avstNyDagWrap">den <input type="number" id="avstNyDag" min="1" max="31" value="20"> varje månad</span>
+        <span id="avstNyDatumWrap" style="display:none;">senast <input type="date" id="avstNyDatum"> (datum är valfritt)</span>
+        <button type="button" id="avstNyBtn" class="upload-btn">Lägg till</button>
+        <button type="button" id="avstNyAvbryt" class="upload-btn" style="display:none;">Avbryt</button>
+      </div>
     </div>
 
     <div id="ekonomiKoncernSchemaView" style="display:none;">
@@ -2871,7 +2922,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261117165642"></script>
-<script src="app.js?v=20261117165642"></script>
+<script src="db.js?v=20261118113031"></script>
+<script src="app.js?v=20261118113031"></script>
 </body>
 </html>
