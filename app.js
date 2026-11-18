@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261118114121';
+const APP_BUILD = '20261118114225';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16829,6 +16829,9 @@ function nyLayoutInit(){
   const val = q.get('layout');
   if(val === 'gammal' || val === 'ny') nyLagra('layout', val);
   if(!q.get('propa') && nyLas('layout') !== 'gammal') document.body.classList.add('ny-layout');
+  // Loggan i toppraden sätts redan här, annars syns en trasig bild bakom inloggningsrutan.
+  const logga = document.querySelector('.brand-logo'), nyLogga = document.getElementById('nyLogga');
+  if(logga && nyLogga && logga.src) nyLogga.src = logga.src;
 })();
 
 async function startApp(){
