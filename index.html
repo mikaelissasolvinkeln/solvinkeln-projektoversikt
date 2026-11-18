@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261118114225">
+<meta name="app-build" content="20261118142551">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -573,6 +573,104 @@
   .avst-ny #avstNyText{ flex:1 1 240px; min-width:180px; }
   .avst-ny #avstNyDag{ width:64px; }
   @media (max-width:900px){ .avst-rad{ flex-wrap:wrap; } .avst-vem{ flex-basis:100%; text-align:left; } }
+
+  /* ---------- Tillval: fliken i projektet (tv-) och kundens/entreprenörens sida (tvo-) ---------- */
+  .tv-topp{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 12px; }
+  .tv-info{ font-size:13px; color:var(--ink-soft); }
+  .tv-tabell{ width:100%; border-collapse:collapse; table-layout:auto !important; font-size:13px; }
+  .tv-tabell th{ text-align:left; font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; font-weight:700; }
+  .tv-tabell td{ padding:8px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  .tv-tabell .tv-h{ text-align:right; white-space:nowrap; }
+  .tv-tabell tfoot td{ border-bottom:0; }
+  .tv-liten{ font-size:11.5px; color:var(--ink-soft); }
+  .tv-vantar td{ background:#FFF7E8; }
+  .tv-pill{ display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; background:var(--blue-soft); color:var(--ink); white-space:nowrap; }
+  .tv-pill.tv-skickad{ background:#E6EEF5; color:#2B4A63; }
+  .tv-pill.tv-besvarad{ background:#FCE9C4; color:#7A4E0E; }
+  .tv-pill.tv-godkand{ background:#DDEEDD; color:#255C2B; }
+  .tv-knapp{ font:600 12px 'Inter', sans-serif; padding:5px 11px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); cursor:pointer; white-space:nowrap; }
+  .tv-knapp:hover{ border-color:var(--ink-soft); }
+  .tv-knapp.tv-diskret{ color:var(--ink-soft); border-color:var(--line-soft); }
+  .tv-redigera td{ padding:4px 5px; vertical-align:middle; }
+  .tv-redigera input{ width:100%; box-sizing:border-box; font:400 13px 'Inter', sans-serif; padding:6px 8px; border:1px solid var(--line-soft); border-radius:6px; background:#fff; color:var(--ink); }
+  .tv-val, .tv-text, .tv-lank, .tv-falt input{ font:400 13px 'Inter', sans-serif; padding:7px 9px; border:1px solid var(--line-soft); border-radius:7px; background:#fff; color:var(--ink); box-sizing:border-box; }
+  .tv-text{ width:100%; resize:vertical; display:block; }
+  .tv-lank{ flex:1; min-width:0; }
+  .tv-etikett{ display:block; font-size:11.5px; font-weight:600; color:var(--ink-soft); margin:12px 0 4px; }
+  .tv-faltrad{ display:flex; gap:10px; flex-wrap:wrap; }
+  .tv-falt{ flex:1 1 180px; display:flex; flex-direction:column; gap:4px; font-size:11.5px; font-weight:600; color:var(--ink-soft); }
+  .tv-statusrad{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .tv-svar{ background:#FFF7E8; border:1px solid #F0DDB5; border-radius:9px; padding:10px 12px; font-size:13px; margin-bottom:12px; }
+  .tv-kommentar{ margin-top:6px; font-style:italic; }
+  .tv-ja{ color:#255C2B; font-weight:700; }
+  .tv-nej{ color:var(--ink-soft); }
+  .tv-ejvald td{ color:var(--ink-soft); }
+  .tv-avis{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:#FFF7E8; border:1px solid #F0DDB5; border-radius:10px; padding:12px 14px; margin-bottom:18px; font-size:13.5px; }
+  .tv-avis > div{ display:flex; gap:6px; flex-wrap:wrap; flex-basis:100%; }
+
+  .tvo{ background:#F3F0E8; min-height:100vh; padding:28px 16px 60px; font-family:'Inter', sans-serif; color:var(--ink); box-sizing:border-box; }
+  .tvo.tvo-inbaddad{ min-height:0; padding:12px; border-radius:10px; }
+  .tvo-blad{ max-width:820px; margin:0 auto; background:#fff; border:1px solid var(--line-soft); border-radius:6px; box-shadow:0 6px 30px rgba(31,26,20,.08); padding:44px 48px; box-sizing:border-box; }
+  .tvo-blad.tvo-bred{ max-width:980px; }
+  .tvo-huvud{ display:flex; justify-content:space-between; gap:24px; align-items:flex-start; padding-bottom:22px; border-bottom:2px solid var(--ink); margin-bottom:22px; }
+  .tvo-huvud img{ height:44px; width:auto; display:block; }
+  .tvo-hoger{ text-align:right; font-size:13px; line-height:1.6; }
+  .tvo-hoger span{ color:var(--ink-soft); }
+  .tvo-rubrik{ font-family:'Fraunces', serif; font-size:26px; font-weight:600; line-height:1.15; margin-bottom:8px; }
+  .tvo-parter{ display:flex; gap:32px; flex-wrap:wrap; margin-bottom:20px; font-size:13.5px; }
+  .tvo-parter > div{ flex:1 1 220px; }
+  .tvo-parter span{ display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:3px; }
+  .tvo-parter b{ display:block; font-size:15px; }
+  .tvo-ruta{ border-radius:8px; padding:12px 14px; font-size:13.5px; margin-bottom:16px; background:var(--paper); border:1px solid var(--line-soft); }
+  .tvo-ok{ background:#EAF4EA; border-color:#C5DEC6; color:#1F4D25; }
+  .tvo-varning{ background:#FBEDED; border-color:#EBC8C8; color:#7C2A2A; }
+  .tvo-meddelande{ font-size:14px; line-height:1.55; margin:0 0 14px; }
+  .tvo-hjalp{ font-size:13px; color:var(--ink-soft); margin:0 0 8px; }
+  .tvo-tabell{ width:100%; border-collapse:collapse; table-layout:auto !important; font-size:13.5px; }
+  .tvo-tabell th{ text-align:left; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--ink); font-weight:700; }
+  .tvo-tabell td{ padding:11px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  .tvo-tabell .tvo-h{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .tvo-bockkol{ width:34px; }
+  .tvo-bockkol input{ width:20px; height:20px; accent-color:var(--amber); cursor:pointer; margin:0; }
+  .tvo-kat td{ font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); padding:6px 10px; }
+  .tvo-besk{ font-size:12.5px; color:var(--ink-soft); margin-top:2px; font-weight:400; }
+  .tvo-m{ display:none; }
+  .tvo-av td{ color:#A39A8C; }
+  .tvo-av b{ font-weight:500; }
+  .tvo-tabell tfoot td{ border-bottom:0; border-top:2px solid var(--ink); font-weight:700; font-size:15px; padding-top:12px; }
+  .tvo-villkor{ font-size:12px; color:var(--ink-soft); line-height:1.5; margin:16px 0 0; }
+  .tvo-svar{ margin-top:24px; padding-top:20px; border-top:1px solid var(--line-soft); display:flex; flex-direction:column; gap:12px; }
+  .tvo-svar label{ display:flex; flex-direction:column; gap:5px; font-size:12.5px; font-weight:600; }
+  .tvo-svar input, .tvo-svar textarea{ font:400 15px 'Inter', sans-serif; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); width:100%; box-sizing:border-box; }
+  .tvo-fel{ color:var(--danger); font-size:13px; min-height:1em; }
+  .tvo-knappar{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:16px; }
+  .tvo-primar{ font:600 15px 'Inter', sans-serif; padding:12px 26px; border:0; border-radius:8px; background:var(--ink); color:#fff; cursor:pointer; }
+  .tvo-primar:disabled{ opacity:.5; cursor:default; }
+  .tvo-sekundar{ font:600 13px 'Inter', sans-serif; padding:9px 16px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); cursor:pointer; }
+  .tvo-hus{ margin-top:22px; overflow-x:auto; }
+  .tvo-husrubrik{ display:flex; align-items:center; gap:8px; font-size:14.5px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .tvo-husstatus{ margin-left:auto; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; background:var(--blue-soft); white-space:nowrap; }
+  .tvo-husstatus.klar{ background:#DDEEDD; color:#255C2B; }
+  .tvo-hus .tvo-tabell th{ border-bottom-color:var(--line-soft); }
+  .tvo-hus .tvo-tabell tfoot td{ border-top:1px solid var(--line); font-size:13.5px; padding-top:8px; }
+  .tvo-total{ margin-top:26px; padding-top:14px; border-top:2px solid var(--ink); text-align:right; font-size:16px; }
+  .tvo-total b{ margin-left:14px; font-size:19px; }
+  @media (max-width:640px){
+    .tvo{ padding:0; }
+    .tvo-blad{ padding:22px 16px 40px; border:0; border-radius:0; box-shadow:none; }
+    .tvo-huvud{ flex-direction:column; gap:14px; }
+    .tvo-hoger{ text-align:left; }
+    .tvo-d{ display:none; }
+    .tvo-m{ display:block; }
+    .tvo-tabell td, .tvo-tabell th{ padding-left:6px; padding-right:6px; }
+    .tvo-primar{ width:100%; }
+  }
+  @media print{
+    .tvo-ejprint{ display:none !important; }
+    .tvo{ background:#fff; padding:0; min-height:0; }
+    .tvo-blad{ border:0; box-shadow:none; padding:0; max-width:none; }
+    .tvo-hus{ break-inside:avoid; }
+  }
 
   /* ---------- Helhetsbild (koncernlikviditet, ägarportal) ---------- */
   .hb-wrap{ border:1px solid var(--line-soft); border-radius:14px; padding:16px 18px 18px; margin:0 0 22px; background:#fff; }
@@ -1155,6 +1253,7 @@
   <div id="personalScreen" style="display:none;">
     <h1 id="personalGreeting" style="margin-bottom:2px;">Hej!</h1>
     <p class="sub" style="margin-bottom:20px;">Din personliga sida.</p>
+    <div id="tillvalAvisering" style="display:none;"></div>
 
     <div class="home-grid" style="margin-bottom:24px;">
       <div class="home-card" id="goToProjektoversiktCard">
@@ -2162,6 +2261,7 @@
     <div class="sub-tabs">
       <button class="sub-tab" data-view="checklista">Checklista</button>
       <button class="sub-tab" data-view="betalningar">Betalningar</button>
+      <button class="sub-tab" data-view="tillval">Tillval</button>
       <button class="sub-tab" data-view="medlemsinfo">Medlemsinformation</button>
       <button class="sub-tab" data-view="inflyttningsinfo">Inflyttningsinformation</button>
       <button class="sub-tab" data-view="intressenter">Intressenter</button>
@@ -2261,6 +2361,10 @@
           <div id="betalningarEmptyState" class="empty-state" style="display:none;">Inga lägenheter i det här projektet än.</div>
         </div>
       </div>
+    </div>
+
+    <div id="tillvalSubview" style="display:none;">
+      <div id="tillvalWrap"></div>
     </div>
 
     <div id="medlemsinfoSubview" style="display:none;">
@@ -2924,7 +3028,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261118114225"></script>
-<script src="app.js?v=20261118114225"></script>
+<script src="db.js?v=20261118142551"></script>
+<script src="app.js?v=20261118142551"></script>
 </body>
 </html>

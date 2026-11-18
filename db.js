@@ -216,6 +216,53 @@
     if(error) throw error;
   }
 
+  // ---------- Tillvalsofferter (egen tabell, se schema-tillval.sql). Inloggade läser och skriver
+  // allt. Kunden och entreprenören når bara sin egen rad via funktionerna tillval_offert_hamta och
+  // tillval_offert_svara, och bara med exakt rätt länk (share_id). ----------
+  async function listTillvalOfferter(projectId){
+    if(!hasSupabase) return [];
+    const { data, error } = await withCacheRetry(() => sb.from('tillval_offert')
+      .select('*').eq('project_id', projectId).order('created_at', { ascending: true }));
+    if(error) throw error;
+    return data || [];
+  }
+  async function listTillvalBesvarade(){
+    if(!hasSupabase) return [];
+    const { data, error } = await sb.from('tillval_offert')
+      .select('id, project_id, apt_id, data').eq('typ', 'offert').eq('status', 'besvarad').order('updated_at', { ascending: true });
+    if(error) throw error;
+    return data || [];
+  }
+  async function insertTillvalOffert(row){
+    if(!hasSupabase) throw new Error('Kräver att Supabase är påkopplat');
+    const { data, error } = await withCacheRetry(() => sb.from('tillval_offert').insert(row).select().single());
+    if(error) throw error;
+    return data;
+  }
+  async function updateTillvalOffert(id, patch){
+    if(!hasSupabase) throw new Error('Kräver att Supabase är påkopplat');
+    const row = { ...patch, updated_at: new Date().toISOString() };
+    const { error } = await withCacheRetry(() => sb.from('tillval_offert').update(row).eq('id', id));
+    if(error) throw error;
+  }
+  async function deleteTillvalOffert(id){
+    if(!hasSupabase) throw new Error('Kräver att Supabase är påkopplat');
+    const { error } = await withCacheRetry(() => sb.from('tillval_offert').delete().eq('id', id));
+    if(error) throw error;
+  }
+  async function getPublicTillval(shareId){
+    if(!hasSupabase) return null;
+    const { data, error } = await sb.rpc('tillval_offert_hamta', { p_share_id: shareId });
+    if(error) throw error;
+    return data || null;
+  }
+  async function svaraTillval(shareId, svar){
+    if(!hasSupabase) throw new Error('Kräver att Supabase är påkopplat');
+    const { data, error } = await sb.rpc('tillval_offert_svara', { p_share_id: shareId, p_svar: svar });
+    if(error) throw error;
+    return data;
+  }
+
   // ---------- Nya projekt: projektkalkyler under utvärdering (egen tabell,
   // egen RLS - se schema-nya-projekt.sql). En rad kan göras publikt läsbar
   // (utan inloggning) via getPublicNyaProjekt när den delas som
@@ -393,6 +440,13 @@
     getPortalRapport,
     upsertPortalRapport,
     signOut,
+    listTillvalOfferter,
+    listTillvalBesvarade,
+    insertTillvalOffert,
+    updateTillvalOffert,
+    deleteTillvalOffert,
+    getPublicTillval,
+    svaraTillval,
     onDeladKonflikt: null,
     onRemoteChange(cb){ listeners.push(cb); },
     hasSupabase
