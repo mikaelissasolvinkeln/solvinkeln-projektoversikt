@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261119141138';
+const APP_BUILD = '20261119141253';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15579,16 +15579,14 @@ const koncernTradVyer = new Map();
 let koncernTradNr = 0;
 // Senast öppnade bolag. Adminvyn ritas om vid varje ändring och ska då stå kvar på samma bolag.
 let koncernTradFokusSenast = null;
-function koncernTradHtml(noder, extra, opts){
-  // opts.redigera: korten får en penna som öppnar ekonomiSchemaRedigeraPopup (bara adminvyn).
+function koncernTradHtml(noder, extra){
   const id = 'kt' + (++koncernTradNr);
-  koncernTradVyer.set(id, { noder, extra, opts });
+  koncernTradVyer.set(id, { noder, extra });
   if(koncernTradVyer.size > 12) koncernTradVyer.delete(koncernTradVyer.keys().next().value);
   const fokus = noder.some(x => x.id === koncernTradFokusSenast) ? koncernTradFokusSenast : null;
-  return '<div class="ktrad-vy" data-ktrad="' + id + '">' + koncernTradInre(noder, extra, fokus, opts) + '</div>';
+  return '<div class="ktrad-vy" data-ktrad="' + id + '">' + koncernTradInre(noder, extra, fokus) + '</div>';
 }
-function koncernTradInre(noder, extra, fokusId, opts){
-  const kanRedigera = !!(opts && opts.redigera);
+function koncernTradInre(noder, extra, fokusId){
   // Ryms på bladets bredd: bolaget överst, därunder det som bolaget äger i radbrytande rutnät grupperat per typ.
   const typKlass = t => t === 'Moderbolag' ? 'moder' : t === 'Dotterbolag' ? 'dotter' : t === 'Intressebolag' ? 'intresse' : t === 'Underkoncern' ? 'under' : 'ovrigt';
   const proc = x => x.procent != null ? String(x.procent).replace('.', ',') + ' %' : '';
@@ -15607,7 +15605,6 @@ function koncernTradInre(noder, extra, fokusId, opts){
     const n = barnAv(x.id).length;
     const oppna = !arRot && n > 0;
     return '<div class="knod ' + (arRot && fokus ? 'moder' : typKlass(x.typ)) + (oppna ? ' knod-oppna' : '') + '"' + (oppna ? ' data-knod="' + attr(x.id) + '" role="button" tabindex="0" title="Öppna koncernschemat för ' + attr(x.namn) + '"' : '') + '>' +
-      (kanRedigera ? '<button type="button" class="knod-red" data-knod-red="' + attr(x.id) + '" title="Ändra uppgifterna på kortet" aria-label="Ändra ' + attr(x.namn) + '">✎</button>' : '') +
       (proc(x) ? '<span class="knod-proc">' + proc(x) + '</span>' : '') + '<div class="knod-namn">' + escapeHtml(x.namn || '') + '</div><div class="knod-sub">' + subHtml(x.beskrivning || (arRot && fokus ? agdAv(x) : '') || x.typ || '') + '</div>' + (extra ? extra(x) : '') +
       (oppna ? (n > KSCHEMA_LISTA_MAX || x.typ === 'Underkoncern' ? '<div class="knod-barn">' + antalRad(x, 0) + '</div>' : barnLista(x.id, 0)) + '<div class="knod-oppna-rad">Öppna ›</div>' : '') + '</div>';
   };
@@ -15637,49 +15634,16 @@ function koncernTradInre(noder, extra, fokusId, opts){
   return h + '<div class="ktrad-legend"><span class="knod-dot moder"></span>Moderbolag <span class="knod-dot dotter"></span>Dotterbolag (&gt;50 %) <span class="knod-dot intresse"></span>Intressebolag (20–50 %) <span class="knod-dot ovrigt"></span>Övrigt innehav <span class="ktrad-legend-tips">Klicka på ett bolag som äger andra bolag för att öppna dess schema.</span></div>';
 }
 document.addEventListener('click', e => {
-  const red = e.target && e.target.closest ? e.target.closest('[data-knod-red]') : null;
-  if(red && red.closest('.ktrad-vy')){ ekonomiSchemaRedigeraPopup(red.dataset.knodRed); return; }
   const t = e.target && e.target.closest ? e.target.closest('[data-knod]') : null; if(!t) return;
   const vyEl = t.closest('.ktrad-vy'); if(!vyEl) return;
   const vy = koncernTradVyer.get(vyEl.dataset.ktrad); if(!vy) return;
   koncernTradFokusSenast = t.dataset.knod || null;
-  vyEl.innerHTML = koncernTradInre(vy.noder, vy.extra, koncernTradFokusSenast, vy.opts);
+  vyEl.innerHTML = koncernTradInre(vy.noder, vy.extra, koncernTradFokusSenast);
   if(vyEl.getBoundingClientRect().top < 0) vyEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
 });
 document.addEventListener('keydown', e => {
   if((e.key === 'Enter' || e.key === ' ') && e.target && e.target.matches && e.target.matches('.knod-oppna[data-knod]')){ e.preventDefault(); e.target.click(); }
 });
-// Ändra uppgifterna på ett kort direkt i schemat (pennan på kortet). Raderna under namnet
-// sparas i beskrivningen, åtskilda med " · ", så att ett bolag t.ex. kan ha flera föreningar.
-function ekonomiSchemaRedigeraPopup(id){
-  const x = ekonomiSchemaNoder().find(y => y.id === id); if(!x) return;
-  const p = ekoPopup({ title: 'Ändra ' + (x.namn || 'bolaget'), sub: 'Raderna visas under bolagets namn på kortet. Skriv en uppgift per rad, till exempel organisationsnummer, föreningar och delägare.', maxWidth: 520 });
-  const falt = (etikett, el) => {
-    const l = document.createElement('label'); l.style.cssText = 'display:block; font-size:12px; color:var(--ink-soft); margin:0 0 12px;'; l.textContent = etikett;
-    el.style.cssText = 'display:block; width:100%; box-sizing:border-box; margin-top:4px; border:1px solid var(--line-soft); border-radius:6px; padding:7px 9px; font-size:13.5px; line-height:1.5; font-family:inherit; background:#fff; color:var(--ink);';
-    l.appendChild(el); p.body.appendChild(l); return el;
-  };
-  const namn = falt('Bolagets namn', document.createElement('input')); namn.type = 'text'; namn.value = x.namn || '';
-  let andel = null;
-  if(x.parentId){ andel = falt('Ägarandel i procent', document.createElement('input')); andel.type = 'text'; andel.inputMode = 'decimal'; andel.value = x.procent != null ? String(x.procent).replace('.', ',') : ''; }
-  const rader = falt('Rader på kortet', document.createElement('textarea')); rader.rows = 6; rader.spellcheck = false;
-  rader.value = String(x.beskrivning || '').split(' · ').join('\n'); rader.placeholder = '559000-0000\nBRF Exempel 1\nBRF Exempel 2';
-  const fel = document.createElement('div'); fel.style.cssText = 'color:var(--danger); font-size:12.5px; min-height:16px;'; p.body.appendChild(fel);
-  const stang = p.actions.querySelector('button'); if(stang){ stang.textContent = 'Avbryt'; stang.style.cssText = ''; }
-  const ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Spara'; ok.style.cssText = 'background:var(--ink); color:#fff;'; p.actions.appendChild(ok);
-  ok.onclick = async () => {
-    const n = namn.value.trim(); if(!n){ fel.textContent = 'Bolaget behöver ett namn.'; return; }
-    let pr = x.procent;
-    if(andel){ const t = andel.value.replace('%', '').replace(',', '.').trim(); pr = t === '' ? null : parseFloat(t); if(t !== '' && !isFinite(pr)){ fel.textContent = 'Ägarandelen ska vara ett tal, till exempel 75.'; return; } }
-    ok.disabled = true;
-    x.namn = n;
-    if(andel && pr !== x.procent){ x.procent = pr; if(x.typ !== 'Underkoncern') x.typ = ekonomiSchemaTypFor(pr); }
-    x.beskrivning = rader.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).join(' · ');
-    await saveEkonomiKoncern();
-    p.close(); renderEkonomiKoncernSchema();
-  };
-  setTimeout(() => { rader.focus(); rader.setSelectionRange(rader.value.length, rader.value.length); }, 50);
-}
 // Klistra in en lista med bolag i schemat. En rad per bolag med kolumnerna
 // Bolag; Ägs av; Andel i procent; Beskrivning, åtskilda med semikolon eller tabb (Excel).
 // Ägaren ska stå på en tidigare rad eller redan finnas i schemat. Ett bolag som redan finns
@@ -15812,7 +15776,7 @@ function renderEkonomiKoncernSchema(){
     const p = document.createElement('p'); p.className = 'eko-sub'; p.textContent = 'Lägg till bolagen och ange vem som äger vad, eller skapa ett förslag från andelarna i balansrapporten.'; wrap.appendChild(p);
   }
   const trad = document.createElement('div');
-  trad.innerHTML = koncernTradHtml(noder, x => { const b = x.bolagId ? ekonomiBolagList().find(y => y.id === x.bolagId) : null; const an = x.bolagId ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.bolagId === x.bolagId)) : x.aktorKey ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.aktorKey === x.aktorKey)) : 0; const lan = b ? ekonomiBolagKoncernLan(b).reduce((s, l) => s + ekonomiKoncernLanSaldo(l), 0) : 0; return (an || lan) ? '<div class="knod-tal">' + (an ? 'Andelar ' + portalFmt.mkr(an) : '') + (an && lan ? ' · ' : '') + (lan ? 'Lån ' + portalFmt.mkr(lan) : '') + '</div>' : ''; }, { redigera: true });
+  trad.innerHTML = koncernTradHtml(noder, x => { const b = x.bolagId ? ekonomiBolagList().find(y => y.id === x.bolagId) : null; const an = x.bolagId ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.bolagId === x.bolagId)) : x.aktorKey ? ekonomiAndelarSumma(ekonomiAndelarList().filter(a => a.aktorKey === x.aktorKey)) : 0; const lan = b ? ekonomiBolagKoncernLan(b).reduce((s, l) => s + ekonomiKoncernLanSaldo(l), 0) : 0; return (an || lan) ? '<div class="knod-tal">' + (an ? 'Andelar ' + portalFmt.mkr(an) : '') + (an && lan ? ' · ' : '') + (lan ? 'Lån ' + portalFmt.mkr(lan) : '') + '</div>' : ''; });
   wrap.appendChild(trad);
 }
 
