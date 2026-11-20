@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261119141253';
+const APP_BUILD = '20261120151633';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16813,8 +16813,19 @@ const TILLVAL_VILLKOR_STD = 'Priserna gäller till och med svarsdatumet ovan och
 const TILLVAL_BETAL_NAMN = { insats: 'Höjning av insats', faktura: 'Faktura' };
 const TILLVAL_BETAL_STD = {
   insats: 'Kostnaden för tillvalen läggs på bostadsrättens insats och betalas tillsammans med slutbetalningen på tillträdesdagen. Beloppet kan då ingå i ditt bolån, om din bank godkänner det.',
-  faktura: 'Solvinkeln skickar en separat faktura på tillvalen. Den betalas med egna medel och ingår inte i bostadsrättens insats.'
+  faktura: 'Entreprenören som är upphandlad till projektet fakturerar dig för tillvalen. Fakturan betalas med egna medel och ingår inte i bostadsrättens insats.'
 };
+// Tidigare standardtext för faktura. Prislistor och offerter som har den sparad får den nya texten.
+const TILLVAL_BETAL_FAKTURA_FORR = 'Solvinkeln skickar en separat faktura på tillvalen. Den betalas med egna medel och ingår inte i bostadsrättens insats.';
+// Står på orderbekräftelsen under det betalningssätt kunden valt.
+const TILLVAL_BEKR_STD = {
+  insats: 'Kostnaden för tillvalen läggs på bostadsrättens insats. Bostadsrättsföreningen ansvarar för att beställa tillvalen enligt denna orderbekräftelse.',
+  faktura: 'Entreprenören som är upphandlad till projektet kommer att fakturera dig enligt orderbekräftelsen ovan.'
+};
+function tvBetalText(k, kod){
+  const t = k ? (kod === 'insats' ? k.betalInsats : k.betalFaktura) : '';
+  return t && t !== TILLVAL_BETAL_FAKTURA_FORR ? t : TILLVAL_BETAL_STD[kod];
+}
 let tillvalLista = { poster: [], villkor: '' };
 let tillvalOfferter = [];
 let tillvalLaddatFor = null;
@@ -16925,8 +16936,8 @@ function tillvalListaPopup(){
     document.getElementById('tvListaNy').onclick = async () => { tillvalLista.poster.push({ id: uid(), kategori: '', namn: '', beskrivning: '', pris: '' }); rita(); const rader = p.body.querySelectorAll('tr[data-id]'); const sista = rader[rader.length - 1]; if(sista) sista.querySelector('input[data-f="namn"]').focus(); await tillvalSparaLista(); };
     document.getElementById('tvListaVillkor').onchange = async e => { tillvalLista.villkor = e.target.value.trim(); await tillvalSparaLista(); };
     const betalBox = document.createElement('div');
-    betalBox.innerHTML = '<label class="tv-etikett">Text till kunden om betalning genom höjning av insats</label><textarea id="tvListaBetalInsats" class="tv-text" rows="2">' + escapeHtml(tillvalLista.betalInsats || TILLVAL_BETAL_STD.insats) + '</textarea>' +
-      '<label class="tv-etikett">Text till kunden om betalning genom faktura</label><textarea id="tvListaBetalFaktura" class="tv-text" rows="2">' + escapeHtml(tillvalLista.betalFaktura || TILLVAL_BETAL_STD.faktura) + '</textarea>';
+    betalBox.innerHTML = '<label class="tv-etikett">Text till kunden om betalning genom höjning av insats</label><textarea id="tvListaBetalInsats" class="tv-text" rows="2">' + escapeHtml(tvBetalText(tillvalLista, 'insats')) + '</textarea>' +
+      '<label class="tv-etikett">Text till kunden om betalning genom faktura</label><textarea id="tvListaBetalFaktura" class="tv-text" rows="2">' + escapeHtml(tvBetalText(tillvalLista, 'faktura')) + '</textarea>';
     p.body.appendChild(betalBox);
     document.getElementById('tvListaBetalInsats').onchange = async e => { tillvalLista.betalInsats = e.target.value.trim(); await tillvalSparaLista(); };
     document.getElementById('tvListaBetalFaktura').onchange = async e => { tillvalLista.betalFaktura = e.target.value.trim(); await tillvalSparaLista(); };
@@ -16972,7 +16983,7 @@ async function tillvalNyOffert(aptId){
       kund: tvKopare(apt), epost: (apt.sald && apt.sald.buyer1 && apt.sald.buyer1.email) || '',
       datum: new Date().toLocaleDateString('sv-SE'), giltigTill: new Date(Date.now() + 14 * 864e5).toLocaleDateString('sv-SE'),
       meddelande: TILLVAL_BREV_STD, notRubrik: '', notText: '', villkor: tillvalLista.villkor || TILLVAL_VILLKOR_STD,
-      betalInsats: tillvalLista.betalInsats || TILLVAL_BETAL_STD.insats, betalFaktura: tillvalLista.betalFaktura || TILLVAL_BETAL_STD.faktura,
+      betalInsats: tvBetalText(tillvalLista, 'insats'), betalFaktura: tvBetalText(tillvalLista, 'faktura'),
       kontaktNamn: k.namn || myName || '', kontaktRoll: k.roll || '', kontaktEpost: k.epost || myEmail || '', kontaktTelefon: k.telefon || '',
       rader: []
     }
@@ -17283,7 +17294,7 @@ function tillvalOffertHtml(o, lage){
   if(d.villkor) h += '<div class="tvo-villkor">' + tvStycken(d.villkor) + '</div>';
   if(klar){
     const betalt = lage === 'bekraftad' ? (d.godkand && d.godkand.betalning) : (o.svar && o.svar.betalning);
-    if(TILLVAL_BETAL_NAMN[betalt]) h += '<div class="tvo-betalvald"><span>Betalningssätt</span><b>' + TILLVAL_BETAL_NAMN[betalt] + '</b><p>' + escapeHtml(betalt === 'insats' ? (d.betalInsats || TILLVAL_BETAL_STD.insats) : (d.betalFaktura || TILLVAL_BETAL_STD.faktura)) + '</p></div>';
+    if(TILLVAL_BETAL_NAMN[betalt]) h += '<div class="tvo-betalvald"><span>Betalningssätt</span><b>' + TILLVAL_BETAL_NAMN[betalt] + '</b><p>' + escapeHtml(lage === 'bekraftad' ? TILLVAL_BEKR_STD[betalt] : tvBetalText(d, betalt)) + '</p></div>';
     if(o.svar && (o.svar.namn || o.svar.kommentar)) h += '<div class="tvo-villkor"><p>Beställt av ' + escapeHtml(o.svar.namn || '') + (o.svar.kommentar ? '. Kommentar: ' + escapeHtml(o.svar.kommentar) : '.') + '</p></div>';
     h += '<div class="tvo-knappar tvo-ejprint">' + (lage === 'skickat' ? '<button type="button" class="tvo-sekundar" data-tvo-andra>Ändra mina val</button>' : '') + '<button type="button" class="tvo-sekundar" data-tvo-skrivut>Skriv ut eller spara som PDF</button></div>';
   }
@@ -17296,7 +17307,7 @@ function tillvalOffertHtml(o, lage){
     h += '</div><div class="tvo-summarad"><span>Summa valda tillval</span><b data-tvo-summa>' + tvKr(tvSumma(rader, valda)) + '</b></div>';
     const betalNu = o.svar && o.svar.betalning;
     const betalKort = (kod, text) => '<label class="tvo-betal' + (betalNu === kod ? ' vald' : '') + '"><input type="radio" name="tvoBetalning" data-tvo-betal value="' + kod + '"' + (betalNu === kod ? ' checked' : '') + las + '><span><b>' + TILLVAL_BETAL_NAMN[kod] + '</b><em>' + escapeHtml(text) + '</em></span></label>';
-    h += '<h3 class="tvo-h3">Hur vill du betala?</h3><div class="tvo-betalval">' + betalKort('insats', d.betalInsats || TILLVAL_BETAL_STD.insats) + betalKort('faktura', d.betalFaktura || TILLVAL_BETAL_STD.faktura) + '</div>';
+    h += '<h3 class="tvo-h3">Hur vill du betala?</h3><div class="tvo-betalval">' + betalKort('insats', tvBetalText(d, 'insats')) + betalKort('faktura', tvBetalText(d, 'faktura')) + '</div>';
     h += '<div class="tvo-villkor"><p>Genom att skicka in bekräftar jag beställningen av de tillval jag godkänt ovan, till angivet pris och med det betalningssätt jag valt.</p></div>';
     h += '<label class="tvo-falt">Namn<input type="text" data-tvo-namn autocomplete="name" value="' + tvAttr((o.svar && o.svar.namn) || '') + '"' + las + '></label>' +
       '<label class="tvo-falt">Kommentar (valfritt)<textarea data-tvo-kommentar rows="2"' + las + '>' + escapeHtml((o.svar && o.svar.kommentar) || '') + '</textarea></label>' +
