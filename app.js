@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261123160048';
+const APP_BUILD = '20261123160640';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -42,6 +42,7 @@ const PERSONAL_NAMES_BY_EMAIL = LIGGAREN_PEOPLE.reduce((acc, p) => { acc[p.email
 // E-postkollen här är bara en UI-spärr, databasen avgör vem som faktiskt kommer åt datan.
 const EKONOMI_ADMIN_EMAILS = ['mikael.issa@jwk.se', 'micheline.touma@solvinkeln.se'];
 PERSONAL_NAMES_BY_EMAIL['micheline.touma@solvinkeln.se'] = 'Micheline';
+PERSONAL_NAMES_BY_EMAIL['paulina.bekil@solvinkeln.se'] = 'Paulina';
 const EKONOMI_KEYS = {
   meta: 'ekonomi-projekt-meta',
   budgetDetalj: 'ekonomi-budget-detalj',
@@ -712,6 +713,7 @@ function openHome(){
 async function openPersonal(){
   showScreen('personal');
   tillvalAvisera();
+  marknadAvisera();
   document.getElementById('personalGreeting').textContent = myName ? ('Hej, ' + myName + '!') : 'Hej!';
   liggarenStatusFilter = 'oppet';
   liggarenViewMode = 'compact';
@@ -15196,6 +15198,7 @@ function wireRemoteSync(){
     } else if(key.indexOf('marknad:') === 0){
       const del = Object.keys(MARKNAD_NYCKEL).find(d => MARKNAD_NYCKEL[d] === key);
       if(del && screen === 'marknad') marknadLas(del).then(() => { if(screen === 'marknad') renderMarknad(); }).catch(() => {});
+      else if(del && del !== 'material' && screen === 'personal') marknadAvisera();
     } else if(key === INTR_STORAGE_KEY){
       loadInterests().then(() => {
         if(screen === 'intressen') renderIntressenScreen();
@@ -17459,6 +17462,44 @@ function mkProjektLista(){
 }
 function mkMatchar(x){ return !marknadProjekt || x.projektId === marknadProjekt; }
 
+// Aviseringar: det som andra har lagt upp eller kommenterat sedan jag senast tittade på fliken.
+// Tidpunkten sparas per person i uiPrefs.marknadSett = { arenden, inlagg }. marknadNya håller
+// de poster som var nya när fliken öppnades, så att de kan märkas "Nytt" under besöket.
+let marknadNya = { arenden: new Set(), inlagg: new Set() };
+function mkSett(del){ const s = uiPrefs && uiPrefs.marknadSett; return (s && s[del]) || ''; }
+// En rad per ärende eller inlägg som har något nytt från någon annan, med den senaste händelsen.
+function mkHandelser(del){
+  const sett = mkSett(del), jag = mkVem(), ut = [];
+  marknadData[del].forEach(x => {
+    let h = null;
+    if(x.av !== jag && String(x.at || '') > sett) h = { del, id: x.id, typ: 'ny', av: x.av, rubrik: x.rubrik, at: String(x.at) };
+    (x.kommentarer || []).forEach(k => { if(k.av !== jag && String(k.at || '') > sett && (!h || h.typ === 'kommentar' || String(k.at) > h.at)) h = { del, id: x.id, typ: h && h.typ === 'ny' ? 'ny' : 'kommentar', av: h && h.typ === 'ny' ? h.av : k.av, rubrik: x.rubrik, at: String(k.at) }; });
+    if(h) ut.push(h);
+  });
+  return ut;
+}
+function mkMarkeraSett(del){
+  const h = mkHandelser(del); if(!h.length) return;
+  let senast = new Date().toISOString();
+  h.forEach(x => { marknadNya[del].add(x.id); if(x.at > senast) senast = x.at; });
+  if(!uiPrefs.marknadSett || typeof uiPrefs.marknadSett !== 'object') uiPrefs.marknadSett = {};
+  uiPrefs.marknadSett[del] = senast;
+  saveUiPrefs();
+}
+// Rutan på Översikt. Klick öppnar ärendet eller inlägget.
+async function marknadAvisera(){
+  const box = document.getElementById('marknadAvisering'); if(!box) return;
+  try{ await Promise.all(['arenden', 'inlagg'].map(marknadLas)); }catch(e){ box.style.display = 'none'; return; }
+  const h = mkHandelser('arenden').concat(mkHandelser('inlagg')).sort((a, b) => b.at.localeCompare(a.at));
+  if(!h.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  const text = x => (x.typ === 'kommentar' ? 'Kommentar från ' : (x.del === 'arenden' ? 'Nytt ärende från ' : 'Nytt inlägg från ')) + (x.av || 'okänd') + ': ' + (x.rubrik || '');
+  const visa = h.slice(0, 6);
+  box.innerHTML = '<div class="tv-avis"><b>Nytt under Marknadsföring</b><span class="tv-liten">' + (h.length === 1 ? 'En nyhet' : h.length + ' nyheter') + ' sedan du senast tittade.</span><div>' +
+    visa.map(x => '<button type="button" class="tv-knapp" data-del="' + x.del + '" data-id="' + mkAttr(x.id) + '">' + escapeHtml(text(x)) + '</button>').join('') +
+    (h.length > visa.length ? '<button type="button" class="tv-knapp tv-diskret" data-del="' + h[0].del + '">Visa alla</button>' : '') + '</div></div>';
+  box.style.display = 'block';
+}
+
 function marknadNormalisera(del, v){
   if(del === 'material'){
     if(!v || typeof v !== 'object' || Array.isArray(v)) v = {};
@@ -17488,6 +17529,7 @@ async function marknadAndra(del, fn){
 }
 async function openMarknad(){
   showScreen('marknad');
+  marknadNya = { arenden: new Set(), inlagg: new Set() };
   const el = document.getElementById('marknadInne');
   if(!marknadLaddad) el.innerHTML = '<p class="tv-info">Laddar…</p>';
   try{ await Promise.all(Object.keys(MARKNAD_NYCKEL).map(marknadLas)); marknadLaddad = true; marknadFel = null; }
@@ -17500,9 +17542,11 @@ function renderMarknad(){
   if(marknadFel){ el.innerHTML = '<p class="tv-info">Kunde inte läsa in marknadsföringen. Ladda om sidan och försök igen.</p>'; return; }
   const plista = mkProjektLista();
   if(marknadProjekt && !plista.some(p => p.id === marknadProjekt)) marknadProjekt = '';
+  if(marknadSubView !== 'material') mkMarkeraSett(marknadSubView);
+  const prick = del => mkHandelser(del).length ? '<span class="mk-prick" title="Nytt sedan du senast tittade"></span>' : '';
   const oppna = marknadData.arenden.filter(a => a.status !== 'klart' && mkMatchar(a)).length;
   const planerade = marknadData.inlagg.filter(i => i.status !== 'publicerat' && mkMatchar(i)).length;
-  const flikar = [['material', 'Material'], ['arenden', 'Ärenden' + (oppna ? ' (' + oppna + ')' : '')], ['inlagg', 'Inlägg' + (planerade ? ' (' + planerade + ')' : '')]];
+  const flikar = [['material', 'Material'], ['arenden', 'Ärenden' + (oppna ? ' (' + oppna + ')' : '') + prick('arenden')], ['inlagg', 'Inlägg' + (planerade ? ' (' + planerade + ')' : '') + prick('inlagg')]];
   let h = '<div class="mk-topp"><div class="portal-tabs" style="margin-top:0;">' + flikar.map(f => '<button type="button" class="portal-tab' + (marknadSubView === f[0] ? ' active' : '') + '" data-mk-flik="' + f[0] + '">' + f[1] + '</button>').join('') + '</div>' +
     '<select class="tv-val" id="mkProjektVal" title="Visa ett projekt"><option value="">Alla projekt</option>' + plista.map(p => '<option value="' + mkAttr(p.id) + '"' + (p.id === marknadProjekt ? ' selected' : '') + '>' + escapeHtml(p.name) + '</option>').join('') + '</select></div>';
   h += marknadSubView === 'material' ? mkMaterialHtml(plista) : marknadSubView === 'arenden' ? mkArendenHtml() : mkInlaggHtml();
@@ -17543,7 +17587,7 @@ function mkRadHtml(del, x, idag){
   return '<div class="avst-rad mk-rad' + (klar ? ' klar' : '') + '">' +
     '<select class="tv-val mk-status mk-st-' + status + '" data-mk="status" data-del="' + del + '" data-id="' + mkAttr(x.id) + '" title="Ändra status">' + Object.keys(statusar).map(k => '<option value="' + k + '"' + (k === status ? ' selected' : '') + '>' + statusar[k] + '</option>').join('') + '</select>' +
     '<div class="avst-huvud mk-klick" data-mk="oppna" data-del="' + del + '" data-id="' + mkAttr(x.id) + '" role="button" tabindex="0" title="Öppna">' +
-      '<div class="avst-text">' + escapeHtml(x.rubrik || '') + '</div>' + (kanaler ? '<div class="mk-kanalrad">' + kanaler + '</div>' : '') +
+      '<div class="avst-text">' + escapeHtml(x.rubrik || '') + (marknadNya[del].has(x.id) ? '<span class="mk-ny">Nytt</span>' : '') + '</div>' + (kanaler ? '<div class="mk-kanalrad">' + kanaler + '</div>' : '') +
       '<div class="avst-meta">' + meta + '</div>' + (x.text ? '<div class="mk-utdrag">' + escapeHtml(String(x.text).slice(0, 220)) + '</div>' : '') + '</div>' +
     '<div class="avst-datum">' + (datum ? escapeHtml(mkDatumKort(datum)) + (sen ? '<span>Försenat</span>' : '') : '<span class="avst-inget">' + (arA ? 'Inget datum' : 'Ej planerat') + '</span>') + '</div>' +
     '<div class="mk-komm">' + (n ? n + (n === 1 ? ' kommentar' : ' kommentarer') : '') + '</div></div>';
@@ -17698,6 +17742,13 @@ function mkPostPopup(del, id){
     if((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.mk-klick')){ e.preventDefault(); e.target.click(); }
   });
   const tillbaka = document.getElementById('backToHomeFromMarknadBtn'); if(tillbaka) tillbaka.onclick = () => openHome();
+  const avis = document.getElementById('marknadAvisering');
+  if(avis) avis.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-del]'); if(!b) return;
+    marknadSubView = b.dataset.del; marknadProjekt = ''; marknadVisaKlara = true;
+    await openMarknad();
+    if(b.dataset.id && !marknadFel) mkPostPopup(b.dataset.del, b.dataset.id);
+  });
 })();
 
 // Ramen runt appen. Vyerna och all logik är desamma som förut – menyn anropar de befintliga

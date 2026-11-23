@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
-<meta name="app-build" content="20261123160048">
+<meta name="app-build" content="20261123160640">
 <title>Projektöversikt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=Lora:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -584,6 +584,8 @@
   .mk-kommentar{ background:var(--paper); border:1px solid var(--line-soft); border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:13px; }
   .mk-kommentar span{ font-size:11px; color:var(--ink-soft); margin-left:8px; }
   .mk-kommentar p{ margin:3px 0 0; white-space:pre-line; overflow-wrap:anywhere; }
+  .mk-ny{ display:inline-block; margin-left:8px; font-size:10.5px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--amber); color:#fff; vertical-align:2px; text-decoration:none; }
+  .mk-prick{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--amber); margin-left:6px; vertical-align:1px; }
   .mk-fel{ color:var(--danger); font-size:12.5px; min-height:16px; margin-top:8px; }
   @media (max-width:700px){ .mk-rad{ flex-wrap:wrap; } .mk-komm{ flex-basis:auto; } }
   /* ---------- Checklista ekonomi ---------- */
@@ -1347,6 +1349,7 @@
     <h1 id="personalGreeting" style="margin-bottom:2px;">Hej!</h1>
     <p class="sub" style="margin-bottom:20px;">Din personliga sida.</p>
     <div id="tillvalAvisering" style="display:none;"></div>
+    <div id="marknadAvisering" style="display:none;"></div>
 
     <div class="home-grid" style="margin-bottom:24px;">
       <div class="home-card" id="goToProjektoversiktCard">
@@ -3125,7 +3128,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="config.js"></script>
-<script src="db.js?v=20261123160048"></script>
-<script src="app.js?v=20261123160048"></script>
+<script src="db.js?v=20261123160640"></script>
+<script src="app.js?v=20261123160640"></script>
 </body>
 </html>
