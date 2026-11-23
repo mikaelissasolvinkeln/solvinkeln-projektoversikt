@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261120151633';
+const APP_BUILD = '20261123100937';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16810,21 +16810,25 @@ DB.onDeladKonflikt = function(){
 const TILLVAL_STATUS = { utkast: 'Utkast', skickad: 'Skickad till kund', besvarad: 'Kunden har svarat', godkand: 'Godkänd' };
 const TILLVAL_VILLKOR_STD = 'Priserna gäller till och med svarsdatumet ovan och förutsätter att arbetet kan utföras inom ordinarie byggtid.';
 // Kunden väljer betalningssätt i sitt svar. Texterna kan ändras per projekt under Prislista.
-const TILLVAL_BETAL_NAMN = { insats: 'Höjning av insats', faktura: 'Faktura' };
+const TILLVAL_BETAL_NAMN = { insats: 'Ökning av upplåtelseavgiften', faktura: 'Faktura' };
 const TILLVAL_BETAL_STD = {
-  insats: 'Kostnaden för tillvalen läggs på bostadsrättens insats och betalas tillsammans med slutbetalningen på tillträdesdagen. Beloppet kan då ingå i ditt bolån, om din bank godkänner det.',
-  faktura: 'Entreprenören som är upphandlad till projektet fakturerar dig för tillvalen. Fakturan betalas med egna medel och ingår inte i bostadsrättens insats.'
+  insats: 'Kostnaden för tillvalen läggs på upplåtelseavgiften och betalas tillsammans med slutbetalningen på tillträdesdagen. Beloppet kan då ingå i ditt bolån, om din bank godkänner det.',
+  faktura: 'Entreprenören som är upphandlad till projektet fakturerar dig för tillvalen. Fakturan betalas med egna medel och ingår inte i upplåtelseavgiften.'
 };
-// Tidigare standardtext för faktura. Prislistor och offerter som har den sparad får den nya texten.
-const TILLVAL_BETAL_FAKTURA_FORR = 'Solvinkeln skickar en separat faktura på tillvalen. Den betalas med egna medel och ingår inte i bostadsrättens insats.';
+// Tidigare standardtexter. Prislistor och offerter som har någon av dem sparad får den nya texten.
+const TILLVAL_BETAL_FORR = [
+  'Kostnaden för tillvalen läggs på bostadsrättens insats och betalas tillsammans med slutbetalningen på tillträdesdagen. Beloppet kan då ingå i ditt bolån, om din bank godkänner det.',
+  'Solvinkeln skickar en separat faktura på tillvalen. Den betalas med egna medel och ingår inte i bostadsrättens insats.',
+  'Entreprenören som är upphandlad till projektet fakturerar dig för tillvalen. Fakturan betalas med egna medel och ingår inte i bostadsrättens insats.'
+];
 // Står på orderbekräftelsen under det betalningssätt kunden valt.
 const TILLVAL_BEKR_STD = {
-  insats: 'Kostnaden för tillvalen läggs på bostadsrättens insats. Bostadsrättsföreningen ansvarar för att beställa tillvalen enligt denna orderbekräftelse.',
+  insats: 'Kostnaden för tillvalen läggs på upplåtelseavgiften. Bostadsrättsföreningen ansvarar för att beställa tillvalen enligt denna orderbekräftelse.',
   faktura: 'Entreprenören som är upphandlad till projektet kommer att fakturera dig enligt orderbekräftelsen ovan.'
 };
 function tvBetalText(k, kod){
   const t = k ? (kod === 'insats' ? k.betalInsats : k.betalFaktura) : '';
-  return t && t !== TILLVAL_BETAL_FAKTURA_FORR ? t : TILLVAL_BETAL_STD[kod];
+  return t && TILLVAL_BETAL_FORR.indexOf(t) < 0 ? t : TILLVAL_BETAL_STD[kod];
 }
 let tillvalLista = { poster: [], villkor: '' };
 let tillvalOfferter = [];
@@ -16936,7 +16940,7 @@ function tillvalListaPopup(){
     document.getElementById('tvListaNy').onclick = async () => { tillvalLista.poster.push({ id: uid(), kategori: '', namn: '', beskrivning: '', pris: '' }); rita(); const rader = p.body.querySelectorAll('tr[data-id]'); const sista = rader[rader.length - 1]; if(sista) sista.querySelector('input[data-f="namn"]').focus(); await tillvalSparaLista(); };
     document.getElementById('tvListaVillkor').onchange = async e => { tillvalLista.villkor = e.target.value.trim(); await tillvalSparaLista(); };
     const betalBox = document.createElement('div');
-    betalBox.innerHTML = '<label class="tv-etikett">Text till kunden om betalning genom höjning av insats</label><textarea id="tvListaBetalInsats" class="tv-text" rows="2">' + escapeHtml(tvBetalText(tillvalLista, 'insats')) + '</textarea>' +
+    betalBox.innerHTML = '<label class="tv-etikett">Text till kunden om betalning genom ökning av upplåtelseavgiften</label><textarea id="tvListaBetalInsats" class="tv-text" rows="2">' + escapeHtml(tvBetalText(tillvalLista, 'insats')) + '</textarea>' +
       '<label class="tv-etikett">Text till kunden om betalning genom faktura</label><textarea id="tvListaBetalFaktura" class="tv-text" rows="2">' + escapeHtml(tvBetalText(tillvalLista, 'faktura')) + '</textarea>';
     p.body.appendChild(betalBox);
     document.getElementById('tvListaBetalInsats').onchange = async e => { tillvalLista.betalInsats = e.target.value.trim(); await tillvalSparaLista(); };
