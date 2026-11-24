@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261124133113';
+const APP_BUILD = '20261124164542';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -11079,6 +11079,8 @@ document.getElementById('ekoLikviditetIngaendeInput').addEventListener('change',
 });
 
 function openProject(p){
+  // En ändring som väntar på att sparas hör till projektet man lämnar. Spara den nu, innan bytet.
+  if(persistApartmentsTimer && activeProjectId !== p.id){ clearTimeout(persistApartmentsTimer); persistApartmentsTimer = null; persistApartmentsNow(); }
   activeProjectId = p.id;
   projectSubView = 'checklista';
   entreprenadSubView = 'tidsplan';
@@ -11468,12 +11470,27 @@ async function fetchApartmentsRaw(projectId){
   return { apartments: [], fromPerItem: false };
 }
 
+// Projektet som listan i "apartments" tillhör. Sparning går alltid till det projektet, även om
+// man hunnit byta projekt innan sparningen körs.
+let apartmentsProjektId = null;
+// Ritar om den öppna projektfliken när lägenheterna är inlästa. Checklistan ritas av renderTable.
+function renderAktivProjektflik(){
+  if(screen !== 'project') return;
+  if(projectSubView === 'betalningar') renderBetalningar();
+  else if(projectSubView === 'medlemsinfo') renderMedlemsinfo();
+  else if(projectSubView === 'inflyttningsinfo') renderInflyttningsinfo();
+}
 async function loadApartments(showSyncState){
   if(!activeProjectId) return;
   if(hasUnsavedApartmentChanges) return; // don't let a poll clobber a change that failed to save
+  const pid = activeProjectId;
   try{
     if(showSyncState) document.getElementById('syncText').textContent = 'synkar…';
-    const raw = await fetchApartmentsRaw(activeProjectId);
+    const raw = await fetchApartmentsRaw(pid);
+    // Har man bytt projekt under tiden gäller svaret fel projekt och ska inte användas.
+    if(activeProjectId !== pid) return;
+    const varTom = apartments.length === 0;
+    if(apartmentsProjektId !== pid){ apartments = []; apartmentsProjektId = pid; }
 
     if(raw.apartments.length > 0){
       apartments = raw.apartments.map(normalizeApartment);
@@ -11486,7 +11503,7 @@ async function loadApartments(showSyncState){
       // Om projektet har en känd startlista, återskapa den istället för att fastna tomt.
       const proj = projects.find(p => p.id === activeProjectId);
       const seed = proj ? SEED_APARTMENTS_BY_PROJECT_NAME[proj.name] : null;
-      if(seed && apartments.length === 0){
+      if(seed && varTom){
         apartments = seed.map(row => newApartment({
           lgh: String(row[0]), totalyta: String(row[1]), avgift: String(row[2]), totalpris: String(row[3]), address: row[4] ? String(row[4]) : ''
         }));
@@ -11500,6 +11517,7 @@ async function loadApartments(showSyncState){
     loaded = true;
     document.getElementById('syncText').textContent = 'uppdaterad ' + new Date().toLocaleTimeString('sv-SE');
     renderTable();
+    renderAktivProjektflik();
   }catch(e){
     showDebugError('Kunde inte synka lägenheter (loadApartments)', e);
     document.getElementById('syncText').textContent = 'synk misslyckades';
@@ -11525,7 +11543,7 @@ function persistApartments(){
 
 async function persistApartmentsNow(){
   saving = true;
-  const projectIdAtSaveTime = activeProjectId;
+  const projectIdAtSaveTime = apartmentsProjektId || activeProjectId;
   const json = JSON.stringify(apartments);
   try{
     await withRetry(() => window.storage.set(apartmentsKey(projectIdAtSaveTime), json, true));
@@ -11605,6 +11623,9 @@ function renderBetalningar(){
   const foot = document.getElementById('betalningarFoot');
   if(!body) return;
   body.innerHTML = ''; foot.innerHTML = '';
+  // Visa aldrig ett annat projekts lägenheter medan det valda projektet läses in.
+  if(apartmentsProjektId !== activeProjectId){ table.style.display = 'none'; empty.style.display = 'block'; empty.textContent = 'Läser in lägenheterna…'; return; }
+  empty.textContent = 'Inga lägenheter i det här projektet än.';
   if(apartments.length === 0){ table.style.display = 'none'; empty.style.display = 'block'; return; }
   table.style.display = 'table'; empty.style.display = 'none';
   const mono = "font-family:'JetBrains Mono', monospace;";
