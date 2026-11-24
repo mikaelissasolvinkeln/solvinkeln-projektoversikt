@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261123160640';
+const APP_BUILD = '20261124133113';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -16651,6 +16651,7 @@ function avstRadHtml(u, idag){
 }
 function renderEkonomiAvstamning(){
   const lista = document.getElementById('avstLista'); if(!lista) return;
+  avstDelVisa();
   const ym = avstamningManad || (avstamningManad = avstManadNu());
   const idag = avstIdag();
   const upp = avstUppgifter(ym), slap = avstEfterslap(ym);
@@ -16761,7 +16762,9 @@ async function oppnaEkonomiAvstamning(){
   const sel = document.getElementById('avstNyAnsvarig');
   if(sel && !sel.options.length) avstAnsvarigSatt(myName || '');
   renderEkonomiAvstamning();
+  const pck = pckLas().then(() => { pckFel = null; }, e => { pckFel = e; });
   try{ await avstLas(); }catch(e){ showDebugError('Kunde inte läsa checklistan', e); }
+  await pck;
   if(ekonomiSubView === 'avstamning') renderEkonomiAvstamning();
 }
 (function(){
@@ -17553,25 +17556,33 @@ function renderMarknad(){
   el.innerHTML = h;
 }
 
-function mkMaterialHtml(plista){
-  const rader = marknadProjekt ? plista.filter(p => p.id === marknadProjekt) : plista;
-  let h = '<div class="tv-topp"><button type="button" class="tv-knapp" data-mk="valj-projekt">Välj projekt</button><span class="tv-info">Klicka på en ruta för att ändra status eller lägga in en länk.</span></div>';
-  if(!rader.length) return h + '<p class="tv-info">Inga projekt är valda. Klicka på Välj projekt.</p>';
-  h += '<div class="mk-scroll"><table class="tv-tabell mk-matris"><thead><tr><th>Projekt</th>' + MARKNAD_MATERIAL.map(m => '<th>' + m[1] + '</th>').join('') + '<th class="tv-h">Klart</th></tr></thead><tbody>';
+// Tabell med ett projekt per rad och en ruta per punkt. Används av Marknadsföring (material) och av
+// Checklista ekonomi (per projekt). typer = [[id, namn]], celler = { projektid: { id: { status, lank, not } } }.
+// Status "ej" (ej aktuellt) räknas inte med i kolumnen Klart.
+function mkMatrisHtml(rader, typer, celler, statusNamn, namnKlick){
+  let h = '<div class="mk-scroll"><table class="tv-tabell mk-matris"><thead><tr><th>Projekt</th>' + typer.map(m => '<th>' + escapeHtml(m[1]) + '</th>').join('') + '<th class="tv-h">Klart</th></tr></thead><tbody>';
   rader.forEach(p => {
-    const c = marknadData.material.celler[p.id] || {};
-    let klara = 0;
-    const celler = MARKNAD_MATERIAL.map(m => {
+    const c = celler[p.id] || {};
+    let klara = 0, aktuella = 0;
+    const tds = typer.map(m => {
       const x = c[m[0]] || {};
-      const st = x.status === 'pagar' || x.status === 'klar' ? x.status : '';
+      const st = x.status && statusNamn[x.status] ? x.status : '';
+      if(st !== 'ej') aktuella++;
       if(st === 'klar') klara++;
       const lank = mkLank(x.lank);
-      return '<td><button type="button" class="mk-cell mk-' + (st || 'saknas') + '" data-mk="cell" data-pid="' + mkAttr(p.id) + '" data-typ="' + m[0] + '" title="' + mkAttr(x.not || 'Ändra') + '">' + MARKNAD_MAT_STATUS[st] + (x.not ? ' ✎' : '') + '</button>' +
+      return '<td><button type="button" class="mk-cell mk-' + (st || 'saknas') + '" data-mk="cell" data-pid="' + mkAttr(p.id) + '" data-typ="' + mkAttr(m[0]) + '" title="' + mkAttr(x.not || 'Ändra') + '">' + statusNamn[st] + (x.not ? ' ✎' : '') + '</button>' +
         (lank ? '<a class="mk-oppna" href="' + mkAttr(lank) + '" target="_blank" rel="noopener">Öppna ↗</a>' : '') + '</td>';
     }).join('');
-    h += '<tr><td class="mk-pnamn">' + escapeHtml(p.name) + '</td>' + celler + '<td class="tv-h">' + klara + ' av ' + MARKNAD_MATERIAL.length + '</td></tr>';
+    const namn = namnKlick ? '<button type="button" class="mk-pknapp" data-mk="projekt" data-pid="' + mkAttr(p.id) + '" title="Visa projektinformation">' + escapeHtml(p.name) + '</button>' : escapeHtml(p.name);
+    h += '<tr><td class="mk-pnamn">' + namn + '</td>' + tds + '<td class="tv-h">' + klara + ' av ' + aktuella + '</td></tr>';
   });
   return h + '</tbody></table></div>';
+}
+function mkMaterialHtml(plista){
+  const rader = marknadProjekt ? plista.filter(p => p.id === marknadProjekt) : plista;
+  const h = '<div class="tv-topp"><button type="button" class="tv-knapp" data-mk="valj-projekt">Välj projekt</button><span class="tv-info">Klicka på ett projekt för kort information, eller på en ruta för att ändra status och lägga in en länk.</span></div>';
+  if(!rader.length) return h + '<p class="tv-info">Inga projekt är valda. Klicka på Välj projekt.</p>';
+  return h + mkMatrisHtml(rader, MARKNAD_MATERIAL, marknadData.material.celler, MARKNAD_MAT_STATUS, true);
 }
 
 function mkRadHtml(del, x, idag){
@@ -17644,30 +17655,75 @@ function mkProjektOptioner(vald){
   return '<option value="">Inget projekt</option>' + lista.map(x => '<option value="' + mkAttr(x.id) + '"' + (x.id === vald ? ' selected' : '') + '>' + escapeHtml(x.name) + '</option>').join('');
 }
 
-function mkValjProjektPopup(){
-  const valda = mkProjektLista().map(p => p.id);
-  const pop = ekoPopup({ title: 'Välj projekt', sub: 'Bocka i de projekt som ska finnas med under Marknadsföring.', maxWidth: 460 });
+// Ruta för att välja vilka projekt som ska vara med. spara(ids) sparar urvalet.
+function mkValjProjektRuta(valda, sub, spara){
+  const pop = ekoPopup({ title: 'Välj projekt', sub, maxWidth: 460 });
   pop.body.innerHTML = projects.map(p => '<label class="mk-projektrad"><input type="checkbox" value="' + mkAttr(p.id) + '"' + (valda.indexOf(p.id) >= 0 ? ' checked' : '') + '> <span>' + escapeHtml(p.name) + '</span><em>' + escapeHtml(p.status || 'Pågående') + '</em></label>').join('') || '<p class="tv-info">Det finns inga projekt.</p>';
-  mkPopupKnappar(pop, () => {
-    const ids = Array.from(pop.body.querySelectorAll('input[type=checkbox]')).filter(c => c.checked).map(c => c.value);
-    return marknadAndra('material', d => { d.projekt = ids; });
-  });
+  mkPopupKnappar(pop, () => spara(Array.from(pop.body.querySelectorAll('input[type=checkbox]')).filter(c => c.checked).map(c => c.value)));
 }
-function mkCellPopup(pid, typ){
-  const p = projects.find(x => x.id === pid), m = MARKNAD_MATERIAL.find(x => x[0] === typ); if(!p || !m) return;
-  const x = (marknadData.material.celler[pid] || {})[typ] || {};
-  const pop = ekoPopup({ title: m[1], sub: p.name, maxWidth: 460 });
-  pop.body.innerHTML = '<label class="tv-etikett" style="margin-top:0;">Status</label><select class="tv-val" data-f="status" style="width:100%;">' + Object.keys(MARKNAD_MAT_STATUS).map(k => '<option value="' + k + '"' + (k === (x.status || '') ? ' selected' : '') + '>' + MARKNAD_MAT_STATUS[k] + '</option>').join('') + '</select>' +
-    '<label class="tv-etikett">Länk till materialet</label><input type="text" class="tv-val" data-f="lank" style="width:100%;" placeholder="https://…" value="' + mkAttr(x.lank || '') + '">' +
+function mkValjProjektPopup(){
+  mkValjProjektRuta(mkProjektLista().map(p => p.id), 'Bocka i de projekt som ska finnas med under Marknadsföring.', ids => marknadAndra('material', d => { d.projekt = ids; }));
+}
+// Ruta för en ruta i tabellen: status, länk och anteckning. o = { titel, sub, x, statusNamn, lankEtikett, spara(ny) }.
+function mkCellRuta(o){
+  const x = o.x || {};
+  const pop = ekoPopup({ title: o.titel, sub: o.sub, maxWidth: 460 });
+  pop.body.innerHTML = '<label class="tv-etikett" style="margin-top:0;">Status</label><select class="tv-val" data-f="status" style="width:100%;">' + Object.keys(o.statusNamn).map(k => '<option value="' + k + '"' + (k === (x.status || '') ? ' selected' : '') + '>' + o.statusNamn[k] + '</option>').join('') + '</select>' +
+    '<label class="tv-etikett">' + o.lankEtikett + '</label><input type="text" class="tv-val" data-f="lank" style="width:100%;" placeholder="https://…" value="' + mkAttr(x.lank || '') + '">' +
     '<label class="tv-etikett">Anteckning</label><textarea class="tv-text" data-f="not" rows="3">' + escapeHtml(x.not || '') + '</textarea>' +
     (x.av ? '<p class="tv-liten" style="margin:10px 0 0;">Senast ändrad av ' + escapeHtml(x.av) + ' ' + escapeHtml(mkTidpunkt(x.at)) + '.</p>' : '') + '<div class="mk-fel"></div>';
   const f = n => pop.body.querySelector('[data-f="' + n + '"]');
   mkPopupKnappar(pop, () => {
     const ra = f('lank').value.trim(), lank = mkLank(ra);
     if(ra && !lank){ pop.body.querySelector('.mk-fel').textContent = 'Länken ska vara en webbadress, till exempel https://solvinkeln.se.'; return false; }
-    const ny = { status: f('status').value, lank, not: f('not').value.trim(), av: mkVem(), at: new Date().toISOString() };
-    return marknadAndra('material', d => { (d.celler[pid] = d.celler[pid] || {})[typ] = ny; });
+    return o.spara({ status: f('status').value, lank, not: f('not').value.trim(), av: mkVem(), at: new Date().toISOString() });
   });
+}
+function mkCellPopup(pid, typ){
+  const p = projects.find(x => x.id === pid), m = MARKNAD_MATERIAL.find(x => x[0] === typ); if(!p || !m) return;
+  mkCellRuta({ titel: m[1], sub: p.name, x: (marknadData.material.celler[pid] || {})[typ], statusNamn: MARKNAD_MAT_STATUS, lankEtikett: 'Länk till materialet',
+    spara: ny => marknadAndra('material', d => { (d.celler[pid] = d.celler[pid] || {})[typ] = ny; }) });
+}
+// Kort information om ett projekt, öppnas med klick på projektnamnet under Material. Ort, etapp och
+// beskrivning skrivs in här (marknad:material.info[projektid]). Antal enheter, storlek och priser
+// hämtas från projektets lägenhetslista när fälten lämnas tomma.
+const MARKNAD_INFO_FALT = [['ort', 'Ort'], ['etapp', 'Etapp'], ['enheter', 'Antal enheter'], ['storlek', 'Storlek på enheterna'], ['priser', 'Ungefärliga priser']];
+async function mkProjektAuto(pid){
+  const tal = s => { const n = parseFloat(String(s || '').replace(/\s/g, '').replace(',', '.').replace(/[^0-9.]/g, '')); return isNaN(n) || n <= 0 ? null : n; };
+  const spann = (xs, enhet, fmt) => { xs = xs.filter(x => x != null); if(!xs.length) return ''; const a = Math.min.apply(null, xs), b = Math.max.apply(null, xs); return (a === b ? fmt(a) : fmt(a) + '–' + fmt(b)) + ' ' + enhet; };
+  try{
+    const apts = (await fetchApartmentsRaw(pid)).apartments || [];
+    if(!apts.length) return {};
+    return { enheter: apts.length + ' st', storlek: spann(apts.map(a => tal(a.totalyta)), 'kvm', n => String(Math.round(n))), priser: spann(apts.map(a => tal(a.totalpris)), 'kr', n => Math.round(n).toLocaleString('sv-SE')) };
+  }catch(e){ return {}; }
+}
+async function mkProjektInfoPopup(pid, andra){
+  const p = projects.find(x => x.id === pid); if(!p) return;
+  const info = (marknadData.material.info || {})[pid] || {};
+  const pop = ekoPopup({ title: p.name, sub: 'Projektinformation · ' + (p.status || 'Pågående'), maxWidth: 520 });
+  pop.body.innerHTML = '<p class="tv-info">Laddar…</p>';
+  const auto = await mkProjektAuto(pid);
+  if(!pop.overlay.isConnected) return;
+  const harAuto = Object.keys(auto).some(k => auto[k]);
+  if(andra){
+    pop.body.innerHTML = MARKNAD_INFO_FALT.map((f, i) => '<label class="tv-etikett"' + (i ? '' : ' style="margin-top:0;"') + '>' + f[1] + '</label><input type="text" class="tv-val" data-f="' + f[0] + '" style="width:100%;" maxlength="120" value="' + mkAttr(info[f[0]] || '') + '" placeholder="' + mkAttr(auto[f[0]] ? auto[f[0]] + ' (från lägenhetslistan)' : '') + '">').join('') +
+      '<label class="tv-etikett">Projektbeskrivning</label><textarea class="tv-text" data-f="beskrivning" rows="5">' + escapeHtml(info.beskrivning || '') + '</textarea>' +
+      (harAuto ? '<p class="tv-liten" style="margin:10px 0 0;">Tomma fält för enheter, storlek och priser fylls från projektets lägenhetslista.</p>' : '');
+    mkPopupKnappar(pop, async () => {
+      const ny = { av: mkVem(), at: new Date().toISOString() };
+      pop.body.querySelectorAll('[data-f]').forEach(el => { const v = el.value.trim(); if(v) ny[el.dataset.f] = v; });
+      const ok = await marknadAndra('material', d => { if(!d.info || typeof d.info !== 'object' || Array.isArray(d.info)) d.info = {}; d.info[pid] = ny; });
+      if(ok) setTimeout(() => mkProjektInfoPopup(pid), 0);
+      return ok;
+    });
+    return;
+  }
+  pop.body.innerHTML = '<div class="mk-info">' + MARKNAD_INFO_FALT.map(f => { const v = info[f[0]] || auto[f[0]] || ''; return '<div class="mk-inforad"><span>' + f[1] + '</span><b>' + (v ? escapeHtml(v) : '<i>Inte ifyllt</i>') + '</b></div>'; }).join('') + '</div>' +
+    (info.beskrivning ? '<div class="mk-infotext">' + tvStycken(info.beskrivning) + '</div>' : '<p class="tv-liten" style="margin:12px 0 0;">Ingen projektbeskrivning är inlagd.</p>') +
+    (info.av ? '<p class="tv-liten" style="margin:12px 0 0;">Senast ändrad av ' + escapeHtml(info.av) + ' ' + escapeHtml(mkTidpunkt(info.at)) + '.</p>' : '');
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Ändra'; b.style.cssText = 'margin-right:auto;';
+  b.onclick = () => mkProjektInfoPopup(pid, true);
+  pop.actions.insertBefore(b, pop.actions.firstChild);
 }
 // Ruta för ett ärende eller ett inlägg. Utan id skapas ett nytt.
 function mkPostPopup(del, id){
@@ -17728,6 +17784,7 @@ function mkPostPopup(del, id){
     const a = t.dataset.mk;
     if(a === 'valj-projekt') mkValjProjektPopup();
     else if(a === 'cell') mkCellPopup(t.dataset.pid, t.dataset.typ);
+    else if(a === 'projekt') mkProjektInfoPopup(t.dataset.pid);
     else if(a === 'ny-arende') mkPostPopup('arenden');
     else if(a === 'ny-inlagg') mkPostPopup('inlagg');
     else if(a === 'oppna') mkPostPopup(t.dataset.del, t.dataset.id);
@@ -17749,6 +17806,110 @@ function mkPostPopup(del, id){
     await openMarknad();
     if(b.dataset.id && !marknadFel) mkPostPopup(b.dataset.del, b.dataset.id);
   });
+})();
+
+// ---------- Checklista ekonomi: per projekt ----------
+// Andra delen av Checklista ekonomi: en tabell med ett projekt per rad och en ruta per punkt
+// (t.ex. Sålt överhypotek). Bara ekonomiadministratörerna ser den. Punkterna kan ändras i appen.
+// Lagras i den delade nyckeln ekonomi-projektchecklista:
+//   { punkter: [{ id, namn }], projekt: [projektid] eller null (= alla som inte är avslutade),
+//     celler: { projektid: { punktid: { status, lank, not, av, at } } } }
+const PCK_KEY = 'ekonomi-projektchecklista';
+const PCK_STATUS = { '': 'Ej gjort', pagar: 'Pågår', klar: 'Klart', ej: 'Ej aktuellt' };
+const PCK_PUNKTER_STD = [{ id: 'laddbidrag', namn: 'Ansökt om laddbidrag' }, { id: 'overhypotek', namn: 'Sålt överhypotek' }, { id: 'dotterbolag', namn: 'Sålt dotterbolag' }, { id: 'forsakring', namn: 'Tecknat försäkring' }];
+let pckData = pckNorm(null);
+let pckFel = null;
+let avstDel = 'uppgifter'; // 'uppgifter' | 'projekt'
+function pckNorm(d){
+  d = d && typeof d === 'object' && !Array.isArray(d) ? d : {};
+  if(!Array.isArray(d.punkter)) d.punkter = PCK_PUNKTER_STD.map(p => ({ id: p.id, namn: p.namn }));
+  if(!d.celler || typeof d.celler !== 'object') d.celler = {};
+  if(!Array.isArray(d.projekt)) d.projekt = null;
+  return d;
+}
+// Kastar fel om läsningen misslyckas, så att en tom lista aldrig sparas över riktig data.
+async function pckLas(){
+  const r = await DB.getPersonalData(PCK_KEY);
+  pckData = pckNorm(r && r.value ? JSON.parse(r.value) : null);
+}
+// Samma krockskydd som avstAndra: har den andra sparat emellan läses listan om och ändringen görs om.
+async function pckAndra(fn){
+  for(let i = 0; i < 4; i++){
+    fn(pckData);
+    try{ await DB.setPersonalData(PCK_KEY, JSON.stringify(pckData), { tyst: true }); renderPck(); return true; }
+    catch(e){
+      if(e && e.code === 'DELAD_KONFLIKT' && i < 3){ try{ await pckLas(); continue; }catch(e2){ e = e2; } }
+      showDebugError('Kunde inte spara checklistan', e);
+      showToast('Kunde inte spara, försök igen');
+      try{ await pckLas(); }catch(e3){ pckFel = e3; }
+      renderPck();
+      return false;
+    }
+  }
+  return false;
+}
+function pckProjektLista(){
+  const val = pckData.projekt;
+  return val ? projects.filter(p => val.indexOf(p.id) >= 0) : projects.filter(p => p.status !== 'Avslutat');
+}
+function renderPck(){
+  const el = document.getElementById('avstProjektDel'); if(!el) return;
+  if(pckFel){ el.innerHTML = '<p class="tv-info">Kunde inte läsa in checklistan. Ladda om sidan och försök igen.</p>'; return; }
+  const rader = pckProjektLista();
+  let h = '<div class="tv-topp"><button type="button" class="tv-knapp" data-pck="valj-projekt">Välj projekt</button><button type="button" class="tv-knapp" data-pck="punkter">Ändra punkter</button><span class="tv-info">Klicka på en ruta för att ändra status eller skriva en anteckning.</span></div>';
+  if(!pckData.punkter.length) h += '<p class="tv-info">Det finns inga punkter. Klicka på Ändra punkter.</p>';
+  else if(!rader.length) h += '<p class="tv-info">Inga projekt är valda. Klicka på Välj projekt.</p>';
+  else h += mkMatrisHtml(rader, pckData.punkter.map(p => [p.id, p.namn]), pckData.celler, PCK_STATUS);
+  el.innerHTML = h;
+}
+function pckCellPopup(pid, punktId){
+  const p = projects.find(x => x.id === pid), m = pckData.punkter.find(x => x.id === punktId); if(!p || !m) return;
+  mkCellRuta({ titel: m.namn, sub: p.name, x: (pckData.celler[pid] || {})[punktId], statusNamn: PCK_STATUS, lankEtikett: 'Länk till underlag',
+    spara: ny => pckAndra(d => { (d.celler[pid] = d.celler[pid] || {})[punktId] = ny; }) });
+}
+// Lägg till, byt namn på eller ta bort punkter (kolumnerna i tabellen).
+function pckPunkterPopup(){
+  const pop = ekoPopup({ title: 'Ändra punkter', sub: 'Punkterna blir kolumner i tabellen och gäller alla projekt.', maxWidth: 460 });
+  const rad = (id, namn) => '<div class="pck-punktrad" data-id="' + mkAttr(id) + '"><input type="text" class="tv-val" maxlength="80" placeholder="Ny punkt, till exempel Tecknat försäkring" value="' + mkAttr(namn) + '"><button type="button" class="avst-knapp" data-pck-bort title="Ta bort punkten">✕</button></div>';
+  pop.body.innerHTML = '<div data-pck-lista>' + pckData.punkter.map(p => rad(p.id, p.namn)).join('') + '</div><button type="button" class="tv-knapp" data-pck-ny style="margin-top:8px;">+ Lägg till punkt</button><div class="mk-fel"></div>';
+  const lista = pop.body.querySelector('[data-pck-lista]');
+  const nyRad = () => { lista.insertAdjacentHTML('beforeend', rad('', '')); const inp = lista.lastElementChild.querySelector('input'); inp.focus(); };
+  pop.body.addEventListener('click', e => {
+    if(e.target.closest('[data-pck-ny]')) nyRad();
+    else if(e.target.closest('[data-pck-bort]')) e.target.closest('.pck-punktrad').remove();
+  });
+  pop.body.addEventListener('keydown', e => { if(e.key === 'Enter' && e.target.matches('.pck-punktrad input')){ e.preventDefault(); nyRad(); } });
+  mkPopupKnappar(pop, () => {
+    const nya = Array.from(lista.querySelectorAll('.pck-punktrad')).map(r => ({ id: r.dataset.id || uid(), namn: r.querySelector('input').value.trim() })).filter(p => p.namn);
+    const borta = pckData.punkter.filter(p => !nya.some(n => n.id === p.id));
+    const ifyllda = borta.filter(p => Object.keys(pckData.celler).some(pid => pckData.celler[pid] && pckData.celler[pid][p.id]));
+    if(ifyllda.length && !confirm('Ta bort ' + ifyllda.map(p => '"' + p.namn + '"').join(', ') + '? Det som är ifyllt för ' + (ifyllda.length === 1 ? 'punkten' : 'punkterna') + ' försvinner.')) return false;
+    return pckAndra(d => {
+      d.punkter = nya.map(p => ({ id: p.id, namn: p.namn }));
+      borta.forEach(p => Object.keys(d.celler).forEach(pid => { if(d.celler[pid]) delete d.celler[pid][p.id]; }));
+    });
+  });
+  if(!pckData.punkter.length) nyRad();
+}
+// Växlar mellan Uppgifter och Per projekt i Checklista ekonomi.
+function avstDelVisa(){
+  const u = document.getElementById('avstUppgifterDel'), p = document.getElementById('avstProjektDel'); if(!u || !p) return;
+  u.style.display = avstDel === 'projekt' ? 'none' : '';
+  p.style.display = avstDel === 'projekt' ? '' : 'none';
+  document.querySelectorAll('#avstDelar [data-avst-del]').forEach(b => b.classList.toggle('active', b.dataset.avstDel === avstDel));
+  if(avstDel === 'projekt') renderPck();
+}
+(function(){
+  const el = document.getElementById('avstProjektDel'); if(!el) return;
+  el.addEventListener('click', e => {
+    const cell = e.target.closest('[data-mk="cell"]');
+    if(cell){ pckCellPopup(cell.dataset.pid, cell.dataset.typ); return; }
+    const b = e.target.closest('[data-pck]'); if(!b) return;
+    if(b.dataset.pck === 'valj-projekt') mkValjProjektRuta(pckProjektLista().map(p => p.id), 'Bocka i de projekt som ska finnas med i checklistan.', ids => pckAndra(d => { d.projekt = ids; }));
+    else if(b.dataset.pck === 'punkter') pckPunkterPopup();
+  });
+  const delar = document.getElementById('avstDelar');
+  if(delar) delar.addEventListener('click', e => { const b = e.target.closest('[data-avst-del]'); if(b){ avstDel = b.dataset.avstDel; avstDelVisa(); } });
 })();
 
 // Ramen runt appen. Vyerna och all logik är desamma som förut – menyn anropar de befintliga
