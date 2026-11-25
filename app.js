@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261124164542';
+const APP_BUILD = '20261125112732';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -424,31 +424,24 @@ function renderNameUI(){
 }
 
 // ---------- Projects ----------
-const DEFAULT_PROJECT_NAMES = ['Brf Glömstahöjden', 'Brf Gladö Höjden', 'Brf Aktrisen', 'Brf Kulissen'];
-
+// Sant först när projektlistan faktiskt har lästs från lagringen. Innan dess sparas den aldrig.
+let projectsLoaded = false;
+// Projektlistan läses bara, den skapas aldrig om härifrån. Den 25 november 2026 misslyckades en
+// läsning, appen lade då in standardprojekten med nya id och sparade över hela listan. Därför:
+// går listan inte att läsa lämnas allt orört och ingenting sparas.
 async function loadProjects(){
   if(hasUnsavedProjectChanges) return;
   try{
-    let res;
-    try{
-      res = await window.storage.get(PROJECTS_KEY, true);
-    }catch(getErr){
-      // key not found yet is expected on first-ever run; anything else, surface it
-      res = null;
-    }
+    const res = await window.storage.get(PROJECTS_KEY, true);
     if(res && res.value){
-      projects = JSON.parse(res.value);
+      const lista = JSON.parse(res.value);
+      if(Array.isArray(lista)){ projects = lista; projectsLoaded = true; }
+    } else if(!(window.DB && window.DB.hasSupabase)){
+      // Lokalt testläge utan databas: tom lista är ett giltigt startläge.
+      projectsLoaded = true;
+    } else if(!projectsLoaded){
+      showDebugError('Kunde inte läsa projektlistan (loadProjects)', new Error('Projektlistan kom tillbaka tom. Ladda om sidan.'));
     }
-
-    // Se till att alla standardprojekt finns med, även för de som redan har egna sparade projekt
-    let addedAny = false;
-    DEFAULT_PROJECT_NAMES.forEach(name => {
-      if(!projects.some(p => p.name === name)){
-        projects.push({ id: slugId(name), name });
-        addedAny = true;
-      }
-    });
-    if(addedAny) await persistProjects();
 
     if(screen === 'home') renderHomeGrid();
     if(screen === 'project'){
@@ -459,8 +452,26 @@ async function loadProjects(){
     showDebugError('Kunde inte läsa projektlistan (loadProjects)', e);
   }
 }
+// Projekt kan inte tas bort i appen, så en sparning får aldrig göra den sparade listan kortare.
+// Före varje sparning läses den sparade listan om. Saknas något av dess projekt här avbryts sparningen.
+async function projektlistaFarSparas(){
+  if(!projectsLoaded) return 'Projektlistan är inte inläst.';
+  if(!(window.DB && window.DB.hasSupabase)) return '';
+  const res = await window.storage.get(PROJECTS_KEY, true);
+  if(!res || !res.value) return 'Den sparade projektlistan gick inte att läsa.';
+  const sparad = JSON.parse(res.value);
+  if(!Array.isArray(sparad)) return 'Den sparade projektlistan har fel format.';
+  const saknas = sparad.filter(s => s && s.id && !projects.some(p => p.id === s.id));
+  return saknas.length ? 'Den sparade listan innehåller ' + saknas.length + ' projekt som saknas här (' + saknas.map(s => s.name).join(', ') + ').' : '';
+}
 async function persistProjects(){
   try{
+    const hinder = await projektlistaFarSparas();
+    if(hinder){
+      showDebugError('Projektlistan sparades inte', new Error(hinder + ' Ladda om sidan och försök igen.'));
+      showToast('Projektlistan sparades inte, ladda om sidan');
+      return;
+    }
     await withRetry(() => window.storage.set(PROJECTS_KEY, JSON.stringify(projects), true));
     hasUnsavedProjectChanges = false;
     clearDebugError();
