@@ -3,7 +3,7 @@
 // webbläsaren eller Vercels cache en stund servera en gammal index.html ihop
 // med ny app.js (eller tvärtom) - då saknas element och inget fungerar.
 // Skiljer sig stämplarna åt laddas sidan om en gång med cache-brytande adress.
-const APP_BUILD = '20261125112732';
+const APP_BUILD = '20261126151349';
 (function checkAppBuild(){
   const meta = document.querySelector('meta[name="app-build"]');
   const htmlBuild = meta ? meta.getAttribute('content') : null;
@@ -15308,6 +15308,21 @@ function ekonomiBolagKoncernRows(aktorKey, months){
   return out;
 }
 function ekonomiBolagFinansiarNamn(key){ const a = EKONOMI_KONCERN_AKTORER.find(x => x.key === key); return a ? a.namn : key; }
+// Värdering: b.vardering är värdet på hela bolaget i kronor. Vår del är ägarandelen av det.
+// Fungerar både på bolaget och på ögonblicksbilden i ägarrapporten (samma fält).
+function ekonomiBolagVarde(b){
+  const tot = Math.max(0, parseFloat(b && b.vardering) || 0);
+  const a = b && b.agarandel != null && b.agarandel !== '' ? parseFloat(b.agarandel) : NaN;
+  const andel = isNaN(a) ? null : Math.max(0, Math.min(100, a));
+  return { tot, andel, egen: tot && andel != null ? Math.round(tot * andel / 100) : null };
+}
+function ekonomiProcentText(v){ return String(Math.round(v * 100) / 100).replace('.', ',') + ' %'; }
+// Stapel som visar vår del av hela bolagets värde (ägarrapporten).
+function portalVardeStapel(v){
+  if(!v.tot || v.egen == null) return '';
+  return '<div style="margin:10px 0 0;"><div style="height:14px; border-radius:7px; background:var(--line-soft); overflow:hidden;"><div style="height:100%; width:' + v.andel + '%; background:var(--blue);"></div></div>' +
+    '<div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--ink-soft); margin-top:5px;"><span>Vår andel ' + ekonomiProcentText(v.andel) + ' · <b style="color:var(--ink);">' + portalFmt.mkr(v.egen) + '</b></span><span>Hela bolaget <b style="color:var(--ink);">' + portalFmt.mkr(v.tot) + '</b></span></div></div>';
+}
 function renderEkonomiKoncernBolag(){
   const listWrap = document.getElementById('ekoBolagList'), det = document.getElementById('ekoBolagDetail');
   if(!listWrap || !det) return;
@@ -15325,9 +15340,9 @@ function renderEkonomiBolagLista(){
   const t = document.createElement('table');
   t.className = 'eko-compare-table ekonomi-clickable-table home-list-table';
   t.style.width = '100%';
-  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th>Ägarandel</th><th style="text-align:left;">Finansieras av</th><th>Andelar</th><th>Lån från koncernen</th><th>Kassa ' + ekonomiPrognosShortLabel(idag) + '</th><th>Kapitalbehov</th><th style="text-align:left;">Budgetperiod</th><th></th></tr></thead>';
+  t.innerHTML = '<thead><tr><th style="text-align:left;">Bolag</th><th>Ägarandel</th><th style="text-align:left;">Finansieras av</th><th>Andelar</th><th title="Ägarandelen av bolagets hela värdering">Värde vår andel</th><th>Lån från koncernen</th><th>Kassa ' + ekonomiPrognosShortLabel(idag) + '</th><th>Kapitalbehov</th><th style="text-align:left;">Budgetperiod</th><th></th></tr></thead>';
   const tb = document.createElement('tbody');
-  let totBehov = 0, totAndelar = 0, totLan = 0;
+  let totBehov = 0, totAndelar = 0, totLan = 0, totVarde = 0, totVardering = 0;
   list.slice().sort((a, c) => (a.ordning || 0) - (c.ordning || 0)).forEach(b => {
     ekonomiBolagNormalisera(b);
     const r = ekonomiBolagBerakna(b);
@@ -15337,7 +15352,9 @@ function renderEkonomiBolagLista(){
     const kassaNu = r.kassa[idag];
     const andSum = ekonomiAndelarSumma(ekonomiAndelarForBolag(b)), lanSum = ekonomiBolagKoncernLan(b).reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0);
     totAndelar += andSum; totLan += lanSum;
-    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(b.namn || 'Bolag') + '</td><td>' + (b.agarandel != null && b.agarandel !== '' ? String(b.agarandel).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(ekonomiBolagFinansiarNamn(b.finansiar)) + '</td><td>' + (andSum ? formatKrFull(andSum) : '—') + '</td><td>' + (lanSum ? formatKrFull(Math.round(lanSum)) : '—') + '</td><td>' + (kassaNu != null ? formatKrFull(Math.round(kassaNu)) : '—') + '</td><td' + (r.behovTotalt ? ' style="color:var(--danger); font-weight:600;"' : '') + '>' + formatKrFull(r.behovTotalt) + '</td><td style="text-align:left; font-size:12px;">' + ekonomiPrognosShortLabel(r.manader[0]) + ' – ' + ekonomiPrognosShortLabel(r.manader[r.manader.length - 1]) + (b.importerad ? '<div style="font-size:10px; color:var(--ink-soft);">Excel ' + escapeHtml(b.importerad.datum || '') + '</div>' : '') + '</td><td class="row-actions"></td>';
+    const vd = ekonomiBolagVarde(b); totVarde += vd.egen || 0; totVardering += vd.tot;
+    const vdCell = !vd.tot ? '—' : (vd.egen != null ? formatKrFull(vd.egen) : '—') + '<div style="font-size:10px; color:var(--ink-soft);">av ' + formatKrFull(vd.tot) + '</div>';
+    tr.innerHTML = '<td class="home-list-name">' + escapeHtml(b.namn || 'Bolag') + '</td><td>' + (b.agarandel != null && b.agarandel !== '' ? String(b.agarandel).replace('.', ',') + ' %' : '—') + '</td><td style="text-align:left;">' + escapeHtml(ekonomiBolagFinansiarNamn(b.finansiar)) + '</td><td>' + (andSum ? formatKrFull(andSum) : '—') + '</td><td>' + vdCell + '</td><td>' + (lanSum ? formatKrFull(Math.round(lanSum)) : '—') + '</td><td>' + (kassaNu != null ? formatKrFull(Math.round(kassaNu)) : '—') + '</td><td' + (r.behovTotalt ? ' style="color:var(--danger); font-weight:600;"' : '') + '>' + formatKrFull(r.behovTotalt) + '</td><td style="text-align:left; font-size:12px;">' + ekonomiPrognosShortLabel(r.manader[0]) + ' – ' + ekonomiPrognosShortLabel(r.manader[r.manader.length - 1]) + (b.importerad ? '<div style="font-size:10px; color:var(--ink-soft);">Excel ' + escapeHtml(b.importerad.datum || '') + '</div>' : '') + '</td><td class="row-actions"></td>';
     tr.onclick = () => { currentEkonomiBolagId = b.id; renderEkonomiKoncernBolag(); };
     const del = document.createElement('button'); del.type = 'button'; del.className = 'remove-btn'; del.textContent = '✕'; del.title = 'Ta bort bolaget';
     del.onclick = async (e) => { e.stopPropagation(); if(!confirm('Ta bort ' + (b.namn || 'bolaget') + ' med budget och tillskott?')) return; companyEkonomiData.koncern._bolag = list.filter(x => x.id !== b.id); await saveEkonomiKoncern(); renderEkonomiKoncernBolag(); };
@@ -15345,7 +15362,7 @@ function renderEkonomiBolagLista(){
     tb.appendChild(tr);
   });
   const tot = document.createElement('tr'); tot.className = 'eko-row-resultat';
-  tot.innerHTML = '<td style="text-align:left;">Summa (' + list.length + ' bolag)</td><td></td><td></td><td>' + formatKrFull(totAndelar) + '</td><td>' + formatKrFull(Math.round(totLan)) + '</td><td></td><td>' + formatKrFull(totBehov) + '</td><td></td><td></td>';
+  tot.innerHTML = '<td style="text-align:left;">Summa (' + list.length + ' bolag)</td><td></td><td></td><td>' + formatKrFull(totAndelar) + '</td><td>' + (totVardering ? formatKrFull(totVarde) + '<div style="font-size:10px; color:var(--ink-soft); font-weight:400;">av ' + formatKrFull(totVardering) + '</div>' : '—') + '</td><td>' + formatKrFull(Math.round(totLan)) + '</td><td></td><td>' + formatKrFull(totBehov) + '</td><td></td><td></td>';
   tb.appendChild(tot);
   t.appendChild(tb);
   wrap.appendChild(t);
@@ -15386,7 +15403,10 @@ function renderEkonomiBolagDetalj(b){
   const inpCss = 'border:1px solid var(--line-soft); border-radius:6px; padding:5px 8px; font-size:13px; background:#fff;';
   const mkInp = (type, val, onchange, extra) => { const i = document.createElement('input'); i.type = type; i.value = val == null ? '' : val; i.style.cssText = inpCss + (extra || ''); i.onchange = onchange; return i; };
   field('Beskrivning (kort info)', mkInp('text', b.beskrivning, async e => { b.beskrivning = e.target.value.trim(); await save(false); }));
-  field('Ägarandel %', mkInp('number', b.agarandel, async e => { b.agarandel = e.target.value === '' ? null : parseFloat(e.target.value.replace(',', '.')); await save(false); }, ' width:110px;'));
+  field('Ägarandel %', mkInp('number', b.agarandel, async e => { b.agarandel = e.target.value === '' ? null : parseFloat(e.target.value.replace(',', '.')); await save(); }, ' width:110px;'));
+  { const v = ekonomiBolagVarde(b);
+    field('Värdering av hela bolaget (kr)', mkInp('number', b.vardering, async e => { const x = parseFloat(e.target.value.replace(',', '.')); b.vardering = e.target.value === '' || isNaN(x) || x <= 0 ? null : x; await save(); }),
+      !v.tot ? 'Värdet på hela bolaget, inte bara vår del. Visas i ägarrapporten.' : v.egen == null ? formatKrFull(v.tot) + '. Fyll i ägarandel så räknas vår del ut.' : formatKrFull(v.tot) + '. Vår andel ' + ekonomiProcentText(v.andel) + ' är värd ' + formatKrFull(v.egen) + '.'); }
   field('Kontaktperson', mkInp('text', b.kontakt, async e => { b.kontakt = e.target.value.trim(); await save(false); }));
   const fin = document.createElement('select'); fin.className = 'eko-inline-select'; fin.style.cssText = inpCss;
   fin.innerHTML = EKONOMI_KONCERN_AKTORER.map(a => '<option value="' + a.key + '">' + escapeHtml(a.namn) + '</option>').join('');
@@ -15408,6 +15428,7 @@ function renderEkonomiBolagDetalj(b){
   kpi.style.cssText = 'display:flex; gap:22px; flex-wrap:wrap; margin-bottom:14px; font-size:13px;';
   const kp = (l, v, red) => { const d = document.createElement('div'); d.innerHTML = '<div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.5px;">' + l + '</div><div style="font-family:\'JetBrains Mono\',monospace; font-size:15px; font-weight:600;' + (red ? ' color:var(--danger);' : '') + '">' + v + '</div>'; kpi.appendChild(d); };
   kp('Kapitalbehov i perioden', formatKrFull(r.behovTotalt), r.behovTotalt > 0);
+  { const v = ekonomiBolagVarde(b); if(v.tot) kp('Värde av vår andel', (v.egen != null ? formatKrFull(v.egen) : '—') + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + (v.andel != null ? ekonomiProcentText(v.andel) + ' av ' : 'ägarandel saknas, hela bolaget ') + formatKrFull(v.tot) + '</span>'); }
   { const an = ekonomiAndelarForBolag(b); if(an.length) kp('Andelar (anskaffningsvärde)', formatKrFull(ekonomiAndelarSumma(an)) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + an.map(a => escapeHtml(a.konto) + (a.procent != null ? ' · ' + String(a.procent).replace('.', ',') + ' %' : '')).join(', ') + '</span>'); }
   { const kl = ekonomiBolagKoncernLan(b); if(kl.length) kp('Lån från koncernen', formatKrFull(Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0))) + ' <span style="font-size:11px; font-weight:400; color:var(--ink-soft);">' + kl.map(l => escapeHtml(l.langivare || '')).filter((v, i, a) => v && a.indexOf(v) === i).join(', ') + '</span>'); }
   kp('Summa intäkter', formatKrFull(Math.round(months.reduce((s, m) => s + r.intakt[m], 0))));
@@ -16261,7 +16282,7 @@ function ekonomiPortalBolagData(b){
     const sum = o => r.manader.reduce((s, m) => s + (o[m] || 0), 0);
     const positivFran = r.manader.find((m, i) => i > 0 && r.kassaflode[m] > 0 && r.manader.slice(i).every(mm => r.kassaflode[mm] >= 0)) || null;
     const kl = ekonomiBolagKoncernLan(b);
-    return { id: b.id, namn: b.namn, beskrivning: b.beskrivning || '', agarandel: b.agarandel, kontakt: b.kontakt || '', finansiarNamn: ekonomiBolagFinansiarNamn(b.finansiar), koncernLan: Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0)), andelar: ekonomiAndelarSumma(ekonomiAndelarForBolag(b)), koncernLanFran: kl.map(l => l.langivare || '').filter((v, i, a) => v && a.indexOf(v) === i).join(', '), months: r.manader, marginal: b.marginal || 0, kredittid: b.kredittid || 0, ingaendeKassa: b.ingaendeKassa || 0,
+    return { id: b.id, namn: b.namn, beskrivning: b.beskrivning || '', agarandel: b.agarandel, vardering: b.vardering || null, kontakt: b.kontakt || '', finansiarNamn: ekonomiBolagFinansiarNamn(b.finansiar), koncernLan: Math.round(kl.reduce((s2, l) => s2 + ekonomiKoncernLanSaldo(l), 0)), andelar: ekonomiAndelarSumma(ekonomiAndelarForBolag(b)), koncernLanFran: kl.map(l => l.langivare || '').filter((v, i, a) => v && a.indexOf(v) === i).join(', '), months: r.manader, marginal: b.marginal || 0, kredittid: b.kredittid || 0, ingaendeKassa: b.ingaendeKassa || 0,
       intakter: b.intakter.map(x => ({ namn: x.namn, per: x.per || {} })), kostnader: b.kostnader.map(x => ({ namn: x.namn, per: x.per || {}, ejKassa: !!x.ejKassa })),
       serie: { intakt: r.intakt, kostnad: r.kostnad, resultat: r.resultat, inbet: r.inbet, kostnadKassa: r.kostnadKassa, tillskott: r.tillskott, tillskottPrelim: r.tillskottPrelim, kassaflode: r.kassaflode, kassa: r.kassa, behov: r.behov, kassaEfter: r.kassaEfter },
       nyckeltal: { lagstaKassa: r.lagstaKassa, lagstaManad: r.lagstaManad, behovTotalt: r.behovTotalt, sumIntakt: sum(r.intakt), sumKostnad: sum(r.kostnad), resultat: sum(r.resultat), positivFran } };
@@ -16281,7 +16302,9 @@ async function showEkonomiBolagDelaPopup(b){
   const actions = document.createElement('div'); actions.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;'; p.body.appendChild(actions);
   const publicera = async () => {
     status.textContent = 'Sparar dagens siffror…';
-    const data = { typ: 'bolagsrapport', bolag: ekonomiPortalBolagData(b), schema: JSON.parse(JSON.stringify(ekonomiSchemaNoder())), idag: new Date().toISOString().slice(0, 10), publiceradAt: new Date().toISOString(), publiceradAv: myName || '' };
+    // Värderingen hör till ägarrapporten och följer inte med i den öppna delningslänken.
+    const bolagData = ekonomiPortalBolagData(b); delete bolagData.vardering;
+    const data = { typ: 'bolagsrapport', bolag: bolagData, schema: JSON.parse(JSON.stringify(ekonomiSchemaNoder())), idag: new Date().toISOString().slice(0, 10), publiceradAt: new Date().toISOString(), publiceradAv: myName || '' };
     let row = null; try{ row = await DB.getNyaProjektRow(id); }catch(e){ row = null; }
     if(row){ await DB.updateNyaProjekt(id, { data, name: b.namn, is_public: true }); row.data = data; row.is_public = true; }
     else row = await DB.insertNyaProjekt({ id, share_id: uid() + uid() + uid(), name: b.namn, data, is_public: true, status: 'candidate', created_by: myPersonId, created_by_name: myName });
@@ -16494,7 +16517,7 @@ function portalKortData(data){
   data.bolag.forEach(b => {
     const months = b.months; const i0 = Math.max(0, months.indexOf(idag));
     const kassaNu = months.includes(idag) ? b.serie.kassa[idag] : (b.serie.kassa[months[0]] != null ? b.ingaendeKassa : null);
-    kort.push({ id: b.id, typ: 'bolag', namn: b.namn, beskrivning: b.beskrivning, agarandel: b.agarandel, koncernLan: b.koncernLan || 0, andelar: b.andelar || 0, serie: months.map(m => b.serie.kassa[m]), months, kassaNu, lagsta: b.nyckeltal.lagstaKassa, lagstaManad: b.nyckeltal.lagstaManad, behov: b.nyckeltal.behovTotalt, marginal: b.marginal, extra: 'Finansieras av ' + b.finansiarNamn, i0 });
+    kort.push({ id: b.id, typ: 'bolag', namn: b.namn, beskrivning: b.beskrivning, agarandel: b.agarandel, vardering: b.vardering || null, koncernLan: b.koncernLan || 0, andelar: b.andelar || 0, serie: months.map(m => b.serie.kassa[m]), months, kassaNu, lagsta: b.nyckeltal.lagstaKassa, lagstaManad: b.nyckeltal.lagstaManad, behov: b.nyckeltal.behovTotalt, marginal: b.marginal, extra: 'Finansieras av ' + b.finansiarNamn, i0 });
   });
   return kort;
 }
@@ -16506,10 +16529,14 @@ function portalOversiktHtml(data){
   const utlanat = data.fordran.lan.filter(l => l.langivareAktor).reduce((s, l) => s + (l.saldo || 0), 0);
   const skulder = data.fordran.lan.filter(l => l.lantagareAktor && !l.bk).reduce((s, l) => s + (l.saldo || 0), 0);
   const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
+  // Värdering: bara bolag som har både värdering och ägarandel räknas med.
+  const vardBolag = data.bolag.map(b => ({ b, v: ekonomiBolagVarde(b) })).filter(x => x.v.tot && x.v.egen != null);
+  const vardEgen = vardBolag.reduce((s, x) => s + x.v.egen, 0), vardTot = vardBolag.reduce((s, x) => s + x.v.tot, 0);
   let h = '<section class="portal-kpis">' +
     kpi('Kapitalbehov kommande 12 mån', portalFmt.mkr(behov12), 'enligt bolagens budgetar', behov12 > 0) +
     kpi('Kapitalbehov hela perioden', portalFmt.mkr(totBehov), data.bolag.length + ' portföljbolag', totBehov > 0) +
     kpi('Investerat i andelar', portalFmt.mkr(data.bolag.reduce((s, b) => s + (b.andelar || 0), 0)), 'anskaffningsvärde enligt balansrapporten') +
+    (vardBolag.length ? kpi('Värde av våra andelar', portalFmt.mkr(vardEgen), 'av ' + portalFmt.mkr(vardTot) + ' i total värdering · ' + vardBolag.length + ' bolag') : '') +
     kpi('Fordringar mot projekten', portalFmt.mkr(fordranProjekt), 'Solvinkelns lån till föreningarna') +
     kpi('Utlånat inom koncernen', portalFmt.mkr(utlanat), 'koncernlån där Prosavio/Solvinkeln är långivare') +
     kpi('Externa lån till koncernen', portalFmt.mkr(skulder), 'exkl. byggnadskreditiv') +
@@ -16521,9 +16548,15 @@ function portalOversiktHtml(data){
       '<div class="portal-card-head"><div><div class="portal-card-name">' + escapeHtml(k.namn) + '</div><div class="portal-card-desc">' + escapeHtml(k.beskrivning || '') + '</div></div><span class="portal-pill ' + st.cls + '">' + st.text + '</span></div>' +
       (k.serie.length ? portalSparkline(k.serie, { marginal: k.marginal || null }) : '<div class="portal-spark-empty">Ingen likviditet publicerad</div>') +
       '<div class="portal-card-kpis"><div><span>Kassa nu</span><b>' + portalFmt.mkr(k.kassaNu) + '</b></div><div><span>Kapitalbehov</span><b' + (k.behov > 0 ? ' class="rod"' : '') + '>' + portalFmt.mkr(k.behov) + '</b></div></div>' +
-      '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + (k.andelar ? ' · Andelar ' + portalFmt.mkr(k.andelar) : '') + (k.koncernLan ? ' · Lån från koncernen ' + portalFmt.mkr(k.koncernLan) : '') + '</div></article>';
+      '<div class="portal-card-foot">' + (k.agarandel != null && k.agarandel !== '' ? 'Ägarandel ' + String(k.agarandel).replace('.', ',') + ' % · ' : '') + escapeHtml(k.extra || '') + (k.andelar ? ' · Andelar ' + portalFmt.mkr(k.andelar) : '') + (k.koncernLan ? ' · Lån från koncernen ' + portalFmt.mkr(k.koncernLan) : '') +
+      (k.typ === 'bolag' ? (v => v.tot && v.egen != null ? '<div style="margin-top:4px; color:var(--ink);">Värde vår andel <b>' + portalFmt.mkr(v.egen) + '</b> av ' + portalFmt.mkr(v.tot) + '</div>' : '')(ekonomiBolagVarde(k)) : '') + '</div></article>';
   });
   h += '</section>';
+  if(vardBolag.length){
+    const rader = vardBolag.slice().sort((a, c) => c.v.egen - a.v.egen).map(x => ({ cells: ['<a data-portal-open="' + escapeHtml(x.b.id) + '" class="portal-link">' + escapeHtml(x.b.namn) + '</a>', ekonomiProcentText(x.v.andel), portalFmt.kr(x.v.egen), portalFmt.kr(x.v.tot)] }));
+    rader.push({ cls: 'sum', cells: ['Summa', vardTot ? ekonomiProcentText(vardEgen / vardTot * 100) : '', portalFmt.kr(vardEgen), portalFmt.kr(vardTot)] });
+    h += '<h2 class="portal-h2">Värdering av innehaven</h2><p class="portal-sub">Värdet av vår andel jämfört med värderingen av hela bolaget.</p>' + portalTable(['Bolag', 'Vår andel', 'Värde av vår andel', 'Värdering hela bolaget'], rader, { compact: true });
+  }
   // Koncernens fordringar (hopfällt)
   h += '<h2 class="portal-h2">Koncernens fordringar och lån</h2><button type="button" class="portal-btn" data-portal-toggle="portalFordran" data-portal-label="fordringar och lån">Visa fordringar och lån</button><div id="portalFordran" style="display:none;">' + portalFordranHtml(data, null) + '</div>';
   return h;
@@ -16578,6 +16611,11 @@ function portalDetaljHtml(data, id, state){
   const kassaNu = months.includes(idag) ? s.kassa[idag] : b.ingaendeKassa;
   let h = back + '<section class="portal-hero"><div><p class="portal-sub" style="margin:0 0 6px; font-size:14px;">' + escapeHtml(b.beskrivning || '') + '</p><div class="portal-meta">' + (b.agarandel != null && b.agarandel !== '' ? '<span>Ägarandel <b>' + String(b.agarandel).replace('.', ',') + ' %</b></span>' : '') + (b.kontakt ? '<span>Kontakt <b>' + escapeHtml(b.kontakt) + '</b></span>' : '') + '<span>Finansieras av <b>' + escapeHtml(b.finansiarNamn) + '</b></span><span>Säkerhetsmarginal <b>' + portalFmt.kr(b.marginal) + '</b></span><span>Kredittid <b>' + (b.kredittid || 0) + ' dagar</b></span><span>Budget <b>' + portalFmt.manad(months[0]) + ' – ' + portalFmt.manad(months[months.length - 1]) + '</b></span></div></div></section>';
   const kpi = (l, v, sub, red) => '<div class="portal-kpi"><div class="portal-kpi-l">' + l + '</div><div class="portal-kpi-v' + (red ? ' rod' : '') + '">' + v + '</div>' + (sub ? '<div class="portal-kpi-s">' + sub + '</div>' : '') + '</div>';
+  const vard = ekonomiBolagVarde(b);
+  if(vard.tot && vard.egen != null){
+    h += '<section class="portal-kpis">' + kpi('Vår andel i bolaget', ekonomiProcentText(vard.andel)) + kpi('Värde av vår andel', portalFmt.mkr(vard.egen), portalFmt.kr(vard.egen)) + kpi('Värdering hela bolaget', portalFmt.mkr(vard.tot), portalFmt.kr(vard.tot)) + '</section>' +
+      '<div class="portal-card" style="margin-bottom:18px;"><div class="portal-kpi-l">Vår andel av bolagets värde</div>' + portalVardeStapel(vard) + '</div>';
+  }
   h += '<section class="portal-kpis">' + kpi('Kassa nu', portalFmt.mkr(kassaNu), portalFmt.manad(idag), kassaNu < 0) + kpi('Kapitalbehov perioden', portalFmt.mkr(n.behovTotalt), 'för att hålla marginalen', n.behovTotalt > 0) + (b.andelar ? kpi('Andelar (anskaffningsvärde)', portalFmt.mkr(b.andelar), 'Prosavios investering') : '') + (b.koncernLan ? kpi('Lån från koncernen', portalFmt.mkr(b.koncernLan), escapeHtml(b.koncernLanFran || '')) : '') + kpi('Intäkter perioden', portalFmt.mkr(n.sumIntakt)) + kpi('Resultat perioden', portalFmt.mkr(n.resultat), '', n.resultat < 0) + kpi('Positivt kassaflöde från', portalFmt.manad(n.positivFran)) + '</section>';
   const row = (label, o, opts) => ({ cls: (opts && opts.cls) || '', indent: (opts && opts.indent) || 0, cells: [{ t: label }].concat(months.map(m => ({ t: portalFmt.tkr(typeof o === 'function' ? o(m) : o[m]), red: !!(opts && opts.red && (opts.red === true || opts.red[m])) })), [{ t: portalFmt.tkr(months.reduce((sum, m) => sum + ((typeof o === 'function' ? o(m) : o[m]) || 0), 0)) }]) });
   const likvRows = [
